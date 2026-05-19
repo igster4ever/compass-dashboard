@@ -568,6 +568,70 @@ HTML_TEMPLATE = """\
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: var(--bg); }
     ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* ── Top-level view tabs ── */
+    .view-nav {
+      display: flex; border-bottom: 1px solid var(--border); margin-bottom: .75rem;
+    }
+    .view-tab {
+      padding: .5rem 1.25rem; font-size: .82rem; font-family: inherit;
+      cursor: pointer; background: none; border: none;
+      border-bottom: 2px solid transparent; color: var(--muted);
+      margin-bottom: -1px; transition: color .12s;
+    }
+    .view-tab:hover { color: var(--text); }
+    .view-tab.active { color: var(--blue); border-bottom-color: var(--blue); }
+
+    /* ── Priority cards ── */
+    .priority-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: .75rem; margin-bottom: .75rem;
+    }
+    .priority-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 1rem;
+      display: flex; flex-direction: column; gap: .65rem;
+      transition: box-shadow .15s;
+    }
+    .priority-card:hover { box-shadow: 0 2px 12px rgba(0,0,0,.35); }
+    .priority-card.rank-1 { border-color: var(--green); }
+    .priority-card.rank-2 { border-color: var(--blue); }
+    .priority-card.rank-3 { border-color: var(--amber); }
+    .priority-card.rank-4 { border-color: var(--subtle); }
+
+    .p-header { display: flex; align-items: center; gap: .6rem; }
+    .p-rank { font-size: 1.1rem; font-weight: 800; min-width: 2rem; }
+    .rank-1 .p-rank { color: var(--green); }
+    .rank-2 .p-rank { color: var(--blue); }
+    .rank-3 .p-rank { color: var(--amber); }
+    .rank-4 .p-rank { color: var(--subtle); }
+    .p-ns { font-weight: 700; font-size: .95rem; flex: 1; }
+    .p-intent { font-size: .78rem; color: var(--muted); font-style: italic; line-height: 1.4; }
+    .p-action {
+      font-size: .75rem; font-weight: 600; color: var(--blue);
+      padding: .4rem .75rem; background: var(--blue-bg);
+      border-radius: var(--radius); text-align: center;
+    }
+    .p-section-label {
+      font-size: .62rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .07em; color: var(--muted); margin-bottom: .3rem;
+    }
+    .p-reasons { list-style: none; padding: 0; display: flex; flex-direction: column; gap: .2rem; }
+    .p-reason { font-size: .78rem; color: var(--text); display: flex; align-items: baseline; gap: .45rem; }
+    .p-reason-icon { color: var(--amber); flex-shrink: 0; font-size: .85rem; }
+    .p-signals { display: flex; flex-direction: column; gap: .3rem; }
+    .p-signal {
+      font-size: .75rem; padding: .3rem .55rem; border-radius: 4px;
+      display: flex; gap: .4rem; align-items: flex-start; line-height: 1.4;
+    }
+    .p-signal.sig-shared     { background: var(--blue-bg);  color: var(--blue); }
+    .p-signal.sig-dep        { background: var(--amber-bg); color: var(--amber); }
+    .p-signal.sig-conflict   { background: var(--red-bg);   color: var(--red); }
+    .p-signal.sig-concurrent { background: var(--green-bg); color: var(--green); }
+    .p-signal-icon { flex-shrink: 0; }
+    .p-no-signals { font-size: .75rem; color: var(--subtle); font-style: italic; }
+    .p-score { font-size: .62rem; color: var(--subtle); text-align: right; padding-top: .25rem; border-top: 1px solid var(--surface2); }
   </style>
 </head>
 <body>
@@ -588,13 +652,22 @@ HTML_TEMPLATE = """\
 </header>
 
 <main>
-  <div class="grid">[[CARDS]]</div>
-  <div class="detail" id="detail">
-    <div class="no-selection">
-      <span class="arrow">&#x2191;</span>
-      Select a namespace to view details
+  <nav class="view-nav">
+    <button class="view-tab active" id="vtab-overview"   onclick="switchView('overview')">Overview</button>
+    <button class="view-tab"        id="vtab-priorities" onclick="switchView('priorities')">Priorities</button>
+  </nav>
+
+  <div id="view-overview">
+    <div class="grid">[[CARDS]]</div>
+    <div class="detail" id="detail">
+      <div class="no-selection">
+        <span class="arrow">&#x2191;</span>
+        Select a namespace to view details
+      </div>
     </div>
   </div>
+
+  <div id="view-priorities" style="display:none"></div>
 </main>
 
 <script>
@@ -823,6 +896,221 @@ function toggleSession(i) {
   const body = document.getElementById(`sbody-${i}`);
   card.classList.toggle('expanded');
   body.classList.toggle('open');
+}
+
+// ── Top-level view switching ──────────────────────────────────────────────────
+
+function switchView(v) {
+  ['overview', 'priorities'].forEach(id => {
+    document.getElementById('view-' + id).style.display = id === v ? '' : 'none';
+    document.getElementById('vtab-' + id).classList.toggle('active', id === v);
+  });
+  if (v === 'priorities') renderPriorities();
+}
+
+// ── Priority scoring ──────────────────────────────────────────────────────────
+
+// Namespaces managed by tooling/the compass skill itself — excluded from priority ranking
+const SYSTEM_NS = new Set(['global', 'compass']);
+
+function _daysSince(timeAgoStr) {
+  if (!timeAgoStr || timeAgoStr === 'never') return 999;
+  const m = timeAgoStr.match(/^(\\d+)([dhm])/);
+  if (!m) return 0;
+  const n = parseInt(m[1]);
+  if (m[2] === 'd') return n;
+  if (m[2] === 'h') return n / 24;
+  return 0;
+}
+
+function computePriorities() {
+  return NS.filter(ns => !SYSTEM_NS.has(ns.namespace.toLowerCase())).map((ns, idx) => {
+    // Remap idx to the original NS array position so selectCard() works correctly
+    idx = NS.indexOf(ns);
+    let score = 0;
+    const reasons = [];
+
+    if (ns.open) {
+      score += 30;
+      reasons.push({ icon: '●', text: 'Session currently in progress' });
+    }
+
+    const lastActivity = ns.open ? ns.lastOpen : ns.lastClose;
+    const days = _daysSince(lastActivity);
+    if (days > 14) {
+      score += 25;
+      reasons.push({ icon: '⚠', text: `Stale — ${Math.round(days)}d since last session` });
+    } else if (days > 7) {
+      score += 15;
+      reasons.push({ icon: '↩', text: `${Math.round(days)}d since last session` });
+    }
+
+    if (ns.goalRate !== null && ns.goalRate !== undefined) {
+      if (ns.goalRate < 50) {
+        score += 20;
+        reasons.push({ icon: '↓', text: `Low completion rate (${ns.goalRate}%)` });
+      } else if (ns.goalRate < 75) {
+        score += 10;
+        reasons.push({ icon: '~', text: `Moderate completion rate (${ns.goalRate}%)` });
+      }
+    }
+
+    const deferredCount = (ns.deferred || []).length;
+    if (deferredCount > 0) {
+      score += deferredCount * 4;
+      reasons.push({ icon: '⏸', text: `${deferredCount} deferred item${deferredCount !== 1 ? 's' : ''} queued` });
+    }
+
+    if (ns.plannedActions && ns.plannedActions.length > 0) {
+      score += 8;
+      reasons.push({ icon: '→', text: `${ns.plannedActions.length} planned action${ns.plannedActions.length !== 1 ? 's' : ''} waiting` });
+    }
+
+    const highWeight = (ns.learnings || []).filter(l => (l.weight || 1) >= 4);
+    if (highWeight.length > 0) {
+      score += Math.min(highWeight.length * 2, 10);
+      reasons.push({ icon: '★', text: `${highWeight.length} high-weight learning${highWeight.length !== 1 ? 's' : ''} — active area` });
+    }
+
+    if (ns.sessionCount === 0) {
+      score += 10;
+      reasons.push({ icon: '+', text: 'No sessions yet — namespace needs bootstrapping' });
+    }
+
+    return { ns, idx, score, reasons };
+  })
+  .sort((a, b) => b.score - a.score)
+  .slice(0, 4);
+}
+
+// ── Cross-compass signal detection ────────────────────────────────────────────
+
+function detectSignals(ns) {
+  const signals = [];
+  const nsTagSet = new Set(ns.topTags || []);
+  const nsNameLower = ns.namespace.toLowerCase();
+  const nsHWTags = new Set(
+    (ns.learnings || []).filter(l => (l.weight || 1) >= 4).flatMap(l => l.tags || [])
+  );
+  const nsReality = (ns.reality || '').toLowerCase();
+  const nsPlanned = (ns.plannedActions || []).join(' ').toLowerCase();
+
+  const seen = new Set();
+  const add = s => {
+    if (!seen.has(s.detail)) { seen.add(s.detail); signals.push(s); }
+  };
+
+  NS.forEach(other => {
+    if (other.namespace === ns.namespace) return;
+    if (SYSTEM_NS.has(other.namespace.toLowerCase())) return;
+    const otherLower = other.namespace.toLowerCase();
+
+    // Both sessions open — context-switch cost
+    if (ns.open && other.open) {
+      add({ type: 'concurrent', icon: '⚡',
+            detail: `"${other.namespace}" also has an open session — context-switch cost if you switch` });
+    }
+
+    // Planned work explicitly references another namespace
+    if (nsPlanned.includes(otherLower)) {
+      add({ type: 'dep', icon: '→',
+            detail: `Planned work references "${other.namespace}" — may depend on it or block it` });
+    }
+
+    // Reality doc references another namespace
+    if (nsReality.includes(otherLower)) {
+      add({ type: 'dep', icon: '⤷',
+            detail: `Reality doc mentions "${other.namespace}" — verify dependency is current` });
+    }
+
+    // Overlapping top tags (≥2 shared)
+    const sharedTags = (other.topTags || []).filter(t => nsTagSet.has(t));
+    if (sharedTags.length >= 2) {
+      add({ type: 'shared', icon: '⊕',
+            detail: `Overlaps with "${other.namespace}" on: ${sharedTags.slice(0, 3).join(', ')}` });
+    }
+
+    // High-weight learnings share tags — work in one may require rework in the other
+    const conflictTags = (other.learnings || [])
+      .filter(l => (l.weight || 1) >= 4)
+      .flatMap(l => l.tags || [])
+      .filter(t => nsHWTags.has(t));
+    if (conflictTags.length > 0) {
+      const uniq = [...new Set(conflictTags)].slice(0, 2);
+      add({ type: 'conflict', icon: '⚠',
+            detail: `High-weight learnings in "${other.namespace}" share themes (${uniq.join(', ')}) — changes here may require rework there` });
+    }
+  });
+
+  return signals.slice(0, 5);
+}
+
+// ── Recommended action ────────────────────────────────────────────────────────
+
+function recommendedAction(ns) {
+  if (ns.open) return 'Close this loop — session in progress';
+  if (ns.sessionCount === 0) return 'Open first session to bootstrap this namespace';
+  if ((ns.deferred || []).length >= 3) return 'Review deferred items, then open a new session';
+  if (ns.goalRate !== null && ns.goalRate !== undefined && ns.goalRate < 50)
+    return 'Open a session — completion rate needs attention';
+  if (_daysSince(ns.lastClose) > 14) return 'Open a session — this namespace has gone quiet';
+  return 'Open a new session to progress planned work';
+}
+
+// ── Priorities view renderer ──────────────────────────────────────────────────
+
+function renderPriorities() {
+  const top4 = computePriorities();
+
+  if (!top4.length) {
+    document.getElementById('view-priorities').innerHTML =
+      '<div class="empty-state" style="padding:2rem;text-align:center">No namespaces to rank.</div>';
+    return;
+  }
+
+  const cards = top4.map(({ ns, idx, score, reasons }, rank) => {
+    const signals = detectSignals(ns);
+    const rankN = rank + 1;
+
+    const reasonsHtml = reasons.slice(0, 5).map(r =>
+      `<li class="p-reason"><span class="p-reason-icon">${esc(r.icon)}</span>${esc(r.text)}</li>`
+    ).join('');
+
+    const signalsHtml = signals.length
+      ? signals.map(s =>
+          `<div class="p-signal sig-${s.type}">
+             <span class="p-signal-icon">${esc(s.icon)}</span>
+             <span>${esc(s.detail)}</span>
+           </div>`
+        ).join('')
+      : '<div class="p-no-signals">No cross-compass dependencies detected</div>';
+
+    const statusCls   = ns.open ? 'open' : 'closed';
+    const statusLabel = ns.open ? 'OPEN' : 'CLOSED';
+    const summary     = (ns.intentSummary || '').slice(0, 110) + (ns.intentSummary && ns.intentSummary.length > 110 ? '…' : '');
+
+    return `
+      <div class="priority-card rank-${rankN}" onclick="selectCard(${idx}); switchView('overview')" style="cursor:pointer" title="Click to open in Overview">
+        <div class="p-header">
+          <span class="p-rank">#${rankN}</span>
+          <span class="p-ns">${esc(ns.namespace)}</span>
+          <span class="badge ${statusCls}">${statusLabel}</span>
+        </div>
+        ${summary ? `<div class="p-intent">${esc(summary)}</div>` : ''}
+        <div class="p-action">${esc(recommendedAction(ns))}</div>
+        ${reasonsHtml ? `<div>
+          <div class="p-section-label">Why prioritised</div>
+          <ul class="p-reasons">${reasonsHtml}</ul>
+        </div>` : ''}
+        <div>
+          <div class="p-section-label">Cross-compass signals</div>
+          <div class="p-signals">${signalsHtml}</div>
+        </div>
+        <div class="p-score">Priority score: ${score}</div>
+      </div>`;
+  }).join('');
+
+  document.getElementById('view-priorities').innerHTML = `<div class="priority-grid">${cards}</div>`;
 }
 
 // Auto-open first card when only one namespace is shown
