@@ -174,11 +174,12 @@ def _goal_stats(state):
 
 
 def load_namespace(ns_dir):
-    state     = _read_json(ns_dir / "state.json")
-    intent    = _read_file(ns_dir / "intent.md")
-    reality   = _read_file(ns_dir / "reality.md")
-    learnings = _read_jsonl(ns_dir / "learnings.jsonl")
-    decisions = _read_jsonl(ns_dir / "decisions.jsonl")
+    state        = _read_json(ns_dir / "state.json")
+    intent       = _read_file(ns_dir / "intent.md")
+    reality      = _read_file(ns_dir / "reality.md")
+    learnings    = _read_jsonl(ns_dir / "learnings.jsonl")
+    decisions    = _read_jsonl(ns_dir / "decisions.jsonl")
+    code_context = _read_file(ns_dir / "code_context.md")
 
     history_dir   = ns_dir / "history"
     history_files = []
@@ -214,6 +215,7 @@ def load_namespace(ns_dir):
         "reality":         reality,
         "learnings":       sorted(learnings, key=lambda x: -x.get("weight", 1)),
         "decisions":       decisions,
+        "code_context":    code_context,
         "history":         history_files,
         "goal_rate":       goal_rate,
         "goal_dots":       goal_dots,
@@ -308,6 +310,7 @@ def _js_data(namespaces):
             "reality":        n["reality"],
             "learnings":      n["learnings"],
             "decisions":      n["decisions"],
+            "codeContext":    n["code_context"],
             "history":        n["history"],
             "goalRate":       n["goal_rate"],
             "goalDots":       n["goal_dots"],
@@ -632,6 +635,27 @@ HTML_TEMPLATE = """\
     .p-signal-icon { flex-shrink: 0; }
     .p-no-signals { font-size: .75rem; color: var(--subtle); font-style: italic; }
     .p-score { font-size: .62rem; color: var(--subtle); text-align: right; padding-top: .25rem; border-top: 1px solid var(--surface2); }
+
+    /* ── Decision cards ── */
+    .decision-list { display: flex; flex-direction: column; gap: .5rem; }
+    .decision-item {
+      border: 1px solid var(--border); border-radius: 6px;
+      padding: .6rem .75rem; background: var(--surface2);
+    }
+    .decision-text { font-size: .82rem; color: var(--text); line-height: 1.45; margin-bottom: .3rem; }
+    .decision-meta { display: flex; gap: .75rem; flex-wrap: wrap; align-items: baseline; }
+    .decision-rationale { font-size: .75rem; color: var(--muted); flex: 1; line-height: 1.4; }
+    .decision-date { font-size: .68rem; color: var(--subtle); white-space: nowrap; }
+    .decision-alts { font-size: .72rem; color: var(--subtle); font-style: italic; margin-top: .25rem; }
+
+    /* ── Code context / next session block ── */
+    .context-block {
+      background: var(--surface2); border-left: 2px solid var(--blue);
+      border-radius: 0 6px 6px 0; padding: .75rem 1rem;
+      font-size: .82rem; line-height: 1.6;
+    }
+    .context-block strong { color: var(--blue); }
+    .context-block p { color: var(--text); margin-bottom: .2rem; }
   </style>
 </head>
 <body>
@@ -737,10 +761,13 @@ function selectCard(i) {
 // ── Detail panel ──────────────────────────────────────────────────────────────
 
 function renderDetail(ns) {
-  const tabs = ['state', 'learnings', 'history'];
+  const tabs = (ns.decisions && ns.decisions.length)
+    ? ['state', 'learnings', 'decisions', 'history']
+    : ['state', 'learnings', 'history'];
   const labels = {
     state:     'State',
     learnings: `Learnings (${ns.learnings.length})`,
+    decisions: `Decisions (${(ns.decisions || []).length})`,
     history:   `History (${ns.sessionCount})`,
   };
 
@@ -781,6 +808,7 @@ function switchTab(t) {
 function renderTab(tab, ns) {
   if (tab === 'state')     return renderState(ns);
   if (tab === 'learnings') return renderLearnings(ns);
+  if (tab === 'decisions') return renderDecisions(ns);
   if (tab === 'history')   return renderHistory(ns);
   return '';
 }
@@ -797,8 +825,25 @@ function renderState(ns) {
     html += `<div class="md-section"><h3>Active goals</h3><ul class="goals-list">${items}</ul></div>`;
   }
 
+  // Next session entry point (code_context.md)
+  if (ns.codeContext) {
+    html += `<div class="md-section"><h3>Next session entry point</h3>
+      <div class="context-block">${md(ns.codeContext)}</div>
+    </div>`;
+  }
+
   // Reality
   html += `<div class="md-section"><h3>Reality</h3><div>${md(ns.reality)}</div></div>`;
+
+  // Recent decisions (last 3, inline summary — full log in Decisions tab)
+  if (ns.decisions && ns.decisions.length > 0) {
+    const recent = [...ns.decisions].reverse().slice(0, 3);
+    const items = recent.map(d => {
+      const rat = d.rationale ? ` <span style="color:var(--muted);font-size:.75rem">— ${esc(d.rationale)}</span>` : '';
+      return `<li>${esc(d.decision || d.text || '')}${rat}</li>`;
+    }).join('');
+    html += `<div class="md-section"><h3>Recent decisions</h3><ul>${items}</ul></div>`;
+  }
 
   // Deferred opportunities
   if (ns.deferred.length > 0) {
@@ -843,6 +888,33 @@ function renderLearnings(ns) {
       <tbody>${rows}</tbody>
     </table>`;
 }
+
+// ── Decisions ─────────────────────────────────────────────────────────────────
+
+function renderDecisions(ns) {
+  if (!ns.decisions || !ns.decisions.length) {
+    return '<div class="empty-state">No decisions logged for this namespace yet.<br>Use <code>compass log-decision</code> mid-session to capture them.</div>';
+  }
+  const items = [...ns.decisions].reverse().map(d => {
+    const date = (d.timestamp || d.logged_at || '').slice(0, 10) || '—';
+    const ratHtml = d.rationale
+      ? `<div class="decision-rationale">${esc(d.rationale)}</div>` : '';
+    const altHtml = d.alternatives
+      ? `<div class="decision-alts">Alternatives considered: ${esc(d.alternatives)}</div>` : '';
+    return `
+      <div class="decision-item">
+        <div class="decision-text">${esc(d.decision || d.text || '')}</div>
+        <div class="decision-meta">
+          ${ratHtml}
+          <div class="decision-date">${date}</div>
+        </div>
+        ${altHtml}
+      </div>`;
+  }).join('');
+  return `<div class="decision-list">${items}</div>`;
+}
+
+// ── History timeline ──────────────────────────────────────────────────────────
 
 function renderHistory(ns) {
   if (!ns.history.length) {
