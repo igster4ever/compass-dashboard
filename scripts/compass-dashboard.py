@@ -658,47 +658,93 @@ HTML_TEMPLATE = """\
     .context-block p { color: var(--text); margin-bottom: .2rem; }
 
     /* ── Search ── */
-    .search-input-wrap { flex: 1; max-width: 360px; position: relative; }
-    .search-input {
-      width: 100%; padding: .38rem .75rem .38rem 1.9rem;
+    /* ── Search (command palette) ── */
+    .search-trigger {
+      flex: 1; max-width: 340px; display: flex; align-items: center; gap: .5rem;
       background: var(--surface2); border: 1px solid var(--border);
-      border-radius: 20px; color: var(--text); font-family: inherit;
-      font-size: .82rem; outline: none; transition: border-color .15s;
+      border-radius: 20px; padding: .35rem .75rem .35rem .9rem;
+      color: var(--subtle); font-size: .82rem; cursor: pointer;
+      transition: border-color .15s, color .15s;
     }
-    .search-input:focus { border-color: var(--blue); }
-    .search-input::placeholder { color: var(--subtle); }
-    .search-input-icon {
-      position: absolute; left: .65rem; top: 50%; transform: translateY(-50%);
-      color: var(--subtle); font-size: .85rem; pointer-events: none;
+    .search-trigger:hover { border-color: var(--blue); color: var(--text); }
+    .search-trigger-icon { font-size: .85rem; flex-shrink: 0; }
+    .search-trigger-label { flex: 1; }
+    .search-trigger-kbd {
+      font-size: .68rem; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 4px; padding: .1em .4em; color: var(--muted); font-family: inherit;
     }
-    .search-summary { font-size: .78rem; color: var(--muted); padding: .4rem 0 .7rem; }
-    .search-group {
+    .search-modal {
+      position: fixed; inset: 0; z-index: 9000;
+      background: rgba(0,0,0,.55); backdrop-filter: blur(3px);
+      display: flex; align-items: flex-start; justify-content: center;
+      padding-top: 12vh;
+    }
+    .search-palette {
+      width: 680px; max-width: calc(100vw - 2rem);
+      max-height: 70vh; display: flex; flex-direction: column;
       background: var(--surface); border: 1px solid var(--border);
-      border-radius: var(--radius); margin-bottom: .75rem; overflow: hidden;
+      border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,.5);
+      overflow: hidden;
     }
-    .search-group-header {
-      background: var(--surface2); padding: .45rem .875rem;
-      font-weight: 700; font-size: .85rem; border-bottom: 1px solid var(--border);
+    .search-palette-header {
+      display: flex; align-items: center; gap: .6rem;
+      padding: .75rem 1rem; border-bottom: 1px solid var(--border);
     }
-    .search-section-group { padding: .5rem .875rem; border-bottom: 1px solid var(--surface2); }
-    .search-section-group:last-child { border-bottom: none; }
-    .search-section-badge {
-      display: inline-block; font-size: .62rem; font-weight: 700;
-      letter-spacing: .06em; text-transform: uppercase;
-      padding: .15em .55em; border-radius: 4px; margin-bottom: .4rem;
+    .search-palette-icon { color: var(--subtle); font-size: 1rem; flex-shrink: 0; }
+    .search-palette-input {
+      flex: 1; background: transparent; border: none; outline: none;
+      color: var(--text); font-family: inherit; font-size: .95rem;
     }
-    .sec-blue   { background: var(--blue-bg);  color: var(--blue); }
-    .sec-green  { background: var(--green-bg); color: var(--green); }
-    .sec-amber  { background: var(--amber-bg); color: var(--amber); }
-    .sec-subtle { background: var(--surface2); color: var(--muted); }
+    .search-palette-input::placeholder { color: var(--subtle); }
+    .search-esc-hint {
+      font-size: .68rem; background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 4px; padding: .1em .5em; color: var(--muted);
+      cursor: pointer; flex-shrink: 0;
+    }
+    .search-esc-hint:hover { color: var(--text); }
+    .search-filters {
+      display: flex; gap: .4rem; padding: .5rem 1rem;
+      border-bottom: 1px solid var(--border); flex-wrap: wrap;
+    }
+    .search-filter-pill {
+      font-size: .72rem; padding: .2em .7em; border-radius: 20px;
+      border: 1px solid var(--border); background: var(--surface2);
+      color: var(--muted); cursor: pointer; transition: all .12s;
+    }
+    .search-filter-pill:hover { border-color: var(--blue); color: var(--text); }
+    .search-filter-pill.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+    .search-results { flex: 1; overflow-y: auto; padding: .5rem 0; }
+    .search-group { margin-bottom: .25rem; }
+    .search-group-ns {
+      position: sticky; top: 0; background: var(--surface);
+      padding: .3rem 1rem; font-size: .72rem; font-weight: 700;
+      letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+      border-bottom: 1px solid var(--surface2);
+    }
     .search-result-item {
-      padding: .32rem .5rem; border-radius: 4px; cursor: pointer;
-      font-size: .8rem; margin-bottom: .15rem; transition: background .1s;
+      display: flex; align-items: baseline; gap: .6rem;
+      padding: .42rem 1rem; cursor: pointer; font-size: .82rem;
+      transition: background .08s; border-left: 2px solid transparent;
     }
     .search-result-item:hover { background: var(--surface2); }
-    .snippet { color: var(--muted); line-height: 1.5; }
+    .search-result-item.focused { background: var(--surface2); border-left-color: var(--blue); }
+    .search-result-section {
+      font-size: .62rem; font-weight: 700; letter-spacing: .06em;
+      text-transform: uppercase; padding: .15em .5em; border-radius: 3px;
+      flex-shrink: 0;
+    }
+    .sec-state     { background: var(--blue-bg);  color: var(--blue); }
+    .sec-learnings { background: var(--green-bg); color: var(--green); }
+    .sec-decisions { background: var(--amber-bg); color: var(--amber); }
+    .sec-history   { background: var(--surface2); color: var(--muted); }
+    .snippet { color: var(--muted); line-height: 1.5; flex: 1; }
     mark { background: var(--amber-bg); color: var(--amber); border-radius: 2px; padding: 0 .1em; font-style: normal; }
-    .search-more { font-size: .72rem; color: var(--subtle); font-style: italic; padding: .2rem .5rem; }
+    .search-more { font-size: .72rem; color: var(--subtle); font-style: italic; padding: .2rem 1rem; }
+    .search-empty { padding: 2rem; text-align: center; color: var(--subtle); font-size: .85rem; }
+    .search-footer {
+      display: flex; gap: 1.2rem; padding: .45rem 1rem; align-items: center;
+      border-top: 1px solid var(--border); font-size: .72rem; color: var(--subtle);
+    }
 
     @keyframes flashHighlight {
       0%   { background: var(--amber-bg); box-shadow: 0 0 0 2px var(--amber); }
@@ -716,11 +762,10 @@ HTML_TEMPLATE = """\
       <h1>&#x1f9ed; Compass</h1>
       <span class="since">Generated [[GENERATED_AT]]</span>
     </div>
-    <div class="search-input-wrap">
-      <span class="search-input-icon">&#x2315;</span>
-      <input class="search-input" type="search" id="search-input"
-             placeholder="Search namespaces, learnings, decisions…"
-             oninput="handleSearch(this.value)">
+    <div class="search-trigger" onclick="openSearch()" title="Search (⌘K)">
+      <span class="search-trigger-icon">&#x2315;</span>
+      <span class="search-trigger-label">Search…</span>
+      <kbd class="search-trigger-kbd">⌘K</kbd>
     </div>
     <div class="header-stats">
       <div class="hstat"><span class="hstat-val">[[N_NS]]</span><span class="hstat-lbl">namespaces</span></div>
@@ -735,7 +780,6 @@ HTML_TEMPLATE = """\
   <nav class="view-nav">
     <button class="view-tab active" id="vtab-overview"   onclick="switchView('overview')">Overview</button>
     <button class="view-tab"        id="vtab-priorities" onclick="switchView('priorities')">Priorities</button>
-    <button class="view-tab"        id="vtab-search"     onclick="switchView('search')">Search</button>
   </nav>
 
   <div id="view-overview">
@@ -750,12 +794,27 @@ HTML_TEMPLATE = """\
 
   <div id="view-priorities" style="display:none"></div>
 
-  <div id="view-search" style="display:none">
-    <div style="padding:2rem;text-align:center;color:var(--subtle);font-size:.85rem">
-      Type in the search bar above to search across all namespaces.
-    </div>
   </div>
 </main>
+<div id="search-modal" class="search-modal" style="display:none" onclick="closeSearchIfBackdrop(event)">
+  <div class="search-palette">
+    <div class="search-palette-header">
+      <span class="search-palette-icon">&#x2315;</span>
+      <input class="search-palette-input" id="search-palette-input" type="search"
+             placeholder="Search namespaces, learnings, decisions, history…"
+             oninput="handleSearch(this.value)" onkeydown="handleSearchKey(event)">
+      <kbd class="search-esc-hint" onclick="closeSearch()">esc</kbd>
+    </div>
+    <div class="search-filters" id="search-filters"></div>
+    <div class="search-results" id="search-results">
+      <div class="search-empty">Type to search…</div>
+    </div>
+    <div class="search-footer">
+      <span>↑↓ navigate</span><span>↵ open</span><span>esc close</span>
+      <span style="margin-left:auto">⌘K</span>
+    </div>
+  </div>
+</div>
 
 <script>
 const NS = [[DATA_JSON]];
@@ -1036,7 +1095,7 @@ function toggleSession(i) {
 // ── Top-level view switching ──────────────────────────────────────────────────
 
 function switchView(v) {
-  ['overview', 'priorities', 'search'].forEach(id => {
+  ['overview', 'priorities'].forEach(id => {
     document.getElementById('view-' + id).style.display = id === v ? '' : 'none';
     document.getElementById('vtab-' + id).classList.toggle('active', id === v);
   });
@@ -1248,10 +1307,12 @@ function renderPriorities() {
   document.getElementById('view-priorities').innerHTML = `<div class="priority-grid">${cards}</div>`;
 }
 
-// ── Search ────────────────────────────────────────────────────────────────────
+// ── Search (command palette) ────────────────────────────────────────────────────────────────────────────────
 
 let SEARCH_INDEX = null;
-let _lastQuery   = '';
+let _activeFilter = 'all';
+let _focusIdx     = -1;
+let _flatResults  = [];
 
 function forceSelectCard(i) {
   if (selected >= 0 && selected !== i) {
@@ -1267,123 +1328,223 @@ function forceSelectCard(i) {
   );
 }
 
+function openSearch() {
+  document.getElementById('search-modal').style.display = '';
+  const inp = document.getElementById('search-palette-input');
+  inp.focus();
+  inp.select();
+  renderFilterPills();
+  if (inp.value.trim()) doSearch(inp.value.trim().toLowerCase(), _activeFilter);
+}
+
+function closeSearch() {
+  document.getElementById('search-modal').style.display = 'none';
+  _focusIdx = -1;
+  _flatResults = [];
+}
+
+function closeSearchIfBackdrop(e) {
+  if (e.target === document.getElementById('search-modal')) closeSearch();
+}
+
 function buildSearchIndex() {
   const idx = [];
   NS.forEach((ns, nsIdx) => {
-    if (ns.intent)      idx.push({nsIdx, section:'state', field:'intent',   text: ns.intent,      displayText: ns.intentSummary || ns.intent});
-    if (ns.reality)     idx.push({nsIdx, section:'state', field:'reality',  text: ns.reality,     displayText: ns.reality.slice(0, 200)});
-    if (ns.codeContext) idx.push({nsIdx, section:'state', field:'context',  text: ns.codeContext, displayText: ns.codeContext.slice(0, 200)});
+    if (ns.intent)
+      idx.push({nsIdx, section:'state', field:'intent',
+                text: ns.intent, displayText: ns.intentSummary || ns.intent, bonus: 2});
+    if (ns.reality)
+      idx.push({nsIdx, section:'state', field:'reality',
+                text: ns.reality, displayText: ns.reality.slice(0, 200), bonus: 2});
+    if (ns.codeContext)
+      idx.push({nsIdx, section:'state', field:'context',
+                text: ns.codeContext, displayText: ns.codeContext.slice(0, 200), bonus: 2});
     (ns.learnings || []).forEach((l, i) =>
-      idx.push({nsIdx, section:'learnings', subIdx: i, text: l.text || '', displayText: l.text || ''})
+      idx.push({nsIdx, section:'learnings', subIdx: i,
+                text: l.text || '', displayText: l.text || '',
+                bonus: Math.min((l.weight || 1) * 2, 8)})
     );
     [...(ns.decisions || [])].reverse().forEach((d, i) => {
       const combined = [d.decision||d.text||'', d.rationale||'', d.alternatives||''].join(' ');
-      idx.push({nsIdx, section:'decisions', subIdx: i, text: combined, displayText: d.decision||d.text||''});
+      idx.push({nsIdx, section:'decisions', subIdx: i,
+                text: combined, displayText: d.decision||d.text||'', bonus: 3});
     });
     (ns.history || []).forEach((s, si) => {
       const parts = [...(s.completed||[]), ...(s.incomplete||[]),
                      ...(s.learnings_extracted||[]), s.notes||''].filter(Boolean);
       if (parts.length)
-        idx.push({nsIdx, section:'history', subIdx: si, text: parts.join(' '), displayText: parts[0]||''});
+        idx.push({nsIdx, section:'history', subIdx: si,
+                  text: parts.join(' '), displayText: parts[0]||'', bonus: 0});
     });
   });
   return idx;
 }
 
-function handleSearch(val) {
-  _lastQuery = val.trim();
-  const view = document.getElementById('view-search');
-  if (!_lastQuery) {
-    view.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--subtle);font-size:.85rem">Type in the search bar above to search across all namespaces.</div>';
-    return;
-  }
-  switchView('search');
-  if (!SEARCH_INDEX) SEARCH_INDEX = buildSearchIndex();
-  doSearch(_lastQuery);
+function scoreItem(item, q) {
+  const t  = (item.text        || '').toLowerCase();
+  const dt = (item.displayText || '').toLowerCase();
+  let s = 0;
+  if      (t === q || dt === q)                            s = 100;
+  else if (t.startsWith(q) || dt.startsWith(q))           s = 80;
+  else if (t.includes(' ' + q) || dt.includes(' ' + q))   s = 60;
+  else if (t.includes(q))                                  s = 40;
+  else return 0;
+  return s + (item.bonus || 0);
 }
 
-function doSearch(query) {
-  const q = query.toLowerCase();
-  const hits = SEARCH_INDEX.filter(item => item.text.toLowerCase().includes(q));
+function handleSearch(val) {
+  const q = val.trim().toLowerCase();
+  if (!q) {
+    document.getElementById('search-results').innerHTML =
+      '<div class="search-empty">Type to search\u2026</div>';
+    _flatResults = []; _focusIdx = -1;
+    return;
+  }
+  if (!SEARCH_INDEX) SEARCH_INDEX = buildSearchIndex();
+  doSearch(q, _activeFilter);
+}
+
+function handleSearchKey(e) {
+  if (e.key === 'Escape') { closeSearch(); return; }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    _focusIdx = Math.min(_focusIdx + 1, _flatResults.length - 1);
+    updateFocus(); return;
+  }
+  if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    _focusIdx = Math.max(_focusIdx - 1, 0);
+    updateFocus(); return;
+  }
+  if (e.key === 'Enter' && _focusIdx >= 0 && _flatResults[_focusIdx]) {
+    const r = _flatResults[_focusIdx];
+    handleResultClick(r.nsIdx, r.section,
+      r.subIdx !== undefined ? r.subIdx : -1, r.field || '');
+  }
+}
+
+function updateFocus() {
+  document.querySelectorAll('#search-results .search-result-item').forEach((el, i) => {
+    el.classList.toggle('focused', i === _focusIdx);
+    if (i === _focusIdx) el.scrollIntoView({block: 'nearest'});
+  });
+}
+
+function setFilter(filter) {
+  _activeFilter = filter;
+  _focusIdx = -1;
+  renderFilterPills();
+  const q = document.getElementById('search-palette-input').value.trim().toLowerCase();
+  if (q) doSearch(q, filter);
+}
+
+function renderFilterPills() {
+  const filters = ['all', 'state', 'learnings', 'decisions', 'history'];
+  const labels  = {all: 'All', state: 'State', learnings: 'Learnings',
+                   decisions: 'Decisions', history: 'History'};
+  document.getElementById('search-filters').innerHTML = filters.map(f =>
+    `<button class="search-filter-pill${f === _activeFilter ? ' active' : ''}" onclick="setFilter('${f}')">${labels[f]}</button>`
+  ).join('');
+}
+
+function doSearch(query, filter) {
+  const SECT_ORDER = ['state', 'learnings', 'decisions', 'history'];
+  const SECT_LABEL = {state: 'State', learnings: 'Learnings',
+                      decisions: 'Decisions', history: 'History'};
+  const SECT_CLS   = {state: 'state', learnings: 'learnings',
+                      decisions: 'decisions', history: 'history'};
+
+  const hits = SEARCH_INDEX
+    .filter(item => filter === 'all' || item.section === filter)
+    .map(item => ({item, score: scoreItem(item, query)}))
+    .filter(({score}) => score > 0)
+    .sort((a, b) => b.score - a.score);
 
   const groups = {};
-  hits.forEach(m => {
-    if (!groups[m.nsIdx]) groups[m.nsIdx] = {nsIdx: m.nsIdx, sections: {}};
-    if (!groups[m.nsIdx].sections[m.section]) groups[m.nsIdx].sections[m.section] = new Map();
-    const key = m.subIdx !== undefined ? String(m.subIdx) : (m.field || 'x');
-    if (!groups[m.nsIdx].sections[m.section].has(key))
-      groups[m.nsIdx].sections[m.section].set(key, m);
+  hits.forEach(({item}) => {
+    if (!groups[item.nsIdx]) groups[item.nsIdx] = {nsIdx: item.nsIdx, sections: {}};
+    if (!groups[item.nsIdx].sections[item.section])
+      groups[item.nsIdx].sections[item.section] = new Map();
+    const key = item.subIdx !== undefined ? String(item.subIdx) : (item.field || 'x');
+    if (!groups[item.nsIdx].sections[item.section].has(key))
+      groups[item.nsIdx].sections[item.section].set(key, item);
   });
 
-  const totalNS   = Object.keys(groups).length;
   const totalHits = Object.values(groups).reduce((a, g) =>
     a + Object.values(g.sections).reduce((b, s) => b + s.size, 0), 0);
 
   if (!totalHits) {
-    document.getElementById('view-search').innerHTML =
-      '<div style="padding:2rem;text-align:center;color:var(--subtle)">No matches for &ldquo;' + esc(query) + '&rdquo;</div>';
+    document.getElementById('search-results').innerHTML =
+      '<div class="search-empty">No matches for &ldquo;' + esc(query) + '&rdquo;</div>';
+    _flatResults = []; _focusIdx = -1;
     return;
   }
 
-  const SECT_ORDER = ['state','learnings','decisions','history'];
-  const SECT_LABEL = {state:'State', learnings:'Learnings', decisions:'Decisions', history:'History'};
-  const SECT_CLS   = {state:'blue',  learnings:'green',     decisions:'amber',     history:'subtle'};
-
-  let html = '<div class="search-summary">' + totalHits + ' match' + (totalHits!==1?'es':'') +
-    ' across ' + totalNS + ' namespace' + (totalNS!==1?'s':'') +
-    ' &mdash; click any result to navigate</div>';
+  _flatResults = [];
+  let html = '';
 
   Object.values(groups).sort((a, b) => a.nsIdx - b.nsIdx).forEach(g => {
     const ns = NS[g.nsIdx];
-    html += '<div class="search-group"><div class="search-group-header">' + esc(ns.namespace) + '</div>';
+    html += '<div class="search-group">';
+    html += `<div class="search-group-ns">${esc(ns.namespace)}</div>`;
     SECT_ORDER.forEach(sec => {
       const secMap = g.sections[sec];
       if (!secMap || !secMap.size) return;
       const items = [...secMap.values()];
-      html += '<div class="search-section-group"><div class="search-section-badge sec-' + SECT_CLS[sec] + '">' + SECT_LABEL[sec] + '</div>';
       items.slice(0, 6).forEach(item => {
-        html += '<div class="search-result-item" onclick="navigateToResult(' +
-          item.nsIdx + ',\'' + sec + '\',' +
-          (item.subIdx !== undefined ? item.subIdx : -1) + ',\'' + (item.field||'') + '\')">' +
-          makeSnippet(item.displayText || item.text, q) + '</div>';
+        _flatResults.push(item);
+        const subI = item.subIdx !== undefined ? item.subIdx : -1;
+        const fld  = item.field || '';
+        html += `<div class="search-result-item" onclick="handleResultClick(${item.nsIdx},'${sec}',${subI},'${fld}')">` +
+                `<span class="search-result-section sec-${SECT_CLS[sec]}">${SECT_LABEL[sec]}</span>` +
+                makeSnippet(item.displayText || item.text, query) + '</div>';
       });
       if (items.length > 6)
-        html += '<div class="search-more">+' + (items.length - 6) + ' more match' + (items.length-6!==1?'es':'') + '</div>';
-      html += '</div>';
+        html += '<div class="search-more">+' + (items.length - 6) + ' more</div>';
     });
     html += '</div>';
   });
 
-  document.getElementById('view-search').innerHTML = html;
+  document.getElementById('search-results').innerHTML = html;
+  _focusIdx = -1;
 }
 
 function makeSnippet(text, query) {
-  if (!text) return '<span class="snippet">—</span>';
+  if (!text) return '<span class="snippet">\u2014</span>';
   const idx = text.toLowerCase().indexOf(query);
-  if (idx === -1) return '<span class="snippet">' + esc(text.slice(0,120)) + (text.length>120?'…':'') + '</span>';
+  if (idx === -1)
+    return '<span class="snippet">' + esc(text.slice(0, 120)) +
+           (text.length > 120 ? '\u2026' : '') + '</span>';
   const s = Math.max(0, idx - 45);
   const e = Math.min(text.length, idx + query.length + 70);
   return '<span class="snippet">' +
-    (s > 0 ? '…' : '') +
+    (s > 0 ? '\u2026' : '') +
     esc(text.slice(s, idx)) +
     '<mark>' + esc(text.slice(idx, idx + query.length)) + '</mark>' +
     esc(text.slice(idx + query.length, e)) +
-    (e < text.length ? '…' : '') +
-    '</span>';
+    (e < text.length ? '\u2026' : '') + '</span>';
+}
+
+function handleResultClick(nsIdx, section, subIdx, field) {
+  closeSearch();
+  switchView('overview');
+  navigateToResult(nsIdx, section, subIdx, field);
 }
 
 function navigateToResult(nsIdx, section, subIdx, field) {
-  switchView('overview');
   forceSelectCard(nsIdx);
   switchTab(section);
 
   requestAnimationFrame(() => {
     let target = null;
     if (section === 'state') {
-      const headingMap = {intent:'Intent', reality:'Reality', context:'Next session entry point', decisions:'Recent decisions'};
+      const headingMap = {intent: 'Intent', reality: 'Reality',
+                          context: 'Next session entry point',
+                          decisions: 'Recent decisions'};
       const want = headingMap[field] || 'Intent';
       document.querySelectorAll('#tab-state h3').forEach(h => {
-        if (h.textContent.trim() === want) target = h.closest('.md-section') || h.parentElement;
+        if (h.textContent.trim() === want)
+          target = h.closest('.md-section') || h.parentElement;
       });
     } else if (section === 'learnings') {
       target = document.querySelector('#tab-learnings tr[data-idx="' + subIdx + '"]');
@@ -1405,6 +1566,12 @@ function navigateToResult(nsIdx, section, subIdx, field) {
   });
 }
 
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+    e.preventDefault();
+    openSearch();
+  }
+});
 // Auto-open first card when only one namespace is shown
 if (NS.length === 1) selectCard(0);
 </script>
