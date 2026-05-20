@@ -656,6 +656,56 @@ HTML_TEMPLATE = """\
     }
     .context-block strong { color: var(--blue); }
     .context-block p { color: var(--text); margin-bottom: .2rem; }
+
+    /* ── Search ── */
+    .search-input-wrap { flex: 1; max-width: 360px; position: relative; }
+    .search-input {
+      width: 100%; padding: .38rem .75rem .38rem 1.9rem;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 20px; color: var(--text); font-family: inherit;
+      font-size: .82rem; outline: none; transition: border-color .15s;
+    }
+    .search-input:focus { border-color: var(--blue); }
+    .search-input::placeholder { color: var(--subtle); }
+    .search-input-icon {
+      position: absolute; left: .65rem; top: 50%; transform: translateY(-50%);
+      color: var(--subtle); font-size: .85rem; pointer-events: none;
+    }
+    .search-summary { font-size: .78rem; color: var(--muted); padding: .4rem 0 .7rem; }
+    .search-group {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); margin-bottom: .75rem; overflow: hidden;
+    }
+    .search-group-header {
+      background: var(--surface2); padding: .45rem .875rem;
+      font-weight: 700; font-size: .85rem; border-bottom: 1px solid var(--border);
+    }
+    .search-section-group { padding: .5rem .875rem; border-bottom: 1px solid var(--surface2); }
+    .search-section-group:last-child { border-bottom: none; }
+    .search-section-badge {
+      display: inline-block; font-size: .62rem; font-weight: 700;
+      letter-spacing: .06em; text-transform: uppercase;
+      padding: .15em .55em; border-radius: 4px; margin-bottom: .4rem;
+    }
+    .sec-blue   { background: var(--blue-bg);  color: var(--blue); }
+    .sec-green  { background: var(--green-bg); color: var(--green); }
+    .sec-amber  { background: var(--amber-bg); color: var(--amber); }
+    .sec-subtle { background: var(--surface2); color: var(--muted); }
+    .search-result-item {
+      padding: .32rem .5rem; border-radius: 4px; cursor: pointer;
+      font-size: .8rem; margin-bottom: .15rem; transition: background .1s;
+    }
+    .search-result-item:hover { background: var(--surface2); }
+    .snippet { color: var(--muted); line-height: 1.5; }
+    mark { background: var(--amber-bg); color: var(--amber); border-radius: 2px; padding: 0 .1em; font-style: normal; }
+    .search-more { font-size: .72rem; color: var(--subtle); font-style: italic; padding: .2rem .5rem; }
+
+    @keyframes flashHighlight {
+      0%   { background: var(--amber-bg); box-shadow: 0 0 0 2px var(--amber); }
+      65%  { background: var(--amber-bg); box-shadow: 0 0 0 2px var(--amber); }
+      100% { background: transparent; box-shadow: none; }
+    }
+    .highlight-flash { animation: flashHighlight 1.8s ease-out forwards; border-radius: 4px; }
   </style>
 </head>
 <body>
@@ -665,6 +715,12 @@ HTML_TEMPLATE = """\
     <div class="header-left">
       <h1>&#x1f9ed; Compass</h1>
       <span class="since">Generated [[GENERATED_AT]]</span>
+    </div>
+    <div class="search-input-wrap">
+      <span class="search-input-icon">&#x2315;</span>
+      <input class="search-input" type="search" id="search-input"
+             placeholder="Search namespaces, learnings, decisions…"
+             oninput="handleSearch(this.value)">
     </div>
     <div class="header-stats">
       <div class="hstat"><span class="hstat-val">[[N_NS]]</span><span class="hstat-lbl">namespaces</span></div>
@@ -679,6 +735,7 @@ HTML_TEMPLATE = """\
   <nav class="view-nav">
     <button class="view-tab active" id="vtab-overview"   onclick="switchView('overview')">Overview</button>
     <button class="view-tab"        id="vtab-priorities" onclick="switchView('priorities')">Priorities</button>
+    <button class="view-tab"        id="vtab-search"     onclick="switchView('search')">Search</button>
   </nav>
 
   <div id="view-overview">
@@ -692,6 +749,12 @@ HTML_TEMPLATE = """\
   </div>
 
   <div id="view-priorities" style="display:none"></div>
+
+  <div id="view-search" style="display:none">
+    <div style="padding:2rem;text-align:center;color:var(--subtle);font-size:.85rem">
+      Type in the search bar above to search across all namespaces.
+    </div>
+  </div>
 </main>
 
 <script>
@@ -863,7 +926,7 @@ function renderLearnings(ns) {
     return '<div class="empty-state">No learnings recorded yet.</div>';
   }
 
-  const rows = ns.learnings.map(l => {
+  const rows = ns.learnings.map((l, lIdx) => {
     const w    = l.weight || 1;
     const wCls = w >= 4 ? 'w-high' : w >= 2 ? 'w-mid' : 'w-low';
     const tags = (l.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('');
@@ -871,7 +934,7 @@ function renderLearnings(ns) {
     const date = (l.logged_at || '').slice(0, 10) || '—';
     const conf = l.confidence ? ` <span style="color:var(--subtle);font-size:.68rem">${esc(l.confidence)}</span>` : '';
     return `
-      <tr>
+      <tr data-idx="${lIdx}">
         <td><span class="weight-dot"><span class="wdot ${wCls}"></span><span class="wnum">${w}</span></span></td>
         <td class="learning-text">${esc(l.text || '')}</td>
         <td><div class="tags-cell">${tags}</div></td>
@@ -895,14 +958,14 @@ function renderDecisions(ns) {
   if (!ns.decisions || !ns.decisions.length) {
     return '<div class="empty-state">No decisions logged for this namespace yet.<br>Use <code>compass log-decision</code> mid-session to capture them.</div>';
   }
-  const items = [...ns.decisions].reverse().map(d => {
+  const items = [...ns.decisions].reverse().map((d, dIdx) => {
     const date = (d.timestamp || d.logged_at || '').slice(0, 10) || '—';
     const ratHtml = d.rationale
       ? `<div class="decision-rationale">${esc(d.rationale)}</div>` : '';
     const altHtml = d.alternatives
       ? `<div class="decision-alts">Alternatives considered: ${esc(d.alternatives)}</div>` : '';
     return `
-      <div class="decision-item">
+      <div class="decision-item" data-idx="${dIdx}">
         <div class="decision-text">${esc(d.decision || d.text || '')}</div>
         <div class="decision-meta">
           ${ratHtml}
@@ -973,7 +1036,7 @@ function toggleSession(i) {
 // ── Top-level view switching ──────────────────────────────────────────────────
 
 function switchView(v) {
-  ['overview', 'priorities'].forEach(id => {
+  ['overview', 'priorities', 'search'].forEach(id => {
     document.getElementById('view-' + id).style.display = id === v ? '' : 'none';
     document.getElementById('vtab-' + id).classList.toggle('active', id === v);
   });
@@ -1183,6 +1246,163 @@ function renderPriorities() {
   }).join('');
 
   document.getElementById('view-priorities').innerHTML = `<div class="priority-grid">${cards}</div>`;
+}
+
+// ── Search ────────────────────────────────────────────────────────────────────
+
+let SEARCH_INDEX = null;
+let _lastQuery   = '';
+
+function forceSelectCard(i) {
+  if (selected >= 0 && selected !== i) {
+    document.getElementById('card-' + selected)?.classList.remove('selected');
+  }
+  selected = i;
+  document.getElementById('card-' + i)?.classList.add('selected');
+  renderDetail(NS[i]);
+  const detail = document.getElementById('detail');
+  detail.classList.add('visible');
+  requestAnimationFrame(() =>
+    detail.scrollIntoView({behavior: 'smooth', block: 'nearest'})
+  );
+}
+
+function buildSearchIndex() {
+  const idx = [];
+  NS.forEach((ns, nsIdx) => {
+    if (ns.intent)      idx.push({nsIdx, section:'state', field:'intent',   text: ns.intent,      displayText: ns.intentSummary || ns.intent});
+    if (ns.reality)     idx.push({nsIdx, section:'state', field:'reality',  text: ns.reality,     displayText: ns.reality.slice(0, 200)});
+    if (ns.codeContext) idx.push({nsIdx, section:'state', field:'context',  text: ns.codeContext, displayText: ns.codeContext.slice(0, 200)});
+    (ns.learnings || []).forEach((l, i) =>
+      idx.push({nsIdx, section:'learnings', subIdx: i, text: l.text || '', displayText: l.text || ''})
+    );
+    [...(ns.decisions || [])].reverse().forEach((d, i) => {
+      const combined = [d.decision||d.text||'', d.rationale||'', d.alternatives||''].join(' ');
+      idx.push({nsIdx, section:'decisions', subIdx: i, text: combined, displayText: d.decision||d.text||''});
+    });
+    (ns.history || []).forEach((s, si) => {
+      const parts = [...(s.completed||[]), ...(s.incomplete||[]),
+                     ...(s.learnings_extracted||[]), s.notes||''].filter(Boolean);
+      if (parts.length)
+        idx.push({nsIdx, section:'history', subIdx: si, text: parts.join(' '), displayText: parts[0]||''});
+    });
+  });
+  return idx;
+}
+
+function handleSearch(val) {
+  _lastQuery = val.trim();
+  const view = document.getElementById('view-search');
+  if (!_lastQuery) {
+    view.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--subtle);font-size:.85rem">Type in the search bar above to search across all namespaces.</div>';
+    return;
+  }
+  switchView('search');
+  if (!SEARCH_INDEX) SEARCH_INDEX = buildSearchIndex();
+  doSearch(_lastQuery);
+}
+
+function doSearch(query) {
+  const q = query.toLowerCase();
+  const hits = SEARCH_INDEX.filter(item => item.text.toLowerCase().includes(q));
+
+  const groups = {};
+  hits.forEach(m => {
+    if (!groups[m.nsIdx]) groups[m.nsIdx] = {nsIdx: m.nsIdx, sections: {}};
+    if (!groups[m.nsIdx].sections[m.section]) groups[m.nsIdx].sections[m.section] = new Map();
+    const key = m.subIdx !== undefined ? String(m.subIdx) : (m.field || 'x');
+    if (!groups[m.nsIdx].sections[m.section].has(key))
+      groups[m.nsIdx].sections[m.section].set(key, m);
+  });
+
+  const totalNS   = Object.keys(groups).length;
+  const totalHits = Object.values(groups).reduce((a, g) =>
+    a + Object.values(g.sections).reduce((b, s) => b + s.size, 0), 0);
+
+  if (!totalHits) {
+    document.getElementById('view-search').innerHTML =
+      '<div style="padding:2rem;text-align:center;color:var(--subtle)">No matches for &ldquo;' + esc(query) + '&rdquo;</div>';
+    return;
+  }
+
+  const SECT_ORDER = ['state','learnings','decisions','history'];
+  const SECT_LABEL = {state:'State', learnings:'Learnings', decisions:'Decisions', history:'History'};
+  const SECT_CLS   = {state:'blue',  learnings:'green',     decisions:'amber',     history:'subtle'};
+
+  let html = '<div class="search-summary">' + totalHits + ' match' + (totalHits!==1?'es':'') +
+    ' across ' + totalNS + ' namespace' + (totalNS!==1?'s':'') +
+    ' &mdash; click any result to navigate</div>';
+
+  Object.values(groups).sort((a, b) => a.nsIdx - b.nsIdx).forEach(g => {
+    const ns = NS[g.nsIdx];
+    html += '<div class="search-group"><div class="search-group-header">' + esc(ns.namespace) + '</div>';
+    SECT_ORDER.forEach(sec => {
+      const secMap = g.sections[sec];
+      if (!secMap || !secMap.size) return;
+      const items = [...secMap.values()];
+      html += '<div class="search-section-group"><div class="search-section-badge sec-' + SECT_CLS[sec] + '">' + SECT_LABEL[sec] + '</div>';
+      items.slice(0, 6).forEach(item => {
+        html += '<div class="search-result-item" onclick="navigateToResult(' +
+          item.nsIdx + ',\'' + sec + '\',' +
+          (item.subIdx !== undefined ? item.subIdx : -1) + ',\'' + (item.field||'') + '\')">' +
+          makeSnippet(item.displayText || item.text, q) + '</div>';
+      });
+      if (items.length > 6)
+        html += '<div class="search-more">+' + (items.length - 6) + ' more match' + (items.length-6!==1?'es':'') + '</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+  });
+
+  document.getElementById('view-search').innerHTML = html;
+}
+
+function makeSnippet(text, query) {
+  if (!text) return '<span class="snippet">—</span>';
+  const idx = text.toLowerCase().indexOf(query);
+  if (idx === -1) return '<span class="snippet">' + esc(text.slice(0,120)) + (text.length>120?'…':'') + '</span>';
+  const s = Math.max(0, idx - 45);
+  const e = Math.min(text.length, idx + query.length + 70);
+  return '<span class="snippet">' +
+    (s > 0 ? '…' : '') +
+    esc(text.slice(s, idx)) +
+    '<mark>' + esc(text.slice(idx, idx + query.length)) + '</mark>' +
+    esc(text.slice(idx + query.length, e)) +
+    (e < text.length ? '…' : '') +
+    '</span>';
+}
+
+function navigateToResult(nsIdx, section, subIdx, field) {
+  switchView('overview');
+  forceSelectCard(nsIdx);
+  switchTab(section);
+
+  requestAnimationFrame(() => {
+    let target = null;
+    if (section === 'state') {
+      const headingMap = {intent:'Intent', reality:'Reality', context:'Next session entry point', decisions:'Recent decisions'};
+      const want = headingMap[field] || 'Intent';
+      document.querySelectorAll('#tab-state h3').forEach(h => {
+        if (h.textContent.trim() === want) target = h.closest('.md-section') || h.parentElement;
+      });
+    } else if (section === 'learnings') {
+      target = document.querySelector('#tab-learnings tr[data-idx="' + subIdx + '"]');
+    } else if (section === 'decisions') {
+      target = document.querySelector('#tab-decisions .decision-item[data-idx="' + subIdx + '"]');
+    } else if (section === 'history') {
+      target = document.getElementById('scard-' + subIdx);
+      if (target) {
+        const body = document.getElementById('sbody-' + subIdx);
+        target.classList.add('expanded');
+        if (body) body.classList.add('open');
+      }
+    }
+    if (target) {
+      target.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+      target.classList.add('highlight-flash');
+      setTimeout(() => target.classList.remove('highlight-flash'), 1800);
+    }
+  });
 }
 
 // Auto-open first card when only one namespace is shown
