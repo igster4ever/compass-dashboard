@@ -752,6 +752,56 @@ HTML_TEMPLATE = """\
       100% { background: transparent; box-shadow: none; }
     }
     .highlight-flash { animation: flashHighlight 1.8s ease-out forwards; border-radius: 4px; }
+
+    /* ── DAG view ── */
+    .dag-toolbar {
+      display: flex; align-items: center; gap: .6rem; margin-bottom: .75rem; flex-wrap: wrap;
+    }
+    .dag-title { font-weight: 700; font-size: .9rem; }
+    .dag-hint { font-size: .72rem; color: var(--muted); flex: 1; min-width: 120px; }
+    .dag-btn {
+      font-size: .72rem; font-family: inherit; background: var(--surface2);
+      border: 1px solid var(--border); color: var(--muted);
+      padding: .3rem .7rem; border-radius: var(--radius); cursor: pointer; white-space: nowrap;
+    }
+    .dag-btn:hover { color: var(--text); border-color: var(--blue); }
+    .dag-btn.active { background: var(--blue-bg); border-color: var(--blue); color: var(--blue); }
+    .dag-wrap { display: flex; gap: 1rem; align-items: flex-start; }
+    .dag-svg {
+      flex: 1; background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); display: block; min-height: 320px; max-height: 560px;
+    }
+    .dag-legend {
+      width: 190px; flex-shrink: 0; background: var(--surface);
+      border: 1px solid var(--border); border-radius: var(--radius); padding: .75rem;
+    }
+    .dag-legend-title {
+      font-size: .62rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .07em; color: var(--muted); margin-bottom: .45rem;
+    }
+    .dag-legend-item {
+      display: flex; align-items: center; gap: .5rem;
+      font-size: .72rem; color: var(--text); margin-bottom: .42rem;
+    }
+    .dag-tooltip {
+      position: fixed; z-index: 8000; pointer-events: none;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 6px; padding: .5rem .75rem; max-width: 300px;
+      box-shadow: 0 4px 16px rgba(0,0,0,.45);
+    }
+    .dag-tip-header {
+      font-size: .78rem; color: var(--text); margin-bottom: .3rem;
+      display: flex; align-items: baseline; gap: .4rem; flex-wrap: wrap; line-height: 1.4;
+    }
+    .dag-tip-type {
+      font-size: .62rem; font-weight: 700; padding: .1em .45em;
+      border-radius: 3px; flex-shrink: 0;
+    }
+    .dag-tip-dep        { background: var(--amber-bg); color: var(--amber); }
+    .dag-tip-shared     { background: var(--blue-bg);  color: var(--blue); }
+    .dag-tip-conflict   { background: var(--red-bg);   color: var(--red); }
+    .dag-tip-concurrent { background: var(--green-bg); color: var(--green); }
+    .dag-tip-detail { font-size: .72rem; color: var(--muted); line-height: 1.5; }
   </style>
 </head>
 <body>
@@ -780,6 +830,7 @@ HTML_TEMPLATE = """\
   <nav class="view-nav">
     <button class="view-tab active" id="vtab-overview"   onclick="switchView('overview')">Overview</button>
     <button class="view-tab"        id="vtab-priorities" onclick="switchView('priorities')">Priorities</button>
+    <button class="view-tab"        id="vtab-dag"        onclick="switchView('dag')">DAG</button>
   </nav>
 
   <div id="view-overview">
@@ -793,6 +844,7 @@ HTML_TEMPLATE = """\
   </div>
 
   <div id="view-priorities" style="display:none"></div>
+  <div id="view-dag"        style="display:none"></div>
 
   </div>
 </main>
@@ -1095,11 +1147,13 @@ function toggleSession(i) {
 // ── Top-level view switching ──────────────────────────────────────────────────
 
 function switchView(v) {
-  ['overview', 'priorities'].forEach(id => {
+  if (v !== 'dag' && _dag.raf) { cancelAnimationFrame(_dag.raf); _dag.raf = null; }
+  ['overview', 'priorities', 'dag'].forEach(id => {
     document.getElementById('view-' + id).style.display = id === v ? '' : 'none';
     document.getElementById('vtab-' + id).classList.toggle('active', id === v);
   });
   if (v === 'priorities') renderPriorities();
+  if (v === 'dag') renderDAG();
 }
 
 // ── Priority scoring ──────────────────────────────────────────────────────────
@@ -1572,6 +1626,340 @@ document.addEventListener('keydown', e => {
     openSearch();
   }
 });
+// ── Dependency Graph (DAG) ────────────────────────────────────────────────────
+
+const EDGE_META = {
+  dep:        { color: '#d29922', label: 'Dependency',    dash: '',    arrow: true,  title: 'directed' },
+  shared:     { color: '#58a6ff', label: 'Shared themes', dash: '5,3', arrow: false, title: 'shared tag themes (≥2)' },
+  conflict:   { color: '#f85149', label: 'Theme overlap', dash: '2,3', arrow: false, title: 'high-weight learning overlap' },
+  concurrent: { color: '#3fb950', label: 'Concurrent',    dash: '',    arrow: false, title: 'both sessions open' },
+};
+
+const _dag = { nodes: [], edges: [], nodeMap: new Map(), raf: null, tick: 0, maxTick: 220, svgW: 900, svgH: 530 };
+let _dagDrag = null;
+let _dagShowSystem = false;
+
+function _addEdge(map, s, t, type, detail) {
+  const key = type === 'dep' ? `${s}->${t}:dep` : `${Math.min(s,t)}-${Math.max(s,t)}:${type}`;
+  if (!map.has(key)) map.set(key, { source: s, target: t, type, details: [] });
+  map.get(key).details.push(detail);
+}
+
+function computeAllEdges(includeSystem) {
+  const map = new Map();
+  const skip = ns => !includeSystem && SYSTEM_NS.has(ns.namespace.toLowerCase());
+  NS.forEach((ns, i) => {
+    if (skip(ns)) return;
+    const nsHWTags = new Set((ns.learnings || []).filter(l => (l.weight||1) >= 4).flatMap(l => l.tags||[]));
+    const nsTagSet = new Set(ns.topTags || []);
+    const reality  = (ns.reality || '').toLowerCase();
+    const planned  = (ns.plannedActions || []).join(' ').toLowerCase();
+    NS.forEach((other, j) => {
+      if (i === j || skip(other)) return;
+      const ol = other.namespace.toLowerCase();
+      if (planned.includes(ol))
+        _addEdge(map, i, j, 'dep', '"' + ns.namespace + '" planned work references "' + other.namespace + '"');
+      if (reality.includes(ol))
+        _addEdge(map, i, j, 'dep', '"' + ns.namespace + '" reality mentions "' + other.namespace + '"');
+      if (i < j) {
+        const shared = (other.topTags||[]).filter(t => nsTagSet.has(t));
+        if (shared.length >= 2)
+          _addEdge(map, i, j, 'shared', 'Shared themes: ' + shared.slice(0,3).join(', '));
+        const conflict = (other.learnings||[]).filter(l => (l.weight||1) >= 4)
+          .flatMap(l => l.tags||[]).filter(t => nsHWTags.has(t));
+        if (conflict.length)
+          _addEdge(map, i, j, 'conflict', 'High-weight learning overlap: ' + [...new Set(conflict)].slice(0,2).join(', '));
+        if (ns.open && other.open)
+          _addEdge(map, i, j, 'concurrent', 'Both sessions open simultaneously');
+      }
+    });
+  });
+  return [...map.values()];
+}
+
+function buildDAGLegend(edges) {
+  const types = new Set(edges.map(e => e.type));
+  const edgeRows = Object.entries(EDGE_META).filter(([t]) => types.has(t)).map(([type, m]) => {
+    const dattr = m.dash ? ' stroke-dasharray="' + m.dash + '"' : '';
+    const arrowSvg = m.arrow
+      ? '<defs><marker id="lg-' + type + '" markerWidth="6" markerHeight="4" refX="5" refY="2" orient="auto"><polygon points="0,0 6,2 0,4" fill="' + m.color + '"/></marker></defs>'
+      : '';
+    const mend = m.arrow ? ' marker-end="url(#lg-' + type + ')"' : '';
+    return '<div class="dag-legend-item">'
+      + '<svg width="26" height="2" style="overflow:visible;flex-shrink:0">'
+      + arrowSvg
+      + '<line x1="0" y1="1" x2="26" y2="1" stroke="' + m.color + '" stroke-width="2"' + dattr + mend + '/>'
+      + '</svg><span>' + esc(m.label) + '</span></div>';
+  }).join('');
+  const nodeRows = ''
+    + '<div class="dag-legend-item"><svg width="16" height="16" style="flex-shrink:0"><circle cx="8" cy="8" r="7" fill="rgba(63,185,80,.18)" stroke="#3fb950" stroke-width="2"/></svg><span>Open session</span></div>'
+    + '<div class="dag-legend-item"><svg width="16" height="16" style="flex-shrink:0"><circle cx="8" cy="8" r="7" fill="rgba(33,38,45,.9)" stroke="#484f58" stroke-width="1"/></svg><span>Closed</span></div>'
+    + '<div class="dag-legend-item"><svg width="16" height="16" style="flex-shrink:0"><circle cx="8" cy="8" r="5" fill="#3fb950"/></svg><span>Goal rate</span></div>';
+  return '<div class="dag-legend-title">Relationships</div>'
+    + (edgeRows || '<div style="font-size:.72rem;color:var(--subtle);font-style:italic">None detected</div>')
+    + '<div style="margin-top:.6rem;border-top:1px solid var(--border);padding-top:.5rem">'
+    + '<div class="dag-legend-title">Nodes</div>' + nodeRows + '</div>';
+}
+
+function dagPosTooltip(ev, tip) {
+  if (!tip) return;
+  const x = ev.clientX + 14, y = ev.clientY + 14;
+  const tw = tip.offsetWidth || 260, th = tip.offsetHeight || 60;
+  tip.style.left = (x + tw > window.innerWidth - 8  ? ev.clientX - tw - 14 : x) + 'px';
+  tip.style.top  = (y + th > window.innerHeight - 8 ? ev.clientY - th - 14 : y) + 'px';
+}
+
+function renderDAG() {
+  if (_dag.raf) { cancelAnimationFrame(_dag.raf); _dag.raf = null; }
+  const container = document.getElementById('view-dag');
+  const nodeData = NS.map((ns, i) => ({ ns, nsIdx: i, x: 0, y: 0, vx: 0, vy: 0, fixed: false }))
+    .filter(n => _dagShowSystem || !SYSTEM_NS.has(n.ns.namespace.toLowerCase()));
+  if (!nodeData.length) {
+    container.innerHTML = '<div class="empty-state" style="padding:2rem;text-align:center">No namespaces to visualise.</div>';
+    return;
+  }
+  const allEdges = computeAllEdges(_dagShowSystem)
+    .filter(e => nodeData.some(n => n.nsIdx === e.source) && nodeData.some(n => n.nsIdx === e.target));
+  const nodeMap = new Map(nodeData.map((n, i) => [n.nsIdx, i]));
+  const W = _dag.svgW, H = _dag.svgH, cx = W/2, cy = H/2;
+  const R0 = Math.min(W, H) * 0.32;
+  nodeData.forEach((n, i) => {
+    const a = (2 * Math.PI * i / nodeData.length) - Math.PI / 2;
+    n.x = cx + R0 * Math.cos(a); n.y = cy + R0 * Math.sin(a);
+  });
+  Object.assign(_dag, { nodes: nodeData, edges: allEdges, nodeMap, tick: 0 });
+
+  const sysLabel = _dagShowSystem ? 'Hide system NS' : 'Show system NS';
+  const sysCls   = _dagShowSystem ? ' active' : '';
+  container.innerHTML = ''
+    + '<div class="dag-toolbar">'
+    +   '<span class="dag-title">Dependency Graph</span>'
+    +   '<span class="dag-hint">Drag nodes · hover edges for details · click node to navigate</span>'
+    +   '<button class="dag-btn' + sysCls + '" id="dag-sys-btn" onclick="toggleDAGSystem()">&#x2699; ' + sysLabel + '</button>'
+    +   '<button class="dag-btn" onclick="resetDAGLayout()">&#x21ba; Reset</button>'
+    + '</div>'
+    + '<div class="dag-wrap">'
+    +   '<svg id="dag-svg" viewBox="0 0 ' + W + ' ' + H + '" class="dag-svg" preserveAspectRatio="xMidYMid meet"></svg>'
+    +   '<div class="dag-legend">' + buildDAGLegend(allEdges) + '</div>'
+    + '</div>'
+    + '<div id="dag-tooltip" class="dag-tooltip" style="display:none"></div>';
+
+  const svgEl = document.getElementById('dag-svg');
+  const SVG   = 'http://www.w3.org/2000/svg';
+
+  // Arrowhead markers in defs
+  const defs = document.createElementNS(SVG, 'defs');
+  Object.entries(EDGE_META).forEach(([type, m]) => {
+    if (!m.arrow) return;
+    const mk = document.createElementNS(SVG, 'marker');
+    mk.setAttribute('id', 'arr-' + type); mk.setAttribute('markerWidth', '8'); mk.setAttribute('markerHeight', '6');
+    mk.setAttribute('refX', '7'); mk.setAttribute('refY', '3'); mk.setAttribute('orient', 'auto');
+    const poly = document.createElementNS(SVG, 'polygon');
+    poly.setAttribute('points', '0,0 8,3 0,6'); poly.setAttribute('fill', m.color);
+    mk.appendChild(poly); defs.appendChild(mk);
+  });
+  svgEl.appendChild(defs);
+
+  // Edge lines
+  const eg = document.createElementNS(SVG, 'g');
+  allEdges.forEach((e, ei) => {
+    const m = EDGE_META[e.type] || EDGE_META.shared;
+    const ln = document.createElementNS(SVG, 'line');
+    ln.setAttribute('id', 'dag-edge-' + ei);
+    ln.setAttribute('stroke', m.color); ln.setAttribute('stroke-width', '1.5');
+    ln.setAttribute('stroke-opacity', '0.65');
+    if (m.dash) ln.setAttribute('stroke-dasharray', m.dash);
+    if (m.arrow) ln.setAttribute('marker-end', 'url(#arr-' + e.type + ')');
+    // Wider hover area via a transparent overlay
+    const hit = document.createElementNS(SVG, 'line');
+    hit.setAttribute('id', 'dag-hit-' + ei);
+    hit.setAttribute('stroke', 'transparent'); hit.setAttribute('stroke-width', '10');
+    const showTip = ev => {
+      const tt = document.getElementById('dag-tooltip');
+      if (!tt) return;
+      const arrow = m.arrow ? ' → ' : ' ↔ ';
+      const nsA = NS[e.source]?.namespace || '?', nsB = NS[e.target]?.namespace || '?';
+      const dets = e.details.slice(0,4).map(d => '<div class="dag-tip-detail">• ' + esc(d) + '</div>').join('');
+      tt.innerHTML = '<div class="dag-tip-header"><span class="dag-tip-type dag-tip-' + e.type + '">' + esc(m.label) + '</span>'
+        + '<span style="color:var(--muted)">' + esc(nsA) + arrow + esc(nsB) + '</span></div>' + dets;
+      tt.style.display = 'block'; dagPosTooltip(ev, tt);
+    };
+    const hideTip = () => { const tt = document.getElementById('dag-tooltip'); if (tt) tt.style.display = 'none'; };
+    [ln, hit].forEach(el => {
+      el.addEventListener('mouseenter', showTip);
+      el.addEventListener('mousemove', ev => dagPosTooltip(ev, document.getElementById('dag-tooltip')));
+      el.addEventListener('mouseleave', hideTip);
+    });
+    eg.appendChild(ln); eg.appendChild(hit);
+  });
+  svgEl.appendChild(eg);
+
+  // Node groups
+  const ng = document.createElementNS(SVG, 'g');
+  nodeData.forEach((n, ni) => {
+    const isSys = SYSTEM_NS.has(n.ns.namespace.toLowerCase());
+    const g = document.createElementNS(SVG, 'g');
+    g.setAttribute('id', 'dag-node-' + ni); g.style.cursor = 'pointer';
+
+    const circ = document.createElementNS(SVG, 'circle');
+    circ.setAttribute('r', '28');
+    circ.setAttribute('fill', n.ns.open ? 'rgba(63,185,80,.18)' : isSys ? 'rgba(22,27,34,.95)' : 'rgba(33,38,45,.9)');
+    circ.setAttribute('stroke', n.ns.open ? '#3fb950' : isSys ? '#58a6ff' : '#484f58');
+    circ.setAttribute('stroke-width', n.ns.open ? '2' : isSys ? '1.5' : '1');
+    if (isSys) circ.setAttribute('stroke-dasharray', '3,2');
+    g.appendChild(circ);
+
+    // Goal-rate dot (top-right)
+    if (n.ns.goalRate !== null && n.ns.goalRate !== undefined) {
+      const dot = document.createElementNS(SVG, 'circle');
+      dot.setAttribute('r', '5'); dot.setAttribute('cx', '20'); dot.setAttribute('cy', '-20');
+      dot.setAttribute('fill', n.ns.goalRate >= 80 ? '#3fb950' : n.ns.goalRate >= 50 ? '#d29922' : '#f85149');
+      dot.setAttribute('stroke', '#0d1117'); dot.setAttribute('stroke-width', '1.5');
+      g.appendChild(dot);
+    }
+
+    // Namespace name — split at hyphens for readability
+    const nm   = n.ns.namespace;
+    const segs = nm.split('-');
+    const rows = segs.length >= 3
+      ? [segs.slice(0, Math.ceil(segs.length/2)).join('-'), segs.slice(Math.ceil(segs.length/2)).join('-')]
+      : [nm];
+    rows.forEach((row, ri) => {
+      const t = document.createElementNS(SVG, 'text');
+      t.setAttribute('text-anchor', 'middle'); t.setAttribute('dominant-baseline', 'middle');
+      t.setAttribute('font-size', rows.length > 1 ? '9' : '10.5');
+      t.setAttribute('font-family', 'ui-monospace, monospace');
+      t.setAttribute('fill', isSys ? '#8b949e' : '#e6edf3');
+      t.setAttribute('pointer-events', 'none');
+      t.setAttribute('y', rows.length > 1 ? (ri === 0 ? '-6' : '7') : '0');
+      t.textContent = row.length > 14 ? row.slice(0,13) + '…' : row;
+      g.appendChild(t);
+    });
+
+    // Session count below circle
+    if (n.ns.sessionCount > 0) {
+      const sc = document.createElementNS(SVG, 'text');
+      sc.setAttribute('text-anchor', 'middle'); sc.setAttribute('y', '42');
+      sc.setAttribute('font-size', '9'); sc.setAttribute('fill', '#484f58');
+      sc.setAttribute('pointer-events', 'none');
+      sc.textContent = n.ns.sessionCount + '×';
+      g.appendChild(sc);
+    }
+
+    g.addEventListener('click', ev => { ev.stopPropagation(); switchView('overview'); forceSelectCard(n.nsIdx); });
+    g.addEventListener('mousedown', ev => { ev.preventDefault(); startDagDrag(ev, ni); });
+    ng.appendChild(g);
+  });
+  svgEl.appendChild(ng);
+
+  _dag.raf = requestAnimationFrame(dagSimStep);
+  dagUpdatePositions();
+}
+
+function toggleDAGSystem() {
+  _dagShowSystem = !_dagShowSystem;
+  renderDAG();
+}
+
+function dagSimStep() {
+  const { nodes, edges, nodeMap, svgW, svgH } = _dag;
+  const cx = svgW/2, cy = svgH/2;
+  const REPEL = 5000, SLEN = 130, SK = 0.025, DAMP = 0.78, CENT = 0.006;
+
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i+1; j < nodes.length; j++) {
+      const dx = nodes[j].x - nodes[i].x || 0.01, dy = nodes[j].y - nodes[i].y || 0.01;
+      const d = Math.sqrt(dx*dx + dy*dy) || 1, f = REPEL / (d*d);
+      const fx = dx/d*f, fy = dy/d*f;
+      if (!nodes[i].fixed) { nodes[i].vx -= fx; nodes[i].vy -= fy; }
+      if (!nodes[j].fixed) { nodes[j].vx += fx; nodes[j].vy += fy; }
+    }
+  }
+  edges.forEach(e => {
+    const ai = nodeMap.get(e.source), bi = nodeMap.get(e.target);
+    if (ai == null || bi == null) return;
+    const a = nodes[ai], b = nodes[bi];
+    const dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx*dx + dy*dy) || 1;
+    const f = SK * (d - SLEN), fx = dx/d*f, fy = dy/d*f;
+    if (!a.fixed) { a.vx += fx; a.vy += fy; }
+    if (!b.fixed) { b.vx -= fx; b.vy -= fy; }
+  });
+  let ke = 0;
+  nodes.forEach(n => {
+    if (!n.fixed) { n.vx += (cx - n.x) * CENT; n.vy += (cy - n.y) * CENT; }
+    n.vx *= DAMP; n.vy *= DAMP;
+    if (!n.fixed) {
+      n.x = Math.max(40, Math.min(svgW - 40, n.x + n.vx));
+      n.y = Math.max(35, Math.min(svgH - 35, n.y + n.vy));
+    }
+    ke += n.vx*n.vx + n.vy*n.vy;
+  });
+  dagUpdatePositions();
+  _dag.tick++;
+  if (_dag.tick < _dag.maxTick && ke > 0.02)
+    _dag.raf = requestAnimationFrame(dagSimStep);
+}
+
+function dagUpdatePositions() {
+  const { nodes, edges, nodeMap } = _dag;
+  edges.forEach((e, ei) => {
+    const ai = nodeMap.get(e.source), bi = nodeMap.get(e.target);
+    if (ai == null || bi == null) return;
+    const a = nodes[ai], b = nodes[bi];
+    const dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx*dx + dy*dy) || 1;
+    const startR = 30, endR = EDGE_META[e.type]?.arrow ? 32 : 0;
+    const x1 = a.x + dx/d*startR, y1 = a.y + dy/d*startR;
+    const x2 = b.x - dx/d*endR,   y2 = b.y - dy/d*endR;
+    const ln  = document.getElementById('dag-edge-' + ei);
+    const hit = document.getElementById('dag-hit-'  + ei);
+    [ln, hit].forEach(el => {
+      if (!el) return;
+      el.setAttribute('x1', x1.toFixed(1)); el.setAttribute('y1', y1.toFixed(1));
+      el.setAttribute('x2', x2.toFixed(1)); el.setAttribute('y2', y2.toFixed(1));
+    });
+  });
+  nodes.forEach((n, ni) => {
+    const g = document.getElementById('dag-node-' + ni);
+    if (g) g.setAttribute('transform', 'translate(' + n.x.toFixed(1) + ',' + n.y.toFixed(1) + ')');
+  });
+}
+
+function startDagDrag(ev, ni) {
+  const svg = document.getElementById('dag-svg');
+  if (!svg) return;
+  const bb = svg.getBoundingClientRect();
+  const sx = _dag.svgW / bb.width, sy = _dag.svgH / bb.height;
+  _dagDrag = { ni, ox: ev.clientX, oy: ev.clientY, nx: _dag.nodes[ni].x, ny: _dag.nodes[ni].y, sx, sy };
+  _dag.nodes[ni].fixed = true;
+  if (_dag.raf) { cancelAnimationFrame(_dag.raf); _dag.raf = null; }
+  const onMove = e => {
+    if (!_dagDrag) return;
+    _dag.nodes[_dagDrag.ni].x = Math.max(40, Math.min(_dag.svgW-40, _dagDrag.nx + (e.clientX-_dagDrag.ox)*_dagDrag.sx));
+    _dag.nodes[_dagDrag.ni].y = Math.max(35, Math.min(_dag.svgH-35, _dagDrag.ny + (e.clientY-_dagDrag.oy)*_dagDrag.sy));
+    dagUpdatePositions();
+  };
+  const onUp = () => {
+    _dagDrag = null;
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    _dag.tick = 0; _dag.raf = requestAnimationFrame(dagSimStep);
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+function resetDAGLayout() {
+  const { nodes, svgW, svgH } = _dag;
+  const cx = svgW/2, cy = svgH/2, R0 = Math.min(svgW, svgH) * 0.32;
+  nodes.forEach((n, i) => {
+    const a = (2 * Math.PI * i / nodes.length) - Math.PI / 2;
+    n.x = cx + R0 * Math.cos(a); n.y = cy + R0 * Math.sin(a);
+    n.vx = 0; n.vy = 0; n.fixed = false;
+  });
+  if (_dag.raf) cancelAnimationFrame(_dag.raf);
+  _dag.tick = 0; _dag.raf = requestAnimationFrame(dagSimStep);
+}
+
 // Auto-open first card when only one namespace is shown
 if (NS.length === 1) selectCard(0);
 </script>
