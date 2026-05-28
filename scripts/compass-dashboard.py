@@ -134,7 +134,7 @@ def _parse_history_file(path):
             "planned", "completed", "incomplete", "learnings_extracted"
         ):
             item = s[2:].strip().lstrip("✓✗ ").strip()
-            if item and item not in ("(none)", "(none recorded)"):
+            if item and not item.lower().startswith("(none"):
                 result[section].append(item)
         elif section == "notes" and s:
             result["notes"] += s + " "
@@ -493,6 +493,23 @@ HTML_TEMPLATE = """\
       border-bottom: 1px solid var(--border); position: relative; color: var(--text);
     }
     .goals-list li::before { content: "→"; position: absolute; left: 0; color: var(--blue); }
+
+    /* ── Tasks tab ── */
+    .task-list { display: flex; flex-direction: column; gap: .45rem; }
+    .task-row { display: flex; align-items: flex-start; gap: .7rem; padding: .55rem .65rem; border-radius: 6px; background: var(--surface2); }
+    .task-row:hover { filter: brightness(1.12); }
+    .task-rank { flex-shrink: 0; width: 1.35rem; height: 1.35rem; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: .7rem; font-weight: 700; color: var(--muted); border: 1px solid var(--border); margin-top: .1rem; }
+    .task-rank.top3 { color: var(--blue); border-color: var(--blue); }
+    .task-body { flex: 1; min-width: 0; }
+    .task-text { font-size: .82rem; color: var(--text); line-height: 1.4; word-break: break-word; }
+    .task-meta { margin-top: .28rem; display: flex; gap: .35rem; flex-wrap: wrap; align-items: center; }
+    .task-src { font-size: .67rem; padding: .1rem .42rem; border-radius: 3px; font-weight: 600; white-space: nowrap; }
+    .task-src-incomplete { background: rgba(210,153,34,.15); color: var(--amber); }
+    .task-src-next       { background: rgba(63,185,80,.15);  color: var(--green); }
+    .task-src-planned    { background: rgba(88,166,255,.15); color: var(--blue); }
+    .task-src-deferred   { background: var(--surface); color: var(--muted); border: 1px solid var(--border); }
+    .task-recur { font-size: .67rem; color: var(--muted); }
+    .task-empty { color: var(--muted); font-size: .82rem; padding: .5rem 0; }
 
     /* ── Learnings table ── */
     .learnings-table { width: 100%; border-collapse: collapse; font-size: .8rem; }
@@ -935,14 +952,17 @@ function selectCard(i) {
 // ── Detail panel ──────────────────────────────────────────────────────────────
 
 function renderDetail(ns) {
-  const tabs = (ns.decisions && ns.decisions.length)
+  const derivedTasks = deriveTasks(ns);
+  const baseTabs = (ns.decisions && ns.decisions.length)
     ? ['state', 'learnings', 'decisions', 'history']
     : ['state', 'learnings', 'history'];
+  const tabs = [...baseTabs, 'tasks'];
   const labels = {
     state:     'State',
     learnings: `Learnings (${ns.learnings.length})`,
     decisions: `Decisions (${(ns.decisions || []).length})`,
     history:   `History (${ns.sessionCount})`,
+    tasks:     derivedTasks.length ? `Tasks (${derivedTasks.length})` : 'Tasks',
   };
 
   const btnHtml = tabs.map(t =>
@@ -984,7 +1004,75 @@ function renderTab(tab, ns) {
   if (tab === 'learnings') return renderLearnings(ns);
   if (tab === 'decisions') return renderDecisions(ns);
   if (tab === 'history')   return renderHistory(ns);
+  if (tab === 'tasks')     return renderTasks(ns);
   return '';
+}
+
+// Derive and rank up to 10 pending tasks from incomplete history, reality.md next-session
+// bullets, plannedActions, and deferred opportunities.
+function deriveTasks(ns) {
+  const candidates = new Map();
+  const N = (ns.history || []).length;
+
+  // Incomplete items: scored by recency (most recent session = highest) + recurrence bonus
+  (ns.history || []).forEach((h, hi) => {
+    const recency = (N - hi);
+    (h.incomplete || []).filter(r => !r.toLowerCase().startsWith('(none')).forEach(raw => {
+      const key = raw.toLowerCase().trim().replace(/^[\u2713\u2717-] */, '').trim();
+      const ex = candidates.get(key);
+      if (ex) { ex.score += recency; ex.sessions++; }
+      else candidates.set(key, { text: raw, score: recency * 2, sessions: 1, src: 'incomplete' });
+    });
+  });
+
+  // 'Next session:' lines in reality.md — explicitly queued, so score above any incomplete
+  const realityLines = (ns.reality || '').split('\\n');
+  realityLines.forEach(line => {
+    const m = line.match(/[Nn]ext +session *[:-] *(.+)/);
+    if (!m) return;
+    m[1].split(/[,;]/).map(s => s.trim().replace(/^-+/, '').trim()).filter(s => s.length > 2).forEach(raw => {
+      const key = raw.toLowerCase().trim();
+      if (!candidates.has(key)) candidates.set(key, { text: raw, score: N + 4, sessions: 1, src: 'next' });
+    });
+  });
+
+  // Explicit planned actions (usually empty but future-proof)
+  (ns.plannedActions || []).forEach(raw => {
+    const text = typeof raw === 'string' ? raw : (raw.text || '');
+    const key = text.toLowerCase().trim();
+    if (key && !candidates.has(key)) candidates.set(key, { text, score: N + 8, sessions: 1, src: 'planned' });
+  });
+
+  // Deferred opportunities (lower priority)
+  (ns.deferred || []).forEach(d => {
+    const text = d.key || d.text || '';
+    const key = text.toLowerCase().trim();
+    if (key && !candidates.has(key)) candidates.set(key, { text, score: 2, sessions: 1, src: 'deferred' });
+  });
+
+  return Array.from(candidates.values())
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 10);
+}
+
+function renderTasks(ns) {
+  const tasks = deriveTasks(ns);
+  if (!tasks.length) return '<p class="task-empty">No pending tasks found — all clear.</p>';
+  const SRC_LABELS = { incomplete: 'incomplete', next: 'next session', planned: 'planned', deferred: 'deferred' };
+  const SRC_CLS    = { incomplete: 'task-src-incomplete', next: 'task-src-next', planned: 'task-src-planned', deferred: 'task-src-deferred' };
+  const rows = tasks.map((t, i) => {
+    const rankCls = i < 3 ? ' top3' : '';
+    const recur = t.sessions > 1 ? `<span class="task-recur">${t.sessions}\u00d7 sessions</span>` : '';
+    const srcCls = SRC_CLS[t.src] || 'task-src-deferred';
+    const srcLabel = SRC_LABELS[t.src] || t.src;
+    return `<div class="task-row">`
+      + `<span class="task-rank${rankCls}">${i+1}</span>`
+      + `<div class="task-body">`
+      + `<div class="task-text">${esc(t.text)}</div>`
+      + `<div class="task-meta"><span class="task-src ${srcCls}">${srcLabel}</span>${recur}</div>`
+      + `</div></div>`;
+  }).join('');
+  return `<div class="task-list">${rows}</div>`;
 }
 
 function renderState(ns) {
@@ -1635,7 +1723,7 @@ const EDGE_META = {
   concurrent: { color: '#3fb950', label: 'Concurrent',    dash: '',    arrow: false, title: 'both sessions open' },
 };
 
-const _dag = { nodes: [], edges: [], nodeMap: new Map(), raf: null, tick: 0, maxTick: 220, svgW: 900, svgH: 530 };
+const _dag = { nodes: [], edges: [], nodeMap: new Map(), raf: null, tick: 0, maxTick: 280, svgW: 900, svgH: 530 };
 let _dagDrag = null;
 let _dagShowSystem = false;
 
@@ -1721,13 +1809,9 @@ function renderDAG() {
   const allEdges = computeAllEdges(_dagShowSystem)
     .filter(e => nodeData.some(n => n.nsIdx === e.source) && nodeData.some(n => n.nsIdx === e.target));
   const nodeMap = new Map(nodeData.map((n, i) => [n.nsIdx, i]));
-  const W = _dag.svgW, H = _dag.svgH, cx = W/2, cy = H/2;
-  const R0 = Math.min(W, H) * 0.32;
-  nodeData.forEach((n, i) => {
-    const a = (2 * Math.PI * i / nodeData.length) - Math.PI / 2;
-    n.x = cx + R0 * Math.cos(a); n.y = cy + R0 * Math.sin(a);
-  });
+  const W = _dag.svgW, H = _dag.svgH;
   Object.assign(_dag, { nodes: nodeData, edges: allEdges, nodeMap, tick: 0 });
+  dagInitPositions();
 
   const sysLabel = _dagShowSystem ? 'Hide system NS' : 'Show system NS';
   const sysCls   = _dagShowSystem ? ' active' : '';
@@ -1861,10 +1945,50 @@ function toggleDAGSystem() {
   renderDAG();
 }
 
+// Seed positions using topological layers (depends/conflict edges determine depth).
+// All nodes with no incoming directed edges become roots (top); leaves sink to bottom.
+// Nodes sharing a layer are spread evenly across the full canvas width.
+function dagInitPositions() {
+  const { nodes, edges, nodeMap, svgW, svgH } = _dag;
+  const W = svgW, H = svgH, N = nodes.length;
+  const inDeg = new Array(N).fill(0);
+  const adj   = Array.from({length: N}, () => []);
+  edges.forEach(e => {
+    if (e.type !== 'depends' && e.type !== 'conflict') return;
+    const ai = nodeMap.get(e.source), bi = nodeMap.get(e.target);
+    if (ai == null || bi == null) return;
+    inDeg[bi]++; adj[ai].push(bi);
+  });
+  const layer = new Array(N).fill(0);
+  const q = []; inDeg.forEach((d, i) => { if (d === 0) q.push(i); });
+  for (let qi = 0; qi < q.length; qi++) {
+    const cur = q[qi];
+    adj[cur].forEach(nb => {
+      layer[nb] = Math.max(layer[nb], layer[cur] + 1);
+      inDeg[nb]--;
+      if (inDeg[nb] === 0) q.push(nb);
+    });
+  }
+  const maxLayer = Math.max(...layer, 0);
+  const layerCount = new Array(maxLayer + 1).fill(0);
+  layer.forEach(l => layerCount[l]++);
+  const layerIdx = new Array(maxLayer + 1).fill(0);
+  const PAD = 72;
+  nodes.forEach((n, i) => {
+    const l = layer[i], cnt = layerCount[l], idx = layerIdx[l]++;
+    n.x = PAD + (W - PAD*2) * (idx + 0.5) / cnt + (Math.random() - 0.5) * 18;
+    n.y = PAD + (H - PAD*2) * (maxLayer > 0 ? l / maxLayer : 0.5) + (Math.random() - 0.5) * 18;
+    n.vx = 0; n.vy = 0;
+  });
+}
+
 function dagSimStep() {
   const { nodes, edges, nodeMap, svgW, svgH } = _dag;
   const cx = svgW/2, cy = svgH/2;
-  const REPEL = 5000, SLEN = 130, SK = 0.025, DAMP = 0.78, CENT = 0.006;
+  // Edge-type-aware spring lengths: tighter for hard dependencies, looser for concurrent/shared.
+  const SPRING_LEN = { depends: 110, shared: 165, conflict: 90, concurrent: 195 };
+  const SPRING_K   = { depends: 0.03, shared: 0.018, conflict: 0.038, concurrent: 0.012 };
+  const REPEL = 14000, DAMP = 0.80, CENT = 0.002;
 
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i+1; j < nodes.length; j++) {
@@ -1879,8 +2003,10 @@ function dagSimStep() {
     const ai = nodeMap.get(e.source), bi = nodeMap.get(e.target);
     if (ai == null || bi == null) return;
     const a = nodes[ai], b = nodes[bi];
+    const slen = SPRING_LEN[e.type] || 150;
+    const sk   = SPRING_K[e.type]   || 0.02;
     const dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx*dx + dy*dy) || 1;
-    const f = SK * (d - SLEN), fx = dx/d*f, fy = dy/d*f;
+    const f = sk * (d - slen), fx = dx/d*f, fy = dy/d*f;
     if (!a.fixed) { a.vx += fx; a.vy += fy; }
     if (!b.fixed) { b.vx -= fx; b.vy -= fy; }
   });
@@ -1949,13 +2075,8 @@ function startDagDrag(ev, ni) {
 }
 
 function resetDAGLayout() {
-  const { nodes, svgW, svgH } = _dag;
-  const cx = svgW/2, cy = svgH/2, R0 = Math.min(svgW, svgH) * 0.32;
-  nodes.forEach((n, i) => {
-    const a = (2 * Math.PI * i / nodes.length) - Math.PI / 2;
-    n.x = cx + R0 * Math.cos(a); n.y = cy + R0 * Math.sin(a);
-    n.vx = 0; n.vy = 0; n.fixed = false;
-  });
+  _dag.nodes.forEach(n => { n.fixed = false; });
+  dagInitPositions();
   if (_dag.raf) cancelAnimationFrame(_dag.raf);
   _dag.tick = 0; _dag.raf = requestAnimationFrame(dagSimStep);
 }
