@@ -190,6 +190,10 @@ def load_namespace(ns_dir):
                 history_files.append(parsed)
 
     session_count = len(list(history_dir.glob("*.md"))) if history_dir.exists() else 0
+    session_dates = sorted(
+        f.stem[:10] for f in history_dir.glob("*.md")
+        if len(f.stem) >= 10
+    ) if history_dir.exists() else []
 
     open_session = state.get("open_session", False)
     last_close   = _parse_iso(state.get("last_close"))
@@ -217,6 +221,7 @@ def load_namespace(ns_dir):
         "decisions":       decisions,
         "code_context":    code_context,
         "history":         history_files,
+        "session_dates":   session_dates,
         "goal_rate":       goal_rate,
         "goal_dots":       goal_dots,
         "top_tags":        _top_tags(learnings),
@@ -312,6 +317,7 @@ def _js_data(namespaces):
             "decisions":      n["decisions"],
             "codeContext":    n["code_context"],
             "history":        n["history"],
+            "sessionDates":   n["session_dates"],
             "goalRate":       n["goal_rate"],
             "goalDots":       n["goal_dots"],
             "topTags":        n["top_tags"],
@@ -819,6 +825,58 @@ HTML_TEMPLATE = """\
     .dag-tip-conflict   { background: var(--red-bg);   color: var(--red); }
     .dag-tip-concurrent { background: var(--green-bg); color: var(--green); }
     .dag-tip-detail { font-size: .72rem; color: var(--muted); line-height: 1.5; }
+
+    /* ── Heatmap view ── */
+    .heatmap-wrap { overflow-x: auto; padding-bottom: .5rem; }
+    .heatmap-grid {
+      display: grid;
+      gap: 2px;
+      width: max-content;
+      min-width: 100%;
+    }
+    .heatmap-label-row { display: contents; }
+    .heatmap-row { display: contents; }
+    .heatmap-corner { background: none; }
+    .heatmap-col-label {
+      font-size: .68rem; color: var(--muted);
+      text-align: center; padding: .2rem .1rem;
+      writing-mode: vertical-rl; transform: rotate(180deg);
+      height: 56px; align-self: end; white-space: nowrap;
+    }
+    .heatmap-ns-label {
+      font-size: .75rem; color: var(--text);
+      padding: .2rem .5rem .2rem 0;
+      white-space: nowrap; align-self: center;
+      text-align: right;
+    }
+    .heatmap-ns-label.open-ns { color: var(--green); }
+    .heatmap-cell {
+      width: 28px; height: 28px; border-radius: 3px;
+      background: var(--surface2);
+      cursor: default; transition: opacity .1s;
+      position: relative;
+    }
+    .heatmap-cell:hover { opacity: .75; }
+    .heatmap-cell[data-count="0"] { background: var(--surface2); }
+    .heatmap-cell[data-level="1"] { background: #1a4731; }
+    .heatmap-cell[data-level="2"] { background: #206040; }
+    .heatmap-cell[data-level="3"] { background: #2a8055; }
+    .heatmap-cell[data-level="4"] { background: #38a86e; }
+    .heatmap-legend {
+      display: flex; align-items: center; gap: .4rem;
+      margin-top: .75rem; font-size: .7rem; color: var(--muted);
+    }
+    .heatmap-legend-cell {
+      width: 14px; height: 14px; border-radius: 2px;
+    }
+    .heatmap-tooltip {
+      position: fixed; z-index: 200;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: .4rem .6rem;
+      font-size: .75rem; color: var(--text);
+      pointer-events: none; display: none; white-space: nowrap;
+      box-shadow: 0 4px 16px rgba(0,0,0,.4);
+    }
   </style>
 </head>
 <body>
@@ -848,6 +906,7 @@ HTML_TEMPLATE = """\
     <button class="view-tab active" id="vtab-overview"   onclick="switchView('overview')">Overview</button>
     <button class="view-tab"        id="vtab-priorities" onclick="switchView('priorities')">Priorities</button>
     <button class="view-tab"        id="vtab-dag"        onclick="switchView('dag')">DAG</button>
+    <button class="view-tab"        id="vtab-heatmap"    onclick="switchView('heatmap')">Heatmap</button>
   </nav>
 
   <div id="view-overview">
@@ -862,6 +921,8 @@ HTML_TEMPLATE = """\
 
   <div id="view-priorities" style="display:none"></div>
   <div id="view-dag"        style="display:none"></div>
+  <div id="view-heatmap"    style="display:none"></div>
+  <div id="heatmap-tooltip" class="heatmap-tooltip"></div>
 
   </div>
 </main>
@@ -1025,9 +1086,24 @@ function deriveTasks(ns) {
     });
   });
 
-  // 'Next session:' lines in reality.md — explicitly queued, so score above any incomplete
+  // 'What is next' section bullets and inline 'Next session:' lines in reality.md
   const realityLines = (ns.reality || '').split('\\n');
+  let inNextSection = false;
   realityLines.forEach(line => {
+    // Detect '## What is next' (compass skill canonical format)
+    if (/^#{1,4}\\s+[Ww]hat\\s+is\\s+next/i.test(line)) { inNextSection = true; return; }
+    // Any subsequent heading exits the section
+    if (/^#{1,4}\\s/.test(line)) { inNextSection = false; }
+    if (inNextSection) {
+      const bullet = line.match(/^\\s*[-*]\\s+(.+)/);
+      if (!bullet) return;
+      const raw = bullet[1].trim();
+      const key = raw.toLowerCase().trim();
+      if (raw.length > 2 && !candidates.has(key))
+        candidates.set(key, { text: raw, score: N + 4, sessions: 1, src: 'next' });
+      return;
+    }
+    // Inline 'Next session: ...' fallback
     const m = line.match(/[Nn]ext +session *[:-] *(.+)/);
     if (!m) return;
     m[1].split(/[,;]/).map(s => s.trim().replace(/^-+/, '').trim()).filter(s => s.length > 2).forEach(raw => {
@@ -1236,12 +1312,13 @@ function toggleSession(i) {
 
 function switchView(v) {
   if (v !== 'dag' && _dag.raf) { cancelAnimationFrame(_dag.raf); _dag.raf = null; }
-  ['overview', 'priorities', 'dag'].forEach(id => {
+  ['overview', 'priorities', 'dag', 'heatmap'].forEach(id => {
     document.getElementById('view-' + id).style.display = id === v ? '' : 'none';
     document.getElementById('vtab-' + id).classList.toggle('active', id === v);
   });
   if (v === 'priorities') renderPriorities();
   if (v === 'dag') renderDAG();
+  if (v === 'heatmap') renderHeatmap();
 }
 
 // ── Priority scoring ──────────────────────────────────────────────────────────
@@ -1795,6 +1872,100 @@ function dagPosTooltip(ev, tip) {
   const tw = tip.offsetWidth || 260, th = tip.offsetHeight || 60;
   tip.style.left = (x + tw > window.innerWidth - 8  ? ev.clientX - tw - 14 : x) + 'px';
   tip.style.top  = (y + th > window.innerHeight - 8 ? ev.clientY - th - 14 : y) + 'px';
+}
+
+// ── Heatmap ───────────────────────────────────────────────────────────────────
+
+function renderHeatmap() {
+  const container = document.getElementById('view-heatmap');
+  if (container.dataset.rendered) return;
+  container.dataset.rendered = '1';
+
+  // Collect all (namespace, YYYY-MM) session counts from full sessionDates
+  const periodSet = new Set();
+  const nsMap = {};  // namespace -> { 'YYYY-MM': count }
+  NS.forEach(ns => {
+    nsMap[ns.namespace] = {};
+    (ns.sessionDates || []).forEach(d => {
+      const period = d.slice(0, 7);  // 'YYYY-MM'
+      periodSet.add(period);
+      nsMap[ns.namespace][period] = (nsMap[ns.namespace][period] || 0) + 1;
+    });
+  });
+
+  const periods = Array.from(periodSet).sort();
+  if (!periods.length) {
+    container.innerHTML = '<p style="padding:1rem;color:var(--muted)">No session history to display.</p>';
+    return;
+  }
+
+  // Sort namespaces by total sessions descending
+  const nsSorted = NS.slice().sort((a, b) => (b.sessionCount || 0) - (a.sessionCount || 0));
+
+  // Colour levels: 0 = empty, 1–4 scaled to max count in any single cell
+  const allCounts = nsSorted.flatMap(ns => periods.map(p => nsMap[ns.namespace][p] || 0));
+  const maxCount = Math.max(1, ...allCounts);
+  function level(count) {
+    if (!count) return 0;
+    return Math.min(4, Math.ceil(count / maxCount * 4));
+  }
+
+  // Build grid: col 0 = ns labels, cols 1..N = period columns
+  const cols = 1 + periods.length;
+  let html = `<div class="heatmap-wrap">
+  <div class="heatmap-grid" style="grid-template-columns: minmax(120px,auto) repeat(${periods.length}, 28px)">`;
+
+  // Header row: corner + month labels
+  html += '<div class="heatmap-corner"></div>';
+  periods.forEach(p => {
+    const [yr, mo] = p.split('-');
+    const label = new Date(+yr, +mo - 1, 1).toLocaleString('default', { month: 'short' }) + '\\u2019' + yr.slice(2);
+    html += `<div class="heatmap-col-label">${label}</div>`;
+  });
+
+  // Data rows
+  nsSorted.forEach(ns => {
+    const openCls = ns.open ? ' open-ns' : '';
+    const nsName = esc(ns.namespace);
+    html += `<div class="heatmap-ns-label${openCls}">${nsName}</div>`;
+    periods.forEach(p => {
+      const count = nsMap[ns.namespace][p] || 0;
+      const lv = level(count);
+      const tip = esc(count
+        ? `${ns.namespace} · ${p} · ${count} session${count > 1 ? 's' : ''}`
+        : `${ns.namespace} · ${p} · no sessions`);
+      html += `<div class="heatmap-cell" data-count="${count}" data-level="${lv}" data-tip="${tip}"></div>`;
+    });
+  });
+
+  html += `</div>
+  <div class="heatmap-legend">
+    <span>Less</span>
+    <div class="heatmap-legend-cell" style="background:var(--surface2)"></div>
+    <div class="heatmap-legend-cell" style="background:#1a4731"></div>
+    <div class="heatmap-legend-cell" style="background:#206040"></div>
+    <div class="heatmap-legend-cell" style="background:#2a8055"></div>
+    <div class="heatmap-legend-cell" style="background:#38a86e"></div>
+    <span>More</span>
+    <span style="margin-left:1rem;color:var(--muted)">1 cell = 1 month · max ${maxCount} session${maxCount > 1 ? 's' : ''}</span>
+  </div>
+</div>`;
+
+  container.innerHTML = html;
+
+  // Tooltip wiring
+  const tooltip = document.getElementById('heatmap-tooltip');
+  container.addEventListener('mousemove', ev => {
+    const cell = ev.target.closest('.heatmap-cell');
+    if (!cell) { tooltip.style.display = 'none'; return; }
+    tooltip.textContent = cell.dataset.tip;
+    tooltip.style.display = 'block';
+    const x = ev.clientX + 14, y = ev.clientY + 14;
+    const tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
+    tooltip.style.left = (x + tw > window.innerWidth  - 8 ? ev.clientX - tw - 14 : x) + 'px';
+    tooltip.style.top  = (y + th > window.innerHeight - 8 ? ev.clientY - th - 14 : y) + 'px';
+  });
+  container.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
 }
 
 function renderDAG() {

@@ -1,0 +1,130 @@
+# Compass Dashboard — CLAUDE.md
+
+## What this is
+
+A single Python script (`scripts/compass-dashboard.py`) that reads all compass loop
+namespaces from `~/.claude/loop/` and generates a self-contained static HTML dashboard.
+
+**Regenerate:**
+```bash
+python3 scripts/compass-dashboard.py
+# Output: ~/Downloads/compass-dashboard.html — open directly in a browser, no server needed
+```
+
+---
+
+## Architecture
+
+```
+compass-dashboard.py
+├── Python top (~330 lines)   — data loading, serialisation, HTML generation
+│   ├── load_namespace()       — reads state.json, *.md, *.jsonl, history/*.md
+│   ├── _js_data()             — serialises NS array as JSON embedded in HTML
+│   └── HTML_TEMPLATE          — the entire HTML/CSS/JS as a Python triple-quoted string
+└── JS inside HTML_TEMPLATE    — all interactivity; operates on const NS = [...]
+```
+
+All data is baked into `const NS = [...]` at generation time. There is no runtime backend
+and there never will be — static HTML only.
+
+---
+
+## Critical gotcha — JS regex/string escaping inside Python strings
+
+The JS lives inside a Python triple-quoted string. Any backslash that needs to reach the
+browser as `\` must be written as `\\` in the Python source:
+
+| You want in JS | Write in Python source |
+|----------------|------------------------|
+| `\n`           | `\\n`                  |
+| `\s`, `\d`     | `\\s`, `\\d`           |
+| `\.`           | `\\.`                  |
+| `×`       | `\\u00d7`              |
+
+Forgetting this produces **silent bugs** — the JS runs but regex patterns silently fail
+to match. Always verify new regex patterns render correctly in the generated HTML.
+
+---
+
+## Template substitution
+
+HTML_TEMPLATE uses `[[PLACEHOLDER]]` markers replaced by `generate()`:
+
+| Marker | Replaced with |
+|--------|---------------|
+| `[[NS_DATA]]` | JSON-serialised namespace array |
+| `[[CARDS]]` | namespace card HTML |
+| `[[GENERATED_AT]]` | generation timestamp |
+| `[[N_NS]]`, `[[N_OPEN]]`, `[[N_LEARNINGS]]`, `[[N_SESSIONS]]` | header stats |
+
+---
+
+## Tab system (two tiers — don't confuse them)
+
+**Top-level view tabs** (`.view-tab`, `switchView(v)`) — full-page views:
+- `overview` — card grid + namespace detail panel
+- `priorities` — cross-namespace priority signals
+- `dag` — force-directed dependency graph
+- `heatmap` — session activity heatmap
+
+Each view has `id="view-<name>"` and `id="vtab-<name>"`. Adding a new view tab requires:
+1. Button in the `<nav>` HTML
+2. `<div id="view-<name>">` in the HTML
+3. Name added to the `forEach` array in `switchView()`
+4. `if (v === '<name>') render<Name>();` in `switchView()`
+5. A `render<Name>()` function
+
+**Namespace detail sub-tabs** (`.tab-btn`, `switchTab(t)`) — panels within a selected namespace:
+`state`, `learnings`, `decisions`, `history`, `tasks`
+
+---
+
+## Data model — key fields in each NS object
+
+| Field | Source | Notes |
+|-------|--------|-------|
+| `history[]` | last 5 session files | parsed content (planned/completed/incomplete) |
+| `sessionDates[]` | all session filenames | full history as `YYYY-MM-DD` strings — use this for time-series viz |
+| `sessionCount` | count of all history files | total, not capped |
+| `learnings[]` | learnings.jsonl | sorted by weight descending |
+| `decisions[]` | decisions.jsonl | reverse-chronological |
+| `reality` | reality.md | raw markdown string |
+| `deferred[]` | state.json `deferred_opportunities` | expanded from dict to array with `key` field |
+
+`history` is capped at 5 for rendering (planned/completed detail). `sessionDates` is the
+full set and must be used for any time-based visualisation.
+
+---
+
+## Security
+
+Use `esc(str)` (already defined in the JS) for any user-controlled string going into
+`innerHTML`. Namespace names, learning text, decision text, and tooltip strings all
+count as user-controlled.
+
+---
+
+## Libraries
+
+- **D3** — loaded for the DAG force simulation only. Fine to use D3 utilities (scale,
+  layout) in other tabs if genuinely needed.
+- **Everything else** — hand-rolled CSS/SVG/vanilla JS. Don't add Recharts, Chart.js,
+  or similar. The file must remain self-contained and fast to open locally.
+
+---
+
+## Module map
+
+| Lines (approx) | What lives there |
+|----------------|-----------------|
+| 1–90 | Python helpers: file reading, time formatting, history parsing |
+| 91–230 | `load_namespace()`, `discover_namespaces()` |
+| 231–330 | `_js_data()`, `generate()`, `__main__` |
+| 331–890 | `HTML_TEMPLATE` — HTML structure + all CSS |
+| 891–1000 | JS: constants, `esc()`, card rendering, detail panel, tab switching |
+| 1001–1060 | JS: `deriveTasks()`, `renderTasks()` |
+| 1061–1270 | JS: detail panel sub-tabs (state, learnings, decisions, history) |
+| 1271–1480 | JS: `switchView()`, priority scoring helpers |
+| 1481–1880 | JS: `renderPriorities()`, search / command palette |
+| 1881–1980 | JS: `renderHeatmap()` |
+| 1981–2327 | JS: `renderDAG()`, force simulation, DAG tooltip |
