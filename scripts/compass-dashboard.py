@@ -173,6 +173,28 @@ def _goal_stats(state):
     return rate, dots
 
 
+def _goal_by_month(state):
+    completions = state.get("goal_completions", {})
+    monthly = {}
+    for key, entry in completions.items():
+        if not entry:
+            continue
+        month = str(key)[:7]
+        if len(month) != 7 or month[4] != '-':
+            continue
+        if isinstance(entry, dict):
+            rate = int(entry.get("hit_rate", 0))
+        else:
+            # Legacy: list of status strings
+            total = len(entry)
+            n_done = sum(1 for s in entry if s == "completed")
+            rate = int(n_done / total * 100) if total else 0
+        if month not in monthly:
+            monthly[month] = []
+        monthly[month].append(rate)
+    return {m: int(sum(rates) / len(rates)) for m, rates in monthly.items()}
+
+
 def load_namespace(ns_dir):
     state        = _read_json(ns_dir / "state.json")
     intent       = _read_file(ns_dir / "intent.md")
@@ -199,6 +221,7 @@ def load_namespace(ns_dir):
     last_close   = _parse_iso(state.get("last_close"))
     last_open    = _parse_iso(state.get("last_open"))
     goal_rate, goal_dots = _goal_stats(state)
+    goal_by_month = _goal_by_month(state)
 
     intent_summary = ""
     for line in intent.split("\n"):
@@ -224,6 +247,7 @@ def load_namespace(ns_dir):
         "session_dates":   session_dates,
         "goal_rate":       goal_rate,
         "goal_dots":       goal_dots,
+        "goal_by_month":   goal_by_month,
         "top_tags":        _top_tags(learnings),
         "session_count":   session_count,
     }
@@ -325,6 +349,7 @@ def _js_data(namespaces):
                 {"key": k, **v}
                 for k, v in n["deferred"].items()
             ],
+            "goalByMonth":    n["goal_by_month"],
             "sessionCount":   n["session_count"],
             "plannedActions": n["planned_actions"],
         })
@@ -877,6 +902,54 @@ HTML_TEMPLATE = """\
       pointer-events: none; display: none; white-space: nowrap;
       box-shadow: 0 4px 16px rgba(0,0,0,.4);
     }
+
+    /* ── Learning timeline ── */
+    .timeline-wrap { padding: .5rem 0; }
+    .timeline-chart-area { overflow-x: auto; padding-bottom: .5rem; }
+    .timeline-svg { display: block; }
+    .timeline-legend {
+      display: flex; flex-wrap: wrap; gap: .5rem 1.25rem;
+      margin-top: .75rem; font-size: .72rem; color: var(--muted);
+    }
+    .timeline-legend-item { display: flex; align-items: center; gap: .4rem; }
+    .timeline-legend-swatch { width: 20px; height: 3px; border-radius: 2px; flex-shrink: 0; }
+
+    /* ── Heatmap sub-selector ── */
+    .hmap-toolbar { display: flex; gap: .5rem; margin-bottom: .75rem; }
+
+    /* ── Goal heatmap ── */
+    .goal-cell {
+      width: 28px; height: 28px; border-radius: 3px;
+      background: var(--surface2);
+      cursor: default; transition: opacity .1s; position: relative;
+    }
+    .goal-cell:hover { opacity: .75; }
+    .goal-cell[data-qlevel="1"] { background: #0d2847; }
+    .goal-cell[data-qlevel="2"] { background: #154075; }
+    .goal-cell[data-qlevel="3"] { background: #1a5ba0; }
+    .goal-cell[data-qlevel="4"] { background: #2679cc; }
+
+    /* ── Scorecard ── */
+    .scard-wrap { padding: .25rem 0; }
+    .scard-chart-area { overflow-x: auto; margin-bottom: 1rem; }
+    .scard-table { display: flex; flex-direction: column; gap: .2rem; }
+    .scard-header {
+      display: flex; align-items: center; gap: .75rem;
+      padding: .2rem .6rem; font-size: .62rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: .06em; color: var(--subtle);
+    }
+    .scard-row {
+      display: flex; align-items: center; gap: .75rem;
+      padding: .35rem .6rem; border-radius: 4px;
+      background: var(--surface2); transition: opacity .12s; cursor: default;
+    }
+    .scard-rank  { font-size: .68rem; color: var(--subtle); min-width: 1.4rem; text-align: right; flex-shrink: 0; }
+    .scard-ns    { font-size: .78rem; font-weight: 600; min-width: 10rem; flex-shrink: 0; }
+    .scard-score { font-size: .72rem; font-weight: 700; min-width: 2.8rem; text-align: right; flex-shrink: 0; }
+    .scard-bars  { flex: 1; display: flex; gap: .35rem; align-items: center; min-width: 0; }
+    .scard-bar-col { flex: 1; min-width: 0; }
+    .scard-bar-bg  { height: 5px; border-radius: 3px; background: var(--surface); }
+    .scard-bar-fg  { height: 5px; border-radius: 3px; }
   </style>
 </head>
 <body>
@@ -905,8 +978,10 @@ HTML_TEMPLATE = """\
   <nav class="view-nav">
     <button class="view-tab active" id="vtab-overview"   onclick="switchView('overview')">Overview</button>
     <button class="view-tab"        id="vtab-priorities" onclick="switchView('priorities')">Priorities</button>
+    <button class="view-tab"        id="vtab-scorecard"  onclick="switchView('scorecard')">Scorecard</button>
     <button class="view-tab"        id="vtab-dag"        onclick="switchView('dag')">DAG</button>
-    <button class="view-tab"        id="vtab-heatmap"    onclick="switchView('heatmap')">Heatmap</button>
+    <button class="view-tab"        id="vtab-heatmap"       onclick="switchView('heatmap')">Heatmap</button>
+    <button class="view-tab"        id="vtab-timeline"      onclick="switchView('timeline')">Learning Timeline</button>
   </nav>
 
   <div id="view-overview">
@@ -920,8 +995,10 @@ HTML_TEMPLATE = """\
   </div>
 
   <div id="view-priorities" style="display:none"></div>
+  <div id="view-scorecard"  style="display:none"></div>
   <div id="view-dag"        style="display:none"></div>
-  <div id="view-heatmap"    style="display:none"></div>
+  <div id="view-heatmap"      style="display:none"></div>
+  <div id="view-timeline"     style="display:none"></div>
   <div id="heatmap-tooltip" class="heatmap-tooltip"></div>
 
   </div>
@@ -1312,13 +1389,15 @@ function toggleSession(i) {
 
 function switchView(v) {
   if (v !== 'dag' && _dag.raf) { cancelAnimationFrame(_dag.raf); _dag.raf = null; }
-  ['overview', 'priorities', 'dag', 'heatmap'].forEach(id => {
+  ['overview', 'priorities', 'scorecard', 'dag', 'heatmap', 'timeline'].forEach(id => {
     document.getElementById('view-' + id).style.display = id === v ? '' : 'none';
     document.getElementById('vtab-' + id).classList.toggle('active', id === v);
   });
   if (v === 'priorities') renderPriorities();
-  if (v === 'dag') renderDAG();
-  if (v === 'heatmap') renderHeatmap();
+  if (v === 'scorecard')  renderScorecard();
+  if (v === 'dag')        renderDAG();
+  if (v === 'heatmap')    renderHeatmap();
+  if (v === 'timeline')   renderLearningTimeline();
 }
 
 // ── Priority scoring ──────────────────────────────────────────────────────────
@@ -1800,7 +1879,7 @@ const EDGE_META = {
   concurrent: { color: '#3fb950', label: 'Concurrent',    dash: '',    arrow: false, title: 'both sessions open' },
 };
 
-const _dag = { nodes: [], edges: [], nodeMap: new Map(), raf: null, tick: 0, maxTick: 280, svgW: 900, svgH: 530 };
+const _dag = { nodes: [], edges: [], nodeMap: new Map(), raf: null, tick: 0, maxTick: 280, svgW: 900, svgH: 530, rendered: false };
 let _dagDrag = null;
 let _dagShowSystem = false;
 
@@ -1878,6 +1957,27 @@ function dagPosTooltip(ev, tip) {
 
 function renderHeatmap() {
   const container = document.getElementById('view-heatmap');
+  if (container.dataset.rendered) return;
+  container.dataset.rendered = '1';
+  container.innerHTML = `<div class="hmap-toolbar">
+    <button class="dag-btn active" id="hbtn-sessions" onclick="switchHeatmap('sessions')">Session Activity</button>
+    <button class="dag-btn" id="hbtn-goals" onclick="switchHeatmap('goals')">Goal Completion</button>
+  </div>
+  <div id="hpanel-sessions"></div>
+  <div id="hpanel-goals" style="display:none"></div>`;
+  renderSessionHeatmapPanel();
+}
+
+function switchHeatmap(name) {
+  ['sessions', 'goals'].forEach(id => {
+    document.getElementById('hpanel-' + id).style.display = id === name ? '' : 'none';
+    document.getElementById('hbtn-' + id).classList.toggle('active', id === name);
+  });
+  if (name === 'goals') renderGoalHeatmapPanel();
+}
+
+function renderSessionHeatmapPanel() {
+  const container = document.getElementById('hpanel-sessions');
   if (container.dataset.rendered) return;
   container.dataset.rendered = '1';
 
@@ -1968,8 +2068,347 @@ function renderHeatmap() {
   container.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
 }
 
+// ── Learning timeline ─────────────────────────────────────────────────────────
+
+function renderLearningTimeline() {
+  const container = document.getElementById('view-timeline');
+  if (container.dataset.rendered) return;
+  container.dataset.rendered = '1';
+
+  const allLearnings = [];
+  NS.forEach(ns => {
+    (ns.learnings || []).forEach(l => { if (l.date) allLearnings.push(l); });
+  });
+
+  if (!allLearnings.length) {
+    container.innerHTML = '<p style="padding:1rem;color:var(--muted)">No learnings with dates to display.</p>';
+    return;
+  }
+
+  const monthSet = new Set();
+  allLearnings.forEach(l => {
+    const m = l.date.slice(0, 7);
+    if (m.length === 7) monthSet.add(m);
+  });
+  const months = Array.from(monthSet).sort();
+
+  const tagCounts = {};
+  allLearnings.forEach(l => {
+    (l.tags || []).forEach(t => { tagCounts[t] = (tagCounts[t] || 0) + 1; });
+  });
+  const topTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 7).map(e => e[0]);
+
+  const byMonthTag = {};
+  months.forEach(m => { byMonthTag[m] = {}; });
+  allLearnings.forEach(l => {
+    const m = l.date.slice(0, 7);
+    if (!byMonthTag[m]) return;
+    (l.tags || []).forEach(t => {
+      if (topTags.includes(t)) byMonthTag[m][t] = (byMonthTag[m][t] || 0) + 1;
+    });
+  });
+
+  const cumulative = {};
+  topTags.forEach(t => {
+    let sum = 0;
+    cumulative[t] = months.map(m => { sum += byMonthTag[m][t] || 0; return sum; });
+  });
+
+  const maxVal = Math.max(1, ...topTags.flatMap(t => cumulative[t]));
+
+  const PAD_L = 32, PAD_R = 20, PAD_T = 16, PAD_B = 42;
+  const W = Math.max(500, months.length * 52 + PAD_L + PAD_R);
+  const H = 250;
+  const chartW = W - PAD_L - PAD_R;
+  const chartH = H - PAD_T - PAD_B;
+
+  const COLORS = ['#58a6ff','#3fb950','#d29922','#f85149','#bc8cff','#79c0ff','#56d364'];
+
+  let svg = `<svg class="timeline-svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="overflow:visible">`;
+
+  for (let i = 0; i <= 4; i++) {
+    const y = PAD_T + chartH - (i / 4) * chartH;
+    svg += `<line x1="${PAD_L}" y1="${y.toFixed(1)}" x2="${W - PAD_R}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-width="1"/>`;
+    svg += `<text x="${PAD_L - 4}" y="${(y + 4).toFixed(1)}" text-anchor="end" fill="var(--muted)" font-size="9" font-family="monospace">${Math.round(maxVal * i / 4)}</text>`;
+  }
+
+  months.forEach((m, i) => {
+    const x = PAD_L + (i + 0.5) * (chartW / months.length);
+    const [yr, mo] = m.split('-');
+    const label = new Date(+yr, +mo - 1, 1).toLocaleString('default', { month: 'short' }) + '\\u2019' + yr.slice(2);
+    svg += `<text x="${x.toFixed(1)}" y="${H - 6}" text-anchor="middle" fill="var(--muted)" font-size="9" font-family="monospace">${label}</text>`;
+  });
+
+  topTags.forEach((tag, ti) => {
+    const color = COLORS[ti % COLORS.length];
+    const pts = cumulative[tag].map((val, i) => {
+      const x = PAD_L + (i + 0.5) * (chartW / months.length);
+      const y = PAD_T + chartH - (val / maxVal) * chartH;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    if (pts) svg += `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    cumulative[tag].forEach((val, i) => {
+      const x = PAD_L + (i + 0.5) * (chartW / months.length);
+      const y = PAD_T + chartH - (val / maxVal) * chartH;
+      svg += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" fill="${color}" stroke="var(--bg)" stroke-width="1.5"><title>${esc(tag)}: ${val} total by ${months[i]}</title></circle>`;
+    });
+  });
+
+  svg += '</svg>';
+
+  const legend = topTags.map((t, i) =>
+    `<div class="timeline-legend-item"><div class="timeline-legend-swatch" style="background:${COLORS[i % COLORS.length]}"></div><span>${esc(t)}</span></div>`
+  ).join('');
+
+  container.innerHTML = `<div class="timeline-wrap">
+    <div style="padding:.5rem 0 .5rem;font-size:.78rem;color:var(--muted)">Cumulative learnings by tag &#x00b7; all namespaces &#x00b7; hover dots for details</div>
+    <div class="timeline-chart-area">${svg}</div>
+    <div class="timeline-legend">${legend}</div>
+  </div>`;
+}
+
+// ── Scorecard ─────────────────────────────────────────────────────────────────
+
+function renderScorecard() {
+  const container = document.getElementById('view-scorecard');
+  if (container.dataset.rendered) return;
+  container.dataset.rendered = '1';
+
+  const AXES = [
+    { key: 'recency',    label: 'Recency',    tip: 'Days since last session (recent = high)' },
+    { key: 'discipline', label: 'Discipline', tip: 'Avg goal completion %' },
+    { key: 'maturity',   label: 'Maturity',   tip: 'Total sessions logged' },
+    { key: 'learning',   label: 'Learning',   tip: 'Learnings per session' },
+    { key: 'focus',      label: 'Focus',      tip: 'Low deferred items (fewer = high)' },
+  ];
+
+  // Raw scores
+  const rows = NS.map(ns => {
+    const days       = _daysSince(ns.open ? ns.lastOpen : ns.lastClose);
+    const recency    = Math.max(0, Math.min(100, 100 - days * (100 / 30)));
+    const discipline = (ns.goalRate !== null && ns.goalRate !== undefined) ? ns.goalRate : 50;
+    const maturity   = ns.sessionCount || 0;
+    const learning   = ns.sessionCount > 0 ? (ns.learnings || []).length / ns.sessionCount : 0;
+    const focus      = 1 / (1 + (ns.deferred || []).length);
+    return { ns, recency, discipline, maturity, learning, focus };
+  });
+
+  // Normalise maturity, learning, focus to 0–100
+  ['maturity', 'learning', 'focus'].forEach(k => {
+    const vals = rows.map(r => r[k]);
+    const min = Math.min(...vals), max = Math.max(...vals), range = max - min;
+    rows.forEach(r => { r[k] = range === 0 ? 100 : (r[k] - min) / range * 100; });
+  });
+
+  // Overall health = mean across axes
+  rows.forEach(r => {
+    r.health = AXES.reduce((s, a) => s + r[a.key], 0) / AXES.length;
+  });
+  rows.sort((a, b) => b.health - a.health);
+
+  function healthColor(h) {
+    return h >= 68 ? '#3fb950' : h >= 40 ? '#d29922' : '#f85149';
+  }
+
+  // ── Parallel coordinates SVG ─────────────────────────────────────────────
+
+  const PAD_L = 150, PAD_R = 28, PAD_T = 48, PAD_B = 28;
+  const W = 900, H = 370;
+  const chartW = W - PAD_L - PAD_R, chartH = H - PAD_T - PAD_B;
+  const axisX  = AXES.map((_, i) => PAD_L + i * chartW / (AXES.length - 1));
+
+  function yFor(val) { return PAD_T + (1 - val / 100) * chartH; }
+
+  let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="display:block;overflow:visible">`;
+
+  // Horizontal guides at 0, 50, 100
+  [0, 50, 100].forEach(v => {
+    const y = yFor(v);
+    const dash = v === 50 ? ' stroke-dasharray="3,3"' : '';
+    svg += `<line x1="${PAD_L}" y1="${y.toFixed(1)}" x2="${W - PAD_R}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-width="1"${dash}/>`;
+    svg += `<text x="${PAD_L - 6}" y="${(y + 4).toFixed(1)}" text-anchor="end" fill="var(--subtle)" font-size="9" font-family="monospace">${v}</text>`;
+  });
+
+  // Vertical axis lines + labels
+  AXES.forEach((ax, i) => {
+    const x = axisX[i];
+    svg += `<line x1="${x}" y1="${PAD_T}" x2="${x}" y2="${(PAD_T + chartH)}" stroke="var(--border)" stroke-width="1.5"/>`;
+    svg += `<text x="${x}" y="${PAD_T - 10}" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="monospace" font-weight="600"><title>${esc(ax.tip)}</title>${esc(ax.label)}</text>`;
+  });
+
+  // Namespace polylines (low opacity base; highlighted on hover)
+  rows.forEach((r, ri) => {
+    const pts = AXES.map((ax, i) => `${axisX[i].toFixed(1)},${yFor(r[ax.key]).toFixed(1)}`).join(' ');
+    const col = healthColor(r.health);
+    svg += `<polyline id="scard-line-${ri}" class="scard-line" points="${pts}" fill="none" stroke="${col}" stroke-width="1.8" stroke-opacity="0.5" stroke-linejoin="round"><title>${esc(r.ns.namespace)} — health: ${Math.round(r.health)}%</title></polyline>`;
+  });
+
+  // Namespace labels anchored to first axis (Recency)
+  rows.forEach((r, ri) => {
+    const y = yFor(r.recency);
+    const col = healthColor(r.health);
+    const name = r.ns.namespace.length > 17 ? r.ns.namespace.slice(0, 16) + '\\u2026' : r.ns.namespace;
+    svg += `<text class="scard-label" data-ri="${ri}" x="${PAD_L - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" fill="${col}" font-size="9.5" font-family="monospace" style="cursor:default">${esc(name)}</text>`;
+  });
+
+  svg += '</svg>';
+
+  // ── Ranked table ──────────────────────────────────────────────────────────
+
+  const headerCols = AXES.map(ax =>
+    `<div class="scard-bar-col" style="font-size:.6rem;color:var(--subtle);text-align:center;padding-bottom:.1rem" title="${esc(ax.tip)}">${esc(ax.label)}</div>`
+  ).join('');
+  const header = `<div class="scard-header">
+    <span style="min-width:1.4rem;flex-shrink:0"></span>
+    <span style="min-width:10rem;flex-shrink:0">Namespace</span>
+    <span style="min-width:2.8rem;flex-shrink:0;text-align:right">Health</span>
+    <div class="scard-bars">${headerCols}</div>
+  </div>`;
+
+  const tableRows = rows.map((r, ri) => {
+    const col  = healthColor(r.health);
+    const bars = AXES.map(ax => {
+      const pct = Math.round(r[ax.key]);
+      return `<div class="scard-bar-col" title="${esc(ax.label)}: ${pct}%">
+        <div class="scard-bar-bg"><div class="scard-bar-fg" style="width:${pct}%;background:${col}"></div></div>
+      </div>`;
+    }).join('');
+    return `<div class="scard-row" id="scard-row-${ri}" data-ri="${ri}">
+      <span class="scard-rank">${ri + 1}</span>
+      <span class="scard-ns" style="color:${col}">${esc(r.ns.namespace)}</span>
+      <span class="scard-score" style="color:${col}">${Math.round(r.health)}%</span>
+      <div class="scard-bars">${bars}</div>
+    </div>`;
+  }).join('');
+
+  container.innerHTML = `<div class="scard-wrap">
+    <div style="font-size:.78rem;color:var(--muted);padding:.25rem 0 .75rem">
+      Namespace fitness across 5 axes &#x00b7; hover row or line to highlight &#x00b7; sorted by overall health score
+    </div>
+    <div class="scard-chart-area">${svg}</div>
+    ${header}
+    <div class="scard-table">${tableRows}</div>
+  </div>`;
+
+  // ── Hover wiring ─────────────────────────────────────────────────────────
+
+  const lines    = container.querySelectorAll('.scard-line');
+  const labels   = container.querySelectorAll('.scard-label');
+  const rowEls   = container.querySelectorAll('.scard-row');
+
+  function highlightScard(ri, on) {
+    lines.forEach((ln, i) => {
+      ln.setAttribute('stroke-opacity', on ? (i === ri ? '1'   : '0.08') : '0.5');
+      ln.setAttribute('stroke-width',   on ? (i === ri ? '2.8' : '1.2')  : '1.8');
+    });
+    labels.forEach((lb, i) => {
+      lb.setAttribute('font-size', on && i === ri ? '10.5' : '9.5');
+      lb.setAttribute('font-weight', on && i === ri ? '700' : '400');
+    });
+    rowEls.forEach((el, i) => { el.style.opacity = on ? (i === ri ? '1' : '0.35') : '1'; });
+  }
+
+  lines.forEach((ln, ri)  => { ln.addEventListener('mouseenter', () => highlightScard(ri, true)); ln.addEventListener('mouseleave', () => highlightScard(ri, false)); });
+  rowEls.forEach(el => {
+    const ri = parseInt(el.dataset.ri);
+    el.addEventListener('mouseenter', () => highlightScard(ri, true));
+    el.addEventListener('mouseleave', () => highlightScard(ri, false));
+  });
+}
+
+// ── Goal completion heatmap ───────────────────────────────────────────────────
+
+function renderGoalHeatmapPanel() {
+  const container = document.getElementById('hpanel-goals');
+  if (container.dataset.rendered) return;
+  container.dataset.rendered = '1';
+
+  const periodSet = new Set();
+  const nsMap = {};
+  NS.forEach(ns => {
+    nsMap[ns.namespace] = ns.goalByMonth || {};
+    Object.keys(nsMap[ns.namespace]).forEach(m => periodSet.add(m));
+  });
+
+  const periods = Array.from(periodSet).sort();
+  if (!periods.length) {
+    container.innerHTML = '<p style="padding:1rem;color:var(--muted)">No goal completion data yet — close a few sessions with goals to populate this view.</p>';
+    return;
+  }
+
+  const nsSorted = NS.slice().sort((a, b) => (b.sessionCount || 0) - (a.sessionCount || 0));
+
+  function qlevel(rate) {
+    if (rate === undefined || rate === null) return 0;
+    if (rate <= 25) return 1;
+    if (rate <= 50) return 2;
+    if (rate <= 75) return 3;
+    return 4;
+  }
+
+  let html = `<div class="heatmap-wrap">
+  <div class="heatmap-grid" style="grid-template-columns: minmax(120px,auto) repeat(${periods.length}, 28px)">`;
+
+  html += '<div class="heatmap-corner"></div>';
+  periods.forEach(p => {
+    const [yr, mo] = p.split('-');
+    const label = new Date(+yr, +mo - 1, 1).toLocaleString('default', { month: 'short' }) + '\\u2019' + yr.slice(2);
+    html += `<div class="heatmap-col-label">${label}</div>`;
+  });
+
+  nsSorted.forEach(ns => {
+    const openCls = ns.open ? ' open-ns' : '';
+    const byMonth = nsMap[ns.namespace];
+    html += `<div class="heatmap-ns-label${openCls}">${esc(ns.namespace)}</div>`;
+    periods.forEach(p => {
+      const rate = byMonth[p];
+      const ql = qlevel(rate);
+      const tipText = rate !== undefined
+        ? `${ns.namespace} \\u00b7 ${p} \\u00b7 ${rate}% avg completion`
+        : `${ns.namespace} \\u00b7 ${p} \\u00b7 no data`;
+      html += `<div class="goal-cell" data-qlevel="${ql}" data-tip="${esc(tipText)}"></div>`;
+    });
+  });
+
+  html += `</div>
+  <div class="heatmap-legend">
+    <span>0%</span>
+    <div class="heatmap-legend-cell" style="background:var(--surface2)"></div>
+    <div class="heatmap-legend-cell" style="background:#0d2847"></div>
+    <div class="heatmap-legend-cell" style="background:#154075"></div>
+    <div class="heatmap-legend-cell" style="background:#1a5ba0"></div>
+    <div class="heatmap-legend-cell" style="background:#2679cc"></div>
+    <span>100%</span>
+    <span style="margin-left:1rem;color:var(--muted)">1 cell = 1 month &#x00b7; colour = avg goal completion %</span>
+  </div>
+</div>`;
+
+  container.innerHTML = html;
+
+  const tooltip = document.getElementById('heatmap-tooltip');
+  container.addEventListener('mousemove', ev => {
+    const cell = ev.target.closest('.goal-cell');
+    if (!cell) { tooltip.style.display = 'none'; return; }
+    tooltip.textContent = cell.dataset.tip;
+    tooltip.style.display = 'block';
+    const x = ev.clientX + 14, y = ev.clientY + 14;
+    const tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
+    tooltip.style.left = (x + tw > window.innerWidth  - 8 ? ev.clientX - tw - 14 : x) + 'px';
+    tooltip.style.top  = (y + th > window.innerHeight - 8 ? ev.clientY - th - 14 : y) + 'px';
+  });
+  container.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+}
+
 function renderDAG() {
   if (_dag.raf) { cancelAnimationFrame(_dag.raf); _dag.raf = null; }
+
+  // Re-activation: DOM already exists — resume sim from current positions, don't rebuild
+  if (_dag.rendered) {
+    if (_dag.tick < _dag.maxTick) _dag.raf = requestAnimationFrame(dagSimStep);
+    dagUpdatePositions();
+    return;
+  }
+
   const container = document.getElementById('view-dag');
   const nodeData = NS.map((ns, i) => ({ ns, nsIdx: i, x: 0, y: 0, vx: 0, vy: 0, fixed: false }))
     .filter(n => _dagShowSystem || !SYSTEM_NS.has(n.ns.namespace.toLowerCase()));
@@ -2107,12 +2546,14 @@ function renderDAG() {
   });
   svgEl.appendChild(ng);
 
+  _dag.rendered = true;
   _dag.raf = requestAnimationFrame(dagSimStep);
   dagUpdatePositions();
 }
 
 function toggleDAGSystem() {
   _dagShowSystem = !_dagShowSystem;
+  _dag.rendered = false;
   renderDAG();
 }
 

@@ -44,6 +44,30 @@ browser as `\` must be written as `\\` in the Python source:
 Forgetting this produces **silent bugs** — the JS runs but regex patterns silently fail
 to match. Always verify new regex patterns render correctly in the generated HTML.
 
+**Second trap — single quotes inside JS string literals with inline `onclick`:**
+
+If you build an HTML string using JS single-quoted string literals and embed an `onclick`
+that calls a function with a string argument, the inner `'...'` breaks the outer string:
+
+```js
+// BROKEN — 'sessions' terminates the outer string literal
+container.innerHTML = '<button onclick="switchHeatmap('sessions')">…</button>';
+```
+
+Fix: use a **template literal** (backtick string) for `container.innerHTML` whenever the
+HTML content contains single quotes. Template literals are already used throughout the
+codebase and are safe inside the Python triple-quoted string (Python does not interpret
+`` ` `` or `${…}` in non-f-strings).
+
+```js
+// CORRECT
+container.innerHTML = `<button onclick="switchHeatmap('sessions')">…</button>`;
+```
+
+This is a **parse-breaking** error — the entire `<script>` block fails silently and all
+JS functions become undefined. If you see `ReferenceError: switchView is not defined`,
+look for a broken string literal earlier in the script.
+
 ---
 
 ## Template substitution
