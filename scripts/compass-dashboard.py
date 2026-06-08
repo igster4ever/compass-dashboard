@@ -223,6 +223,17 @@ def load_namespace(ns_dir):
     goal_rate, goal_dots = _goal_stats(state)
     goal_by_month = _goal_by_month(state)
 
+    all_learnings    = sorted(learnings, key=lambda x: -x.get("weight", 1))
+    active_learnings = [l for l in all_learnings if not l.get("superseded_by")]
+    superseded_count = len(all_learnings) - len(active_learnings)
+
+    cycle_history      = state.get("cycle_history", [])
+    last_cycle_minutes = state.get("last_cycle_minutes")
+
+    sessions_since_dream = state.get("sessions_since_dream", 0)
+    corpus_size          = len(active_learnings)
+    dream_due            = sessions_since_dream >= 5 or corpus_size >= 15
+
     intent_summary = ""
     for line in intent.split("\n"):
         line = line.strip()
@@ -231,25 +242,30 @@ def load_namespace(ns_dir):
             break
 
     return {
-        "namespace":       ns_dir.name,
-        "open_session":    open_session,
-        "last_close":      last_close,
-        "last_open":       last_open,
-        "planned_actions": state.get("planned_actions", []),
-        "deferred":        state.get("deferred_opportunities", {}),
-        "intent":          intent,
-        "intent_summary":  intent_summary,
-        "reality":         reality,
-        "learnings":       sorted(learnings, key=lambda x: -x.get("weight", 1)),
-        "decisions":       decisions,
-        "code_context":    code_context,
-        "history":         history_files,
-        "session_dates":   session_dates,
-        "goal_rate":       goal_rate,
-        "goal_dots":       goal_dots,
-        "goal_by_month":   goal_by_month,
-        "top_tags":        _top_tags(learnings),
-        "session_count":   session_count,
+        "namespace":            ns_dir.name,
+        "open_session":         open_session,
+        "last_close":           last_close,
+        "last_open":            last_open,
+        "planned_actions":      state.get("planned_actions", []),
+        "deferred":             state.get("deferred_opportunities", {}),
+        "intent":               intent,
+        "intent_summary":       intent_summary,
+        "reality":              reality,
+        "learnings":            active_learnings,
+        "superseded_count":     superseded_count,
+        "decisions":            decisions,
+        "code_context":         code_context,
+        "history":              history_files,
+        "session_dates":        session_dates,
+        "goal_rate":            goal_rate,
+        "goal_dots":            goal_dots,
+        "goal_by_month":        goal_by_month,
+        "top_tags":             _top_tags(active_learnings),
+        "session_count":        session_count,
+        "cycle_history":        cycle_history,
+        "last_cycle_minutes":   last_cycle_minutes,
+        "sessions_since_dream": sessions_since_dream,
+        "dream_due":            dream_due,
     }
 
 
@@ -304,6 +320,8 @@ def _card_html(n, i):
     if dc > 0:
         deferred_html = f'<span class="deferred-chip">{dc} deferred</span>'
 
+    dream_html = '<span class="dream-chip">🌙 dream due</span>' if n["dream_due"] else ""
+
     return f"""
     <div class="card" id="card-{i}" data-idx="{i}" onclick="selectCard({i})">
       <div class="card-top">
@@ -317,6 +335,7 @@ def _card_html(n, i):
         <span>{len(n["learnings"])} learnings</span>
         {rate_html}
         {deferred_html}
+        {dream_html}
       </div>
       <div class="card-tags">{tags_html}</div>
     </div>"""
@@ -349,9 +368,14 @@ def _js_data(namespaces):
                 {"key": k, **v}
                 for k, v in n["deferred"].items()
             ],
-            "goalByMonth":    n["goal_by_month"],
-            "sessionCount":   n["session_count"],
-            "plannedActions": n["planned_actions"],
+            "goalByMonth":        n["goal_by_month"],
+            "sessionCount":       n["session_count"],
+            "plannedActions":     n["planned_actions"],
+            "supersededCount":    n["superseded_count"],
+            "cycleHistory":       n["cycle_history"],
+            "lastCycleMinutes":   n["last_cycle_minutes"],
+            "sessionsSinceDream": n["sessions_since_dream"],
+            "dreamDue":           n["dream_due"],
         })
     raw = json.dumps(data, ensure_ascii=False, default=str)
     # Prevent </script> from breaking the embedding
@@ -464,6 +488,15 @@ HTML_TEMPLATE = """\
     .deferred-chip {
       font-size: .62rem; background: var(--amber-bg); color: var(--amber);
       padding: .15em .5em; border-radius: 999px;
+    }
+    .dream-chip {
+      font-size: .62rem; background: rgba(139,93,199,.15); color: #b48ef0;
+      padding: .15em .5em; border-radius: 999px;
+    }
+    .cycle-bar {
+      display: inline-block; width: 6px; border-radius: 2px 2px 0 0;
+      background: var(--blue-bg); border: 1px solid var(--blue);
+      flex-shrink: 0;
     }
     .card-tags { display: flex; flex-wrap: wrap; gap: .3rem; min-height: 1.4em; }
     .tag {
@@ -1270,6 +1303,32 @@ function renderState(ns) {
     html += `<div class="md-section"><h3>Deferred opportunities</h3><ul class="deferred-list">${items}</ul></div>`;
   }
 
+  // Cycle time sparkline
+  if (ns.cycleHistory && ns.cycleHistory.length > 0) {
+    const maxMins = Math.max(...ns.cycleHistory.map(s => s.minutes), 1);
+    const bars = ns.cycleHistory.map(s => {
+      const h   = Math.max(4, Math.round(s.minutes / maxMins * 32));
+      const dt  = (s.opened_at || '').slice(0, 10);
+      return `<span class="cycle-bar" title="${esc(dt)}: ${s.minutes}m" style="height:${h}px"></span>`;
+    }).join('');
+    const lastLabel = ns.lastCycleMinutes != null ? `${ns.lastCycleMinutes}m` : '—';
+    html += `<div class="md-section"><h3>Session cycle time</h3>
+      <div style="display:flex;align-items:flex-end;gap:3px;height:36px;margin:.4rem 0 .3rem">${bars}</div>
+      <div style="font-size:.72rem;color:var(--muted)">Last: <strong style="color:var(--text)">${esc(lastLabel)}</strong> · ${ns.cycleHistory.length} session${ns.cycleHistory.length !== 1 ? 's' : ''} tracked</div>
+    </div>`;
+  }
+
+  // Dream consolidation status
+  const dsd       = ns.sessionsSinceDream || 0;
+  const dreamIcon = ns.dreamDue ? '⚠' : '✓';
+  const dreamCol  = ns.dreamDue ? 'var(--amber)' : 'var(--muted)';
+  const dreamMsg  = ns.dreamDue
+    ? `due — ${dsd} session${dsd !== 1 ? 's' : ''} since last consolidation`
+    : `${dsd} session${dsd !== 1 ? 's' : ''} since last consolidation`;
+  html += `<div class="md-section"><h3>Dream consolidation</h3>
+    <div style="font-size:.82rem;color:${dreamCol}">${dreamIcon} ${esc(dreamMsg)}</div>
+  </div>`;
+
   return html;
 }
 
@@ -1278,12 +1337,18 @@ function renderLearnings(ns) {
     return '<div class="empty-state">No learnings recorded yet.</div>';
   }
 
+  const supersededNote = (ns.supersededCount || 0) > 0
+    ? `<div style="font-size:.72rem;color:var(--muted);margin-bottom:.5rem">
+        ${ns.supersededCount} superseded (merged) learning${ns.supersededCount !== 1 ? 's' : ''} hidden
+       </div>`
+    : '';
+
   const rows = ns.learnings.map((l, lIdx) => {
     const w    = l.weight || 1;
     const wCls = w >= 4 ? 'w-high' : w >= 2 ? 'w-mid' : 'w-low';
     const tags = (l.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('');
     const type = l.learning_type === 'hypothesis' ? 'hypothesis' : 'fact';
-    const date = (l.logged_at || '').slice(0, 10) || '—';
+    const date = (l.date || l.logged_at || '').slice(0, 10) || '—';
     const conf = l.confidence ? ` <span style="color:var(--subtle);font-size:.68rem">${esc(l.confidence)}</span>` : '';
     return `
       <tr data-idx="${lIdx}">
@@ -1295,7 +1360,7 @@ function renderLearnings(ns) {
       </tr>`;
   }).join('');
 
-  return `
+  return supersededNote + `
     <table class="learnings-table">
       <thead>
         <tr><th>Wt</th><th>Learning</th><th>Tags</th><th>Type</th><th>Date</th></tr>
