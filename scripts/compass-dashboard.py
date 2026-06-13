@@ -91,6 +91,56 @@ def _e(s):
             .replace('"', "&quot;"))
 
 
+_COMPLETION_MARKERS = frozenset({
+    "complete", "live", "exists and works", "shipped", "passing", "done", "✓", "operational",
+})
+_BACKLOG_HEADERS = frozenset({
+    "backlog", "planned", "missing", "next", "todo", "debt", "pending", "phase",
+})
+
+
+def _reality_completeness(reality_md):
+    lines = reality_md.splitlines()
+    in_backlog = False
+    total = 0
+    achieved = 0
+    for line in lines:
+        s = line.strip()
+        if s.startswith("##"):
+            header_text = s.lstrip("#").strip().lower()
+            in_backlog = any(k in header_text for k in _BACKLOG_HEADERS)
+        elif s.startswith("- ") or s.startswith("* "):
+            text = s[2:].strip()
+            if not text or text.startswith("_") or in_backlog:
+                continue
+            total += 1
+            if any(marker in text.lower() for marker in _COMPLETION_MARKERS):
+                achieved += 1
+    if total == 0:
+        return None
+    return round(achieved / total * 100, 1)
+
+
+def _suggested_goal_count(state):
+    completions = state.get("goal_completions", {})
+    if not completions:
+        return {"count": 4, "basis": "no history — using default"}
+    rates = []
+    for v in completions.values():
+        if isinstance(v, dict):
+            rates.append(v.get("hit_rate", 0))
+        elif isinstance(v, list) and v:
+            rates.append(int(sum(1 for s in v if s == "completed") / len(v) * 100))
+    if not rates:
+        return {"count": 4, "basis": "no history — using default"}
+    avg = sum(rates) / len(rates)
+    if avg >= 80:
+        return {"count": 5, "basis": f"≥80% avg hit-rate ({avg:.1f}%) — capacity to spare"}
+    if avg >= 60:
+        return {"count": 4, "basis": f"60–79% avg hit-rate ({avg:.1f}%) — calibrated"}
+    return {"count": 3, "basis": f"<60% avg hit-rate ({avg:.1f}%) — reduce scope"}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Data loading
 # ─────────────────────────────────────────────────────────────────────────────
@@ -230,9 +280,11 @@ def load_namespace(ns_dir):
     cycle_history      = state.get("cycle_history", [])
     last_cycle_minutes = state.get("last_cycle_minutes")
 
-    sessions_since_dream = state.get("sessions_since_dream", 0)
-    corpus_size          = len(active_learnings)
-    dream_due            = sessions_since_dream >= 5 or corpus_size >= 15
+    sessions_since_dream      = state.get("sessions_since_dream", 0)
+    corpus_size               = len(active_learnings)
+    dream_due                 = sessions_since_dream >= 5 or corpus_size >= 15
+    reality_completeness_score = _reality_completeness(reality)
+    suggested_goal_count      = _suggested_goal_count(state)
 
     intent_summary = ""
     for line in intent.split("\n"):
@@ -264,8 +316,10 @@ def load_namespace(ns_dir):
         "session_count":        session_count,
         "cycle_history":        cycle_history,
         "last_cycle_minutes":   last_cycle_minutes,
-        "sessions_since_dream": sessions_since_dream,
-        "dream_due":            dream_due,
+        "sessions_since_dream":      sessions_since_dream,
+        "dream_due":                 dream_due,
+        "reality_completeness_score": reality_completeness_score,
+        "suggested_goal_count":      suggested_goal_count,
     }
 
 
@@ -322,6 +376,12 @@ def _card_html(n, i):
 
     dream_html = '<span class="dream-chip">🌙 dream due</span>' if n["dream_due"] else ""
 
+    completeness_html = ""
+    rcs = n["reality_completeness_score"]
+    if rcs is not None:
+        rc_cls = "high" if rcs >= 60 else "mid" if rcs >= 30 else "low"
+        completeness_html = f'<span class="rate-pill {rc_cls}" title="Reality completeness">{rcs:.0f}% done</span>'
+
     return f"""
     <div class="card" id="card-{i}" data-idx="{i}" onclick="selectCard({i})">
       <div class="card-top">
@@ -334,6 +394,7 @@ def _card_html(n, i):
         <span>{n["session_count"]} sessions</span>
         <span>{len(n["learnings"])} learnings</span>
         {rate_html}
+        {completeness_html}
         {deferred_html}
         {dream_html}
       </div>
@@ -374,8 +435,10 @@ def _js_data(namespaces):
             "supersededCount":    n["superseded_count"],
             "cycleHistory":       n["cycle_history"],
             "lastCycleMinutes":   n["last_cycle_minutes"],
-            "sessionsSinceDream": n["sessions_since_dream"],
-            "dreamDue":           n["dream_due"],
+            "sessionsSinceDream":       n["sessions_since_dream"],
+            "dreamDue":                n["dream_due"],
+            "realityCompletenessScore": n["reality_completeness_score"],
+            "suggestedGoalCount":       n["suggested_goal_count"],
         })
     raw = json.dumps(data, ensure_ascii=False, default=str)
     # Prevent </script> from breaking the embedding
@@ -1273,6 +1336,15 @@ function renderState(ns) {
     html += `<div class="md-section"><h3>Active goals</h3><ul class="goals-list">${items}</ul></div>`;
   }
 
+  // Suggested goal count for next session (closed sessions only)
+  if (!ns.open && ns.suggestedGoalCount) {
+    const sgc = ns.suggestedGoalCount;
+    html += `<div class="md-section"><h3>Next session</h3>
+      <div style="font-size:.82rem">Suggested goals: <strong>${sgc.count}</strong>
+      <span style="color:var(--muted);font-size:.75rem"> \\u2014 ${esc(sgc.basis)}</span></div>
+    </div>`;
+  }
+
   // Next session entry point (code_context.md)
   if (ns.codeContext) {
     html += `<div class="md-section"><h3>Next session entry point</h3>
@@ -1309,12 +1381,18 @@ function renderState(ns) {
     const bars = ns.cycleHistory.map(s => {
       const h   = Math.max(4, Math.round(s.minutes / maxMins * 32));
       const dt  = (s.opened_at || '').slice(0, 10);
-      return `<span class="cycle-bar" title="${esc(dt)}: ${s.minutes}m" style="height:${h}px"></span>`;
+      const cc  = s.command_count != null ? `, ${s.command_count} cmds` : '';
+      return `<span class="cycle-bar" title="${esc(dt)}: ${s.minutes}m${cc}" style="height:${h}px"></span>`;
     }).join('');
-    const lastLabel = ns.lastCycleMinutes != null ? `${ns.lastCycleMinutes}m` : '—';
+    const lastLabel = ns.lastCycleMinutes != null ? `${ns.lastCycleMinutes}m` : '\\u2014';
+    const cmdEntries = ns.cycleHistory.filter(s => s.command_count != null);
+    const avgCmds    = cmdEntries.length > 0
+      ? Math.round(cmdEntries.reduce((a, s) => a + s.command_count, 0) / cmdEntries.length)
+      : null;
+    const cmdLabel = avgCmds != null ? ` \\u00b7 avg ${avgCmds} cmds/session` : '';
     html += `<div class="md-section"><h3>Session cycle time</h3>
       <div style="display:flex;align-items:flex-end;gap:3px;height:36px;margin:.4rem 0 .3rem">${bars}</div>
-      <div style="font-size:.72rem;color:var(--muted)">Last: <strong style="color:var(--text)">${esc(lastLabel)}</strong> · ${ns.cycleHistory.length} session${ns.cycleHistory.length !== 1 ? 's' : ''} tracked</div>
+      <div style="font-size:.72rem;color:var(--muted)">Last: <strong style="color:var(--text)">${esc(lastLabel)}</strong> \\u00b7 ${ns.cycleHistory.length} session${ns.cycleHistory.length !== 1 ? 's' : ''} tracked${cmdLabel}</div>
     </div>`;
   }
 
@@ -1348,14 +1426,21 @@ function renderLearnings(ns) {
     const wCls = w >= 4 ? 'w-high' : w >= 2 ? 'w-mid' : 'w-low';
     const tags = (l.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('');
     const type = l.learning_type === 'hypothesis' ? 'hypothesis' : 'fact';
-    const date = (l.date || l.logged_at || '').slice(0, 10) || '—';
+    const date = (l.date || l.logged_at || '').slice(0, 10) || '\\u2014';
     const conf = l.confidence ? ` <span style="color:var(--subtle);font-size:.68rem">${esc(l.confidence)}</span>` : '';
+    let staleHtml = '';
+    if (type === 'hypothesis' && !l.validation_result && date !== '\\u2014') {
+      const ageDays = (Date.now() - new Date(date).getTime()) / 86400000;
+      if (ageDays > 30) {
+        staleHtml = ` <span style="color:var(--amber);font-size:.66rem" title="Unvalidated hypothesis \\u2014 ${Math.round(ageDays)}d old">\\u26a0 stale</span>`;
+      }
+    }
     return `
       <tr data-idx="${lIdx}">
         <td><span class="weight-dot"><span class="wdot ${wCls}"></span><span class="wnum">${w}</span></span></td>
         <td class="learning-text">${esc(l.text || '')}</td>
         <td><div class="tags-cell">${tags}</div></td>
-        <td><span class="type-badge type-${type}">${type}</span>${conf}</td>
+        <td><span class="type-badge type-${type}">${type}</span>${conf}${staleHtml}</td>
         <td style="color:var(--subtle);white-space:nowrap;font-size:.75rem">${date}</td>
       </tr>`;
   }).join('');
@@ -1463,6 +1548,38 @@ function switchView(v) {
   if (v === 'dag')        renderDAG();
   if (v === 'heatmap')    renderHeatmap();
   if (v === 'timeline')   renderLearningTimeline();
+}
+
+// ── Attention queue (E9) ─────────────────────────────────────────────────────
+
+function urgencyScore(ns) {
+  let score = 0;
+  if (ns.open) score += 30;
+  const days = _daysSince(ns.open ? ns.lastOpen : ns.lastClose);
+  if (days > 14) score += 25;
+  else if (days > 7) score += 15;
+  if (ns.goalRate !== null && ns.goalRate !== undefined) {
+    if (ns.goalRate < 50) score += 20;
+    else if (ns.goalRate < 75) score += 10;
+  }
+  if (ns.dreamDue) score += 12;
+  const deferredCount = (ns.deferred || []).length;
+  score += Math.min(deferredCount * 4, 20);
+  if (ns.plannedActions && ns.plannedActions.length > 0) score += 8;
+  if (ns.realityCompletenessScore != null && ns.realityCompletenessScore < 30) score += 8;
+  return score;
+}
+
+function initAttentionQueue() {
+  const grid = document.querySelector('.grid');
+  if (!grid) return;
+  const cards = Array.from(grid.children);
+  cards.sort((a, b) => {
+    const ia = parseInt(a.dataset.idx, 10);
+    const ib = parseInt(b.dataset.idx, 10);
+    return urgencyScore(NS[ib]) - urgencyScore(NS[ia]);
+  });
+  cards.forEach(c => grid.appendChild(c));
 }
 
 // ── Priority scoring ──────────────────────────────────────────────────────────
@@ -1935,6 +2052,9 @@ document.addEventListener('keydown', e => {
     openSearch();
   }
 });
+
+initAttentionQueue();
+
 // ── Dependency Graph (DAG) ────────────────────────────────────────────────────
 
 const EDGE_META = {
@@ -2242,7 +2362,7 @@ function renderScorecard() {
   const AXES = [
     { key: 'recency',    label: 'Recency',    tip: 'Days since last session (recent = high)' },
     { key: 'discipline', label: 'Discipline', tip: 'Avg goal completion %' },
-    { key: 'maturity',   label: 'Maturity',   tip: 'Total sessions logged' },
+    { key: 'maturity',   label: 'Maturity',   tip: 'Reality completeness score (% of bullets marked done)' },
     { key: 'learning',   label: 'Learning',   tip: 'Learnings per session' },
     { key: 'focus',      label: 'Focus',      tip: 'Low deferred items (fewer = high)' },
   ];
@@ -2252,7 +2372,7 @@ function renderScorecard() {
     const days       = _daysSince(ns.open ? ns.lastOpen : ns.lastClose);
     const recency    = Math.max(0, Math.min(100, 100 - days * (100 / 30)));
     const discipline = (ns.goalRate !== null && ns.goalRate !== undefined) ? ns.goalRate : 50;
-    const maturity   = ns.sessionCount || 0;
+    const maturity   = ns.realityCompletenessScore != null ? ns.realityCompletenessScore : 50;
     const learning   = ns.sessionCount > 0 ? (ns.learnings || []).length / ns.sessionCount : 0;
     const focus      = 1 / (1 + (ns.deferred || []).length);
     return { ns, recency, discipline, maturity, learning, focus };

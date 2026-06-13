@@ -114,9 +114,29 @@ Each view has `id="view-<name>"` and `id="vtab-<name>"`. Adding a new view tab r
 | `decisions[]` | decisions.jsonl | reverse-chronological |
 | `reality` | reality.md | raw markdown string |
 | `deferred[]` | state.json `deferred_opportunities` | expanded from dict to array with `key` field |
+| `goalByMonth` | state.json `goal_completions` | `{YYYY-MM: avg_rate}` — pre-aggregated by `_goal_by_month()` |
 
 `history` is capped at 5 for rendering (planned/completed detail). `sessionDates` is the
 full set and must be used for any time-based visualisation.
+
+**`goal_completions` schema:** values are structs `{hit_rate, total_goals, statuses, ...}`, not arrays. Read `entry["hit_rate"]` directly — do not iterate the dict as if it were a list of status strings.
+
+---
+
+## Stateful view tabs
+
+View tabs that maintain interactive state (e.g. force simulations, dragged node positions)
+must guard full DOM rebuilds with a `rendered` flag on the JS state object:
+
+```js
+// On re-activation: resume from current state, don't rebuild
+if (_dag.rendered) { /* resume sim */ return; }
+// ... full build ...
+_dag.rendered = true;
+```
+
+Controls that change the underlying data set (toggle, reset) must clear the flag first to
+force a rebuild. Calling `innerHTML = ...` on re-activation resets all user adjustments.
 
 ---
 
