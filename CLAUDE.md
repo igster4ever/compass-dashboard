@@ -68,6 +68,21 @@ This is a **parse-breaking** error — the entire `<script>` block fails silentl
 JS functions become undefined. If you see `ReferenceError: switchView is not defined`,
 look for a broken string literal earlier in the script.
 
+**Third trap — non-breaking spaces (`\xa0`) in JS template literals:**
+
+Some JS template literals in this file use `\xa0` (Unicode non-breaking space) instead
+of a regular space — visible only in a hex editor or when `repr()` is called. The Edit
+tool's string matching is byte-exact, so searching for a regular space will silently fail
+to find the line. If an Edit replacement reports "string not found" on a line you can
+clearly see, check for `\xa0` characters with:
+
+```python
+python3 -c "lines = open('scripts/compass-dashboard.py').readlines(); [print(repr(l)) for l in lines[N-1:N+2]]"
+```
+
+Fix: use a Python script (`str.replace()`) to do the replacement, passing the `\xa0`
+character explicitly in the old string.
+
 ---
 
 ## Template substitution
@@ -161,14 +176,17 @@ count as user-controlled.
 
 | Lines (approx) | What lives there |
 |----------------|-----------------|
-| 1–90 | Python helpers: file reading, time formatting, history parsing |
-| 91–230 | `load_namespace()`, `discover_namespaces()` |
-| 231–330 | `_js_data()`, `generate()`, `__main__` |
-| 331–890 | `HTML_TEMPLATE` — HTML structure + all CSS |
-| 891–1000 | JS: constants, `esc()`, card rendering, detail panel, tab switching |
-| 1001–1060 | JS: `deriveTasks()`, `renderTasks()` |
-| 1061–1270 | JS: detail panel sub-tabs (state, learnings, decisions, history) |
-| 1271–1480 | JS: `switchView()`, priority scoring helpers |
-| 1481–1880 | JS: `renderPriorities()`, search / command palette |
-| 1881–1980 | JS: `renderHeatmap()` |
-| 1981–2327 | JS: `renderDAG()`, force simulation, DAG tooltip |
+| 1–95 | Python helpers: file reading, time formatting, history parsing |
+| 96–270 | `_corpus_health()`, `_stale_bullet_count()`, `_goal_stats()`, `_goal_by_month()` |
+| 271–420 | `load_namespace()`, `discover_namespaces()` |
+| 421–520 | `_js_data()`, `generate()`, `__main__` |
+| 521–950 | `HTML_TEMPLATE` — HTML structure + all CSS |
+| 951–1080 | JS: constants, `esc()`, card rendering, detail panel, tab switching |
+| 1081–1150 | JS: `deriveTasks()`, `renderTasks()` |
+| 1151–1420 | JS: detail panel sub-tabs (state, learnings, decisions, history) |
+| 1421–1480 | JS: `renderExternalSignals()` |
+| 1481–1700 | JS: `switchView()`, priority scoring helpers |
+| 1701–2010 | JS: `renderPriorities()`, search / command palette |
+| 2011–2440 | JS: `renderHeatmap()`, `renderVelocityPanel()`, `renderSessionHeatmapPanel()` |
+| 2441–2640 | JS: `renderLearningTimeline()`, `renderScorecard()` |
+| 2641–2980 | JS: `renderGoalHeatmapPanel()`, `renderDAG()`, force simulation, DAG tooltip |

@@ -7,13 +7,14 @@ Usage:
     python3 compass-dashboard.py [--namespace <ns>] [--output <path>] [--no-open]
 """
 
+import hashlib
 import json
 import sys
 import re
 import subprocess
 import argparse
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 LOOP_DIR    = Path.home() / ".claude" / "loop"
 OUTPUT_PATH = Path.home() / "Downloads" / "compass-dashboard.html"
@@ -121,6 +122,54 @@ def _reality_completeness(reality_md):
     return round(achieved / total * 100, 1)
 
 
+def _corpus_health(active_learnings, superseded_count):
+    total = len(active_learnings)
+    if total < 3:
+        return None
+    unvalidated_hyp = sum(
+        1 for l in active_learnings
+        if l.get("learning_type") == "hypothesis" and not l.get("validation_result")
+    )
+    low_weight = sum(1 for l in active_learnings if (l.get("weight") or 1) == 1)
+    total_with_sup = total + superseded_count
+
+    score = 100
+    score -= int((unvalidated_hyp / total) * 30)
+    score -= int((low_weight / total) * 20)
+    if superseded_count > 0:
+        score += min(10, int(superseded_count / total_with_sup * 20))
+
+    return {
+        "score":                 max(0, min(100, score)),
+        "unvalidatedHypotheses": unvalidated_hyp,
+        "lowWeightCount":        low_weight,
+        "totalActive":           total,
+        "supersededCount":       superseded_count,
+    }
+
+
+def _stale_bullet_count(reality_md, state, days=30):
+    """Count reality bullets not verified within `days` days (mirrors compass logic)."""
+    validation = state.get("reality_validation", {})
+    now = _now_utc()
+    stale = 0
+    for line in reality_md.splitlines():
+        s = line.strip()
+        if (s.startswith("- ") or s.startswith("* ")):
+            text = s[2:].strip()
+            if not text or text.startswith("_"):
+                continue
+            h = hashlib.sha256(text.encode()).hexdigest()[:8]
+            ts = validation.get(h)
+            if not ts:
+                stale += 1
+            else:
+                dt = _parse_iso(ts)
+                if dt and (now - dt) > timedelta(days=days):
+                    stale += 1
+    return stale
+
+
 def _suggested_goal_count(state):
     completions = state.get("goal_completions", {})
     if not completions:
@@ -207,20 +256,25 @@ def _goal_stats(state):
 
     sessions = sorted(completions.items())[-5:]
 
+    def _parse_entry(entry):
+        if isinstance(entry, dict):
+            total = entry.get("total_goals", 0)
+            rate  = int(entry.get("hit_rate", 0))
+            return total, rate
+        # Legacy: bare list of status strings
+        total = len(entry) if isinstance(entry, list) else 0
+        n_done = sum(1 for s in entry if s == "completed") if total else 0
+        return total, int(n_done / total * 100) if total else 0
+
     dots = []
-    for _, statuses in sessions:
-        total = len(statuses)
-        n_done = sum(1 for s in statuses if s == "completed")
-        rate = int((n_done / total * 100) if total else 0)
+    for _, entry in sessions:
+        total, rate = _parse_entry(entry)
         level = "high" if rate >= 80 else "mid" if rate >= 50 else "low"
         dots.append({"level": level, "rate": rate})
 
-    latest = sessions[-1][1] if sessions else []
-    total = len(latest)
-    n_done = sum(1 for s in latest if s == "completed")
-    rate = int((n_done / total * 100) if total else 0) if total else None
-
-    return rate, dots
+    _, latest = sessions[-1] if sessions else (None, {})
+    total, rate = _parse_entry(latest)
+    return (rate if total else None), dots
 
 
 def _goal_by_month(state):
@@ -280,11 +334,48 @@ def load_namespace(ns_dir):
     cycle_history      = state.get("cycle_history", [])
     last_cycle_minutes = state.get("last_cycle_minutes")
 
+    config = _read_json(ns_dir / "config.json")
+
     sessions_since_dream      = state.get("sessions_since_dream", 0)
     corpus_size               = len(active_learnings)
-    dream_due                 = sessions_since_dream >= 5 or corpus_size >= 15
+    corpus_delta              = state.get("corpus_delta", 0) or 0
+    dream_due                 = sessions_since_dream >= 5 or corpus_size >= 15 or corpus_delta >= 10
     reality_completeness_score = _reality_completeness(reality)
     suggested_goal_count      = _suggested_goal_count(state)
+
+    research_interval  = config.get("research_interval_sessions", 10)
+    research_due       = state.get("sessions_since_research", 0) >= research_interval
+
+    review_interval    = config.get("review_interval_sessions", 5)
+    repo_path          = state.get("repo_path", "")
+    code_review_due    = bool(repo_path) and state.get("sessions_since_review", 0) >= review_interval
+
+    intent_version     = state.get("intent_versions", 1)
+    stale_bullet_count = _stale_bullet_count(reality, state)
+    corpus_health      = _corpus_health(active_learnings, superseded_count)
+
+    # Intent drift timeline
+    intent_history = _read_jsonl(ns_dir / "intent_history.jsonl")
+
+    # External research signals
+    external_signals = list(reversed(_read_jsonl(ns_dir / "external_signals.jsonl")))
+
+    # Cross-namespace learning links
+    back_refs_raw = _read_jsonl(ns_dir / "back_references.jsonl")
+    conflicts_raw = _read_jsonl(ns_dir / "conflict_resolutions.jsonl")
+    back_refs_by_text = {
+        r["learning_text"]: {"sourceNamespace": r.get("source_namespace", ""), "recordedAt": r.get("recorded_at", "")}
+        for r in back_refs_raw if r.get("learning_text")
+    }
+    conflicts_by_text = {}
+    for r in conflicts_raw:
+        txt = r.get("learning_text", "")
+        if txt:
+            conflicts_by_text.setdefault(txt, []).append({
+                "decision":        r.get("decision", ""),
+                "sourceNamespace": r.get("source_namespace", ""),
+                "targetNamespace": r.get("target_namespace", ""),
+            })
 
     intent_summary = ""
     for line in intent.split("\n"):
@@ -320,6 +411,15 @@ def load_namespace(ns_dir):
         "dream_due":                 dream_due,
         "reality_completeness_score": reality_completeness_score,
         "suggested_goal_count":      suggested_goal_count,
+        "research_due":              research_due,
+        "code_review_due":           code_review_due,
+        "intent_version":            intent_version,
+        "stale_bullet_count":        stale_bullet_count,
+        "back_refs_by_text":         back_refs_by_text,
+        "conflicts_by_text":         conflicts_by_text,
+        "intent_history":            intent_history,
+        "corpus_health":             corpus_health,
+        "external_signals":          external_signals,
     }
 
 
@@ -372,9 +472,15 @@ def _card_html(n, i):
     deferred_html = ""
     dc = len(n["deferred"])
     if dc > 0:
-        deferred_html = f'<span class="deferred-chip">{dc} deferred</span>'
+        escalated = sum(1 for v in n["deferred"].values() if v.get("defer_count", 0) >= 2)
+        if escalated:
+            deferred_html = f'<span class="deferred-chip escalated">⚠ {dc} deferred</span>'
+        else:
+            deferred_html = f'<span class="deferred-chip">{dc} deferred</span>'
 
-    dream_html = '<span class="dream-chip">🌙 dream due</span>' if n["dream_due"] else ""
+    dream_html     = '<span class="dream-chip">🌙 dream due</span>' if n["dream_due"] else ""
+    research_html  = '<span class="cadence-chip research">🔬 research due</span>' if n["research_due"] else ""
+    review_html    = '<span class="cadence-chip review">🔍 review due</span>' if n["code_review_due"] else ""
 
     completeness_html = ""
     rcs = n["reality_completeness_score"]
@@ -397,6 +503,8 @@ def _card_html(n, i):
         {completeness_html}
         {deferred_html}
         {dream_html}
+        {research_html}
+        {review_html}
       </div>
       <div class="card-tags">{tags_html}</div>
     </div>"""
@@ -426,7 +534,7 @@ def _js_data(namespaces):
             "goalDots":       n["goal_dots"],
             "topTags":        n["top_tags"],
             "deferred":       [
-                {"key": k, **v}
+                {"key": k, "escalated": v.get("defer_count", 0) >= 2, **v}
                 for k, v in n["deferred"].items()
             ],
             "goalByMonth":        n["goal_by_month"],
@@ -439,6 +547,15 @@ def _js_data(namespaces):
             "dreamDue":                n["dream_due"],
             "realityCompletenessScore": n["reality_completeness_score"],
             "suggestedGoalCount":       n["suggested_goal_count"],
+            "researchDue":             n["research_due"],
+            "codeReviewDue":           n["code_review_due"],
+            "intentVersion":           n["intent_version"],
+            "staleBulletCount":        n["stale_bullet_count"],
+            "backRefsByText":          n["back_refs_by_text"],
+            "conflictsByText":         n["conflicts_by_text"],
+            "intentHistory":           n["intent_history"],
+            "corpusHealth":            n["corpus_health"],
+            "externalSignals":         n["external_signals"],
         })
     raw = json.dumps(data, ensure_ascii=False, default=str)
     # Prevent </script> from breaking the embedding
@@ -552,10 +669,78 @@ HTML_TEMPLATE = """\
       font-size: .62rem; background: var(--amber-bg); color: var(--amber);
       padding: .15em .5em; border-radius: 999px;
     }
+    .deferred-chip.escalated {
+      background: var(--red-bg); color: var(--red); font-weight: 600;
+    }
     .dream-chip {
       font-size: .62rem; background: rgba(139,93,199,.15); color: #b48ef0;
       padding: .15em .5em; border-radius: 999px;
     }
+    .cadence-chip {
+      font-size: .62rem; padding: .15em .5em; border-radius: 999px;
+    }
+    .cadence-chip.research { background: rgba(56,189,248,.12); color: #38bdf8; }
+    .cadence-chip.review   { background: rgba(52,211,153,.12); color: #34d399; }
+    .version-badge {
+      font-size: .6rem; font-weight: 600; background: var(--border);
+      color: var(--muted); padding: .1em .45em; border-radius: 999px;
+      vertical-align: middle; margin-left: .3em;
+    }
+    .link-ref {
+      font-size: .68rem; color: var(--subtle); margin-top: .2em;
+    }
+    .link-ref code {
+      font-size: .68rem; color: var(--accent); background: none; padding: 0;
+    }
+    .intent-hist-entry {
+      display: grid; grid-template-columns: 2.2rem 6rem 1fr;
+      gap: .2rem .6rem; align-items: baseline;
+      padding: .35rem 0; border-bottom: 1px solid var(--border);
+      font-size: .8rem;
+    }
+    .intent-hist-entry:last-child { border-bottom: none; }
+    .intent-hist-ver  { font-weight: 700; color: var(--accent); font-size: .72rem; }
+    .intent-hist-date { color: var(--muted); font-size: .72rem; white-space: nowrap; }
+    .intent-hist-text { color: var(--text); grid-column: 3; }
+    .intent-hist-reason {
+      grid-column: 3; color: var(--subtle); font-size: .72rem;
+      font-style: italic; margin-top: .1rem;
+    }
+    .corpus-health {
+      display: flex; align-items: center; gap: .5rem;
+      margin-bottom: .75rem; font-size: .75rem;
+    }
+    .ch-label  { color: var(--muted); white-space: nowrap; }
+    .ch-bar-wrap {
+      flex: 0 0 80px; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden;
+    }
+    .ch-bar    { height: 100%; border-radius: 3px; transition: width .3s; }
+    .ch-high   { background: var(--green, #34d399); }
+    .ch-mid    { background: var(--amber); }
+    .ch-low    { background: var(--red); }
+    .ch-score  { font-weight: 700; color: var(--text); min-width: 2rem; }
+    .ch-detail { color: var(--subtle); }
+    .signals-list { display: flex; flex-direction: column; gap: .75rem; }
+    .signal-entry {
+      padding: .6rem .8rem; border: 1px solid var(--border); border-radius: 6px;
+    }
+    .signal-header {
+      display: flex; align-items: center; gap: .5rem; margin-bottom: .3rem;
+      font-size: .72rem;
+    }
+    .signal-date   { color: var(--muted); white-space: nowrap; }
+    .signal-source {
+      background: rgba(56,189,248,.12); color: #38bdf8;
+      padding: .1em .4em; border-radius: 999px; font-size: .65rem;
+    }
+    .signal-text  { font-size: .82rem; color: var(--text); line-height: 1.45; }
+    .signal-remit { font-size: .72rem; color: var(--subtle); margin-top: .2rem; font-style: italic; }
+    .vel-legend {
+      display: flex; flex-wrap: wrap; gap: .3rem .8rem;
+      padding: .5rem 0 .75rem; font-size: .72rem; color: var(--muted);
+    }
+    .vel-legend-item { display: flex; align-items: center; gap: .3rem; }
+    .vel-legend-dot  { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
     .cycle-bar {
       display: inline-block; width: 6px; border-radius: 2px 2px 0 0;
       background: var(--blue-bg); border: 1px solid var(--blue);
@@ -1187,16 +1372,19 @@ function selectCard(i) {
 
 function renderDetail(ns) {
   const derivedTasks = deriveTasks(ns);
-  const baseTabs = (ns.decisions && ns.decisions.length)
+  const hasSignals   = (ns.externalSignals || []).length > 0;
+  const hasDecisions = ns.decisions && ns.decisions.length;
+  const baseTabs     = hasDecisions
     ? ['state', 'learnings', 'decisions', 'history']
     : ['state', 'learnings', 'history'];
-  const tabs = [...baseTabs, 'tasks'];
+  const tabs   = [...baseTabs, 'tasks', ...(hasSignals ? ['signals'] : [])];
   const labels = {
     state:     'State',
     learnings: `Learnings (${ns.learnings.length})`,
     decisions: `Decisions (${(ns.decisions || []).length})`,
     history:   `History (${ns.sessionCount})`,
     tasks:     derivedTasks.length ? `Tasks (${derivedTasks.length})` : 'Tasks',
+    signals:   `Signals (${(ns.externalSignals || []).length})`,
   };
 
   const btnHtml = tabs.map(t =>
@@ -1239,6 +1427,7 @@ function renderTab(tab, ns) {
   if (tab === 'decisions') return renderDecisions(ns);
   if (tab === 'history')   return renderHistory(ns);
   if (tab === 'tasks')     return renderTasks(ns);
+  if (tab === 'signals')   return renderExternalSignals(ns);
   return '';
 }
 
@@ -1328,7 +1517,24 @@ function renderState(ns) {
   let html = '';
 
   // Intent
-  html += `<div class="md-section"><h3>Intent</h3><div>${md(ns.intent)}</div></div>`;
+  const intentVer = ns.intentVersion > 1 ? ` <span class="version-badge">v${ns.intentVersion}</span>` : '';
+  html += `<div class="md-section"><h3>Intent${intentVer}</h3><div>${md(ns.intent)}</div></div>`;
+
+  // Intent history (only if 2+ versions exist)
+  if (ns.intentHistory && ns.intentHistory.length > 1) {
+    const entries = [...ns.intentHistory].reverse().map(h => {
+      const date   = (h.recorded_at || '').slice(0, 10);
+      const oneliner = (h.text || '').split('\\n')[0].slice(0, 120);
+      const reason = h.reason ? `<div class="intent-hist-reason">${esc(h.reason)}</div>` : '';
+      return `<div class="intent-hist-entry">
+        <span class="intent-hist-ver">v${h.version}</span>
+        <span class="intent-hist-date">${esc(date)}</span>
+        <div class="intent-hist-text">${esc(oneliner)}</div>
+        ${reason}
+      </div>`;
+    }).join('');
+    html += `<div class="md-section"><h3>Intent history</h3>${entries}</div>`;
+  }
 
   // Active goals (open sessions only)
   if (ns.open && ns.plannedActions.length > 0) {
@@ -1353,7 +1559,10 @@ function renderState(ns) {
   }
 
   // Reality
-  html += `<div class="md-section"><h3>Reality</h3><div>${md(ns.reality)}</div></div>`;
+  const staleNote = ns.staleBulletCount > 0
+    ? ` <span style="color:var(--amber);font-size:.66rem;font-weight:normal">\\u26a0 ${ns.staleBulletCount} unverified</span>`
+    : '';
+  html += `<div class="md-section"><h3>Reality${staleNote}</h3><div>${md(ns.reality)}</div></div>`;
 
   // Recent decisions (last 3, inline summary — full log in Decisions tab)
   if (ns.decisions && ns.decisions.length > 0) {
@@ -1421,6 +1630,24 @@ function renderLearnings(ns) {
        </div>`
     : '';
 
+  let corpusHealthHtml = '';
+  if (ns.corpusHealth) {
+    const ch    = ns.corpusHealth;
+    const pct   = ch.score;
+    const barCls = pct >= 75 ? 'ch-high' : pct >= 50 ? 'ch-mid' : 'ch-low';
+    const details = [
+      ch.unvalidatedHypotheses > 0 ? `${ch.unvalidatedHypotheses} unvalidated hypothesis${ch.unvalidatedHypotheses !== 1 ? 'es' : ''}` : null,
+      `${ch.lowWeightCount} weight-1 (${Math.round(ch.lowWeightCount / ch.totalActive * 100)}%)`,
+      ch.supersededCount > 0 ? `${ch.supersededCount} superseded` : null,
+    ].filter(Boolean).join(' \\u00b7 ');
+    corpusHealthHtml = `<div class="corpus-health">
+      <span class="ch-label">Corpus health</span>
+      <div class="ch-bar-wrap"><div class="ch-bar ${barCls}" style="width:${pct}%"></div></div>
+      <span class="ch-score">${pct}</span>
+      <span class="ch-detail">${esc(details)}</span>
+    </div>`
+  }
+
   const rows = ns.learnings.map((l, lIdx) => {
     const w    = l.weight || 1;
     const wCls = w >= 4 ? 'w-high' : w >= 2 ? 'w-mid' : 'w-low';
@@ -1435,17 +1662,28 @@ function renderLearnings(ns) {
         staleHtml = ` <span style="color:var(--amber);font-size:.66rem" title="Unvalidated hypothesis \\u2014 ${Math.round(ageDays)}d old">\\u26a0 stale</span>`;
       }
     }
+    const backRef  = (ns.backRefsByText  || {})[l.text || ''];
+    const conflicts = (ns.conflictsByText || {})[l.text || ''] || [];
+    let linkHtml = '';
+    if (backRef) {
+      linkHtml += `<div class="link-ref">\\u2190 propagated from <code>${esc(backRef.sourceNamespace)}</code></div>`;
+    }
+    for (const c of conflicts) {
+      const other = c.sourceNamespace === ns.namespace ? c.targetNamespace : c.sourceNamespace;
+      const icon  = c.decision === 'link' ? '\\u2194' : c.decision === 'merge' ? '\\u21d2' : '\\u2260';
+      linkHtml += `<div class="link-ref">${icon} ${esc(c.decision)} \\u2014 <code>${esc(other)}</code></div>`;
+    }
     return `
       <tr data-idx="${lIdx}">
         <td><span class="weight-dot"><span class="wdot ${wCls}"></span><span class="wnum">${w}</span></span></td>
-        <td class="learning-text">${esc(l.text || '')}</td>
+        <td class="learning-text">${esc(l.text || '')}${linkHtml}</td>
         <td><div class="tags-cell">${tags}</div></td>
         <td><span class="type-badge type-${type}">${type}</span>${conf}${staleHtml}</td>
         <td style="color:var(--subtle);white-space:nowrap;font-size:.75rem">${date}</td>
       </tr>`;
   }).join('');
 
-  return supersededNote + `
+  return corpusHealthHtml + supersededNote + `
     <table class="learnings-table">
       <thead>
         <tr><th>Wt</th><th>Learning</th><th>Tags</th><th>Type</th><th>Date</th></tr>
@@ -1477,6 +1715,39 @@ function renderDecisions(ns) {
       </div>`;
   }).join('');
   return `<div class="decision-list">${items}</div>`;
+}
+
+// ── External signals ──────────────────────────────────────────────────────────
+
+function renderExternalSignals(ns) {
+  const signals = ns.externalSignals || [];
+  if (!signals.length) {
+    return '<div class="empty-state">No external research signals recorded yet.<br>Use the compass research pass (P11) to capture findings.</div>';
+  }
+
+  const items = signals.map(s => {
+    const date    = (s.date || '').slice(0, 10) || '\\u2014';
+    const tags    = (s.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('');
+    const remit   = s.research_remit || {};
+    let remitHtml = '';
+    if (remit.focus_area) {
+      remitHtml += `<div class="signal-remit">Focus: ${esc(remit.focus_area)}</div>`;
+    }
+    if (remit.hypothesis) {
+      remitHtml += `<div class="signal-remit">Hypothesis: ${esc(remit.hypothesis)}</div>`;
+    }
+    return `<div class="signal-entry">
+      <div class="signal-header">
+        <span class="signal-date">${esc(date)}</span>
+        <span class="signal-source">${esc(s.source || 'research')}</span>
+        <div class="tags-cell" style="display:inline-flex">${tags}</div>
+      </div>
+      <div class="signal-text">${esc(s.text || '')}</div>
+      ${remitHtml}
+    </div>`;
+  }).join('');
+
+  return `<div class="signals-list">${items}</div>`;
 }
 
 // ── History timeline ──────────────────────────────────────────────────────────
@@ -1649,6 +1920,11 @@ function computePriorities() {
     if (ns.sessionCount === 0) {
       score += 10;
       reasons.push({ icon: '+', text: 'No sessions yet — namespace needs bootstrapping' });
+    }
+
+    if (ns.corpusHealth && ns.corpusHealth.score < 50) {
+      score += 12;
+      reasons.push({ icon: '🧪', text: `Low corpus health (${ns.corpusHealth.score}/100) — validate hypotheses or boost learnings` });
     }
 
     return { ns, idx, score, reasons };
@@ -2145,20 +2421,23 @@ function renderHeatmap() {
   if (container.dataset.rendered) return;
   container.dataset.rendered = '1';
   container.innerHTML = `<div class="hmap-toolbar">
-    <button class="dag-btn active" id="hbtn-sessions" onclick="switchHeatmap('sessions')">Session Activity</button>
-    <button class="dag-btn" id="hbtn-goals" onclick="switchHeatmap('goals')">Goal Completion</button>
+    <button class="dag-btn active" id="hbtn-sessions"  onclick="switchHeatmap('sessions')">Session Activity</button>
+    <button class="dag-btn"        id="hbtn-goals"     onclick="switchHeatmap('goals')">Goal Completion</button>
+    <button class="dag-btn"        id="hbtn-velocity"  onclick="switchHeatmap('velocity')">Velocity</button>
   </div>
   <div id="hpanel-sessions"></div>
-  <div id="hpanel-goals" style="display:none"></div>`;
+  <div id="hpanel-goals"     style="display:none"></div>
+  <div id="hpanel-velocity"  style="display:none"></div>`;
   renderSessionHeatmapPanel();
 }
 
 function switchHeatmap(name) {
-  ['sessions', 'goals'].forEach(id => {
+  ['sessions', 'goals', 'velocity'].forEach(id => {
     document.getElementById('hpanel-' + id).style.display = id === name ? '' : 'none';
     document.getElementById('hbtn-' + id).classList.toggle('active', id === name);
   });
-  if (name === 'goals') renderGoalHeatmapPanel();
+  if (name === 'goals')    renderGoalHeatmapPanel();
+  if (name === 'velocity') renderVelocityPanel();
 }
 
 function renderSessionHeatmapPanel() {
@@ -2499,6 +2778,117 @@ function renderScorecard() {
     el.addEventListener('mouseenter', () => highlightScard(ri, true));
     el.addEventListener('mouseleave', () => highlightScard(ri, false));
   });
+}
+
+// ── Session velocity chart (stacked bars, all namespaces) ────────────────────
+
+function renderVelocityPanel() {
+  const container = document.getElementById('hpanel-velocity');
+  if (container.dataset.rendered) return;
+  container.dataset.rendered = '1';
+
+  // Build month -> { ns: count } from all sessionDates, last 12 months
+  const allMonths = new Set();
+  NS.forEach(ns => (ns.sessionDates || []).forEach(d => allMonths.add(d.slice(0, 7))));
+  const months = Array.from(allMonths).sort().slice(-12);
+  if (!months.length) {
+    container.innerHTML = '<p style="padding:1rem;color:var(--muted)">No session data available.</p>';
+    return;
+  }
+
+  const activeNS = NS.filter(ns => !SYSTEM_NS.has(ns.namespace.toLowerCase()));
+
+  // Tally counts per namespace per month
+  const counts = {};  // ns.namespace -> [count per month]
+  activeNS.forEach(ns => {
+    const byMonth = {};
+    (ns.sessionDates || []).forEach(d => {
+      const m = d.slice(0, 7);
+      if (allMonths.has(m)) byMonth[m] = (byMonth[m] || 0) + 1;
+    });
+    counts[ns.namespace] = months.map(m => byMonth[m] || 0);
+  });
+
+  // Stacked totals per month
+  const totals = months.map((_, mi) =>
+    activeNS.reduce((s, ns) => s + counts[ns.namespace][mi], 0)
+  );
+  const maxTotal = Math.max(1, ...totals);
+
+  // Colour palette (CSS variable names fallback to fixed hues)
+  const palette = [
+    '#38bdf8','#34d399','#f59e0b','#f87171','#a78bfa',
+    '#fb923c','#e879f9','#4ade80','#60a5fa','#fbbf24',
+    '#94a3b8','#f472b6',
+  ];
+
+  const W = 600, H = 200, PL = 30, PB = 32, PT = 12, PR = 10;
+  const chartW = W - PL - PR;
+  const chartH = H - PT - PB;
+  const barW   = Math.floor(chartW / months.length * 0.72);
+  const gap    = chartW / months.length;
+
+  // Build SVG bar segments per namespace (bottom-up stacking)
+  let barsSvg = '';
+  const nsStacks = months.map(() => 0);  // running y-offset per month slot
+
+  activeNS.forEach((ns, ni) => {
+    const colour = palette[ni % palette.length];
+    months.forEach((m, mi) => {
+      const c = counts[ns.namespace][mi];
+      if (!c) return;
+      const barH  = Math.round(c / maxTotal * chartH);
+      const x     = PL + Math.round(mi * gap + (gap - barW) / 2);
+      const yBase = PT + chartH - nsStacks[mi];
+      const y     = yBase - barH;
+      nsStacks[mi] += barH;
+      // Use data attributes and title for tooltip — no inline event handlers
+      barsSvg += `<rect class="vel-bar" x="${x}" y="${y}" width="${barW}" height="${barH}"
+        fill="${colour}" rx="1"
+        data-ns="${esc(ns.namespace)}" data-month="${esc(m)}" data-count="${c}">
+        <title>${esc(ns.namespace)} · ${esc(m)}: ${c} session${c !== 1 ? 's' : ''}</title>
+      </rect>`;
+    });
+  });
+
+  // X-axis labels (month names)
+  const monthLabels = months.map((m, mi) => {
+    const x   = PL + Math.round(mi * gap + gap / 2);
+    const lbl = m.slice(5);  // MM portion
+    return `<text x="${x}" y="${H - 6}" text-anchor="middle" class="vel-label">${esc(lbl)}</text>`;
+  }).join('');
+
+  // Y-axis gridlines
+  const gridLines = [0.25, 0.5, 0.75, 1].map(f => {
+    const y   = PT + chartH - Math.round(f * chartH);
+    const val = Math.round(f * maxTotal);
+    return `<line x1="${PL}" y1="${y}" x2="${W - PR}" y2="${y}" class="vel-grid"/>
+      <text x="${PL - 3}" y="${y + 4}" text-anchor="end" class="vel-label">${val}</text>`;
+  }).join('');
+
+  // Legend
+  const legendItems = activeNS.map((ns, ni) => {
+    const colour = palette[ni % palette.length];
+    return `<span class="vel-legend-item">
+      <span class="vel-legend-dot" style="background:${colour}"></span>${esc(ns.namespace)}
+    </span>`;
+  }).join('');
+
+  container.innerHTML = `
+    <div style="padding:.75rem 1rem 0">
+      <svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;display:block">
+        <style>
+          .vel-bar { opacity:.85; transition:opacity .15s; }
+          .vel-bar:hover { opacity:1; }
+          .vel-grid { stroke:var(--border); stroke-width:1; }
+          .vel-label { fill:var(--muted); font-size:9px; font-family:inherit; }
+        </style>
+        ${gridLines}
+        ${barsSvg}
+        ${monthLabels}
+      </svg>
+      <div class="vel-legend">${legendItems}</div>
+    </div>`;
 }
 
 // ── Goal completion heatmap ───────────────────────────────────────────────────
