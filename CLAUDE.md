@@ -125,7 +125,7 @@ Each view has `id="view-<name>"` and `id="vtab-<name>"`. Adding a new view tab r
 | `history[]` | last 5 session files | parsed content (planned/completed/incomplete) |
 | `sessionDates[]` | all session filenames | full history as `YYYY-MM-DD` strings — use this for time-series viz |
 | `sessionCount` | count of all history files | total, not capped |
-| `learnings[]` | learnings.jsonl | sorted by weight descending |
+| `learnings[]` | learnings.jsonl | sorted by weight descending; **active only** (superseded_by=null) |
 | `decisions[]` | decisions.jsonl | reverse-chronological |
 | `reality` | reality.md | raw markdown string |
 | `deferred[]` | state.json `deferred_opportunities` | expanded from dict to array with `key` field |
@@ -135,6 +135,16 @@ Each view has `id="view-<name>"` and `id="vtab-<name>"`. Adding a new view tab r
 full set and must be used for any time-based visualisation.
 
 **`goal_completions` schema:** values are structs `{hit_rate, total_goals, statuses, ...}`, not arrays. Read `entry["hit_rate"]` directly — do not iterate the dict as if it were a list of status strings.
+
+**Learning object fields (P31+):** each learning in `learnings[]` now carries:
+- `learning_id` — stable uuid4 (present on all learnings written after P31 shipped; may be absent on older entries)
+- `tags` — normalised to canonical forms via taxonomy.json (P34); use these for tag counting and display
+- `superseded_by` — text of the anchor learning if this entry was merged via dream pass; excluded from `learnings[]` by `load_namespace()`
+- `superseded_by_id` — `learning_id` of the anchor (parallel to `superseded_by`; present only when anchor had a `learning_id`)
+
+**`active_learnings` filter — P33 forward compat:** `load_namespace()` currently filters superseded via `not l.get("superseded_by")`. When P33 (learning lifecycle status field) ships, extend this filter to also exclude `status in ["superseded", "archived"]`.
+
+**Constants sync:** `_COMPLETION_MARKERS` and `_BACKLOG_HEADERS` in this script are local copies of the same constants in `scripts/compass/reality.py`. They cannot be imported (stdlib-only constraint). If reality.py's constants change, update this script's copies to match.
 
 ---
 

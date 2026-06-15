@@ -92,6 +92,7 @@ def _e(s):
             .replace('"', "&quot;"))
 
 
+# Local copies — keep in sync with scripts/compass/reality.py (can't import; stdlib-only constraint)
 _COMPLETION_MARKERS = frozenset({
     "complete", "live", "exists and works", "shipped", "passing", "done", "✓", "operational",
 })
@@ -1655,6 +1656,7 @@ function renderLearnings(ns) {
     const type = l.learning_type === 'hypothesis' ? 'hypothesis' : 'fact';
     const date = (l.date || l.logged_at || '').slice(0, 10) || '\\u2014';
     const conf = l.confidence ? ` <span style="color:var(--subtle);font-size:.68rem">${esc(l.confidence)}</span>` : '';
+    const lidTitle = l.learning_id ? ` title="ID: ${esc(l.learning_id)}"` : '';
     let staleHtml = '';
     if (type === 'hypothesis' && !l.validation_result && date !== '\\u2014') {
       const ageDays = (Date.now() - new Date(date).getTime()) / 86400000;
@@ -1674,7 +1676,7 @@ function renderLearnings(ns) {
       linkHtml += `<div class="link-ref">${icon} ${esc(c.decision)} \\u2014 <code>${esc(other)}</code></div>`;
     }
     return `
-      <tr data-idx="${lIdx}">
+      <tr data-idx="${lIdx}"${lidTitle}>
         <td><span class="weight-dot"><span class="wdot ${wCls}"></span><span class="wnum">${w}</span></span></td>
         <td class="learning-text">${esc(l.text || '')}${linkHtml}</td>
         <td><div class="tags-cell">${tags}</div></td>
