@@ -130,6 +130,10 @@ Each view has `id="view-<name>"` and `id="vtab-<name>"`. Adding a new view tab r
 | `reality` | reality.md | raw markdown string |
 | `deferred[]` | state.json `deferred_opportunities` | expanded from dict to array with `key` field |
 | `goalByMonth` | state.json `goal_completions` | `{YYYY-MM: avg_rate}` — pre-aggregated by `_goal_by_month()` |
+| `explorationRatio` | state.json `goal_completions` | `{ratio, sessionsWithTypes, explore, total, low}` — computed by `_compute_exploration_ratio()`; `null` if fewer than 2 typed sessions |
+| `goalTypeBySession` | state.json `goal_completions` | `[{date, exploit, explore}]` chronological — computed by `_goal_type_by_session()`; pre-P23 sessions have `explore:0` |
+| `carryForwardTrend` | all history/*.md files | `[{date, carryForward, goalsCompleted}]` — uncapped, chronological; carry-forward = count of `## Incomplete` bullets |
+| `lastRealityScore` | state.json `last_reality_score` | previous session's reality completeness %; subtract from current to get delta |
 
 `history` is capped at 5 for rendering (planned/completed detail). `sessionDates` is the
 full set and must be used for any time-based visualisation.
@@ -187,16 +191,17 @@ count as user-controlled.
 | Lines (approx) | What lives there |
 |----------------|-----------------|
 | 1–95 | Python helpers: file reading, time formatting, history parsing |
-| 96–270 | `_corpus_health()`, `_stale_bullet_count()`, `_goal_stats()`, `_goal_by_month()` |
-| 271–420 | `load_namespace()`, `discover_namespaces()` |
-| 421–520 | `_js_data()`, `generate()`, `__main__` |
-| 521–950 | `HTML_TEMPLATE` — HTML structure + all CSS |
-| 951–1080 | JS: constants, `esc()`, card rendering, detail panel, tab switching |
-| 1081–1150 | JS: `deriveTasks()`, `renderTasks()` |
-| 1151–1420 | JS: detail panel sub-tabs (state, learnings, decisions, history) |
-| 1421–1480 | JS: `renderExternalSignals()` |
-| 1481–1700 | JS: `switchView()`, priority scoring helpers |
-| 1701–2010 | JS: `renderPriorities()`, search / command palette |
-| 2011–2440 | JS: `renderHeatmap()`, `renderVelocityPanel()`, `renderSessionHeatmapPanel()` |
-| 2441–2640 | JS: `renderLearningTimeline()`, `renderScorecard()` |
-| 2641–2980 | JS: `renderGoalHeatmapPanel()`, `renderDAG()`, force simulation, DAG tooltip |
+| 96–302 | `_corpus_health()`, `_stale_bullet_count()`, `_goal_stats()`, `_goal_by_month()` |
+| 303–342 | `_compute_exploration_ratio()`, `_goal_type_by_session()` |
+| 343–594 | `load_namespace()`, `discover_namespaces()`, `_card_html()` |
+| 595–650 | `_js_data()`, `generate()`, `__main__` |
+| 651–1090 | `HTML_TEMPLATE` — HTML structure + all CSS |
+| 1090–1455 | JS: constants, `esc()`, card rendering, detail panel, tab switching |
+| 1456–1511 | JS: `deriveTasks()`, `renderTasks()` |
+| 1512–1905 | JS: detail panel sub-tabs (state, learnings, decisions, history), `renderExternalSignals()` |
+| 1906–2100 | JS: `switchView()`, priority scoring helpers, `renderPriorities()` |
+| 2100–2551 | JS: search / command palette |
+| 2552–2899 | JS: `renderHeatmap()`, `renderSessionHeatmapPanel()`, `renderGoalHeatmapPanel()` |
+| 2900–3031 | JS: `renderGoalTypesPanel()` (E18), `renderPlanningPanel()` (E15) |
+| 3032–3223 | JS: `renderVelocityPanel()`, `renderLearningTimeline()`, `renderScorecard()` |
+| 3224–3590 | JS: `renderDAG()`, force simulation, DAG tooltip |

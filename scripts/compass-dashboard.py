@@ -300,6 +300,46 @@ def _goal_by_month(state):
     return {m: int(sum(rates) / len(rates)) for m, rates in monthly.items()}
 
 
+def _compute_exploration_ratio(state):
+    """Replicate compass _compute_exploration_ratio logic (stdlib-only, can't import)."""
+    completions = state.get("goal_completions", {})
+    if not completions:
+        return None
+    recent = sorted(completions.items(), key=lambda x: x[0], reverse=True)[:5]
+    typed  = [v for _, v in recent if v.get("types")]
+    if len(typed) < 2:
+        return None
+    explore = sum(t.count("explore") for t in (v["types"] for v in typed))
+    total   = sum(len(v["types"]) for v in typed)
+    ratio   = round(explore / total * 100, 1) if total else 0.0
+    return {
+        "ratio":             ratio,
+        "sessionsWithTypes": len(typed),
+        "explore":           explore,
+        "total":             total,
+        "low":               ratio < 20.0 and len(typed) >= 3,
+    }
+
+
+def _goal_type_by_session(state):
+    """Per-session E/X breakdown from goal_completions[*].types, chronological."""
+    completions = state.get("goal_completions", {})
+    result = []
+    for ts, entry in sorted(completions.items()):
+        if not isinstance(entry, dict):
+            continue
+        types   = entry.get("types")
+        date    = ts[:10]
+        if types:
+            exploit = types.count("exploit")
+            explore = types.count("explore")
+        else:
+            exploit = entry.get("total_goals", 0)
+            explore = 0
+        result.append({"date": date, "exploit": exploit, "explore": explore})
+    return result
+
+
 def load_namespace(ns_dir):
     state        = _read_json(ns_dir / "state.json")
     intent       = _read_file(ns_dir / "intent.md")
@@ -354,6 +394,21 @@ def load_namespace(ns_dir):
     intent_version     = state.get("intent_versions", 1)
     stale_bullet_count = _stale_bullet_count(reality, state)
     corpus_health      = _corpus_health(active_learnings, superseded_count)
+
+    exploration_ratio    = _compute_exploration_ratio(state)
+    last_reality_score   = state.get("last_reality_score")
+    goal_type_by_session = _goal_type_by_session(state)
+    # Carry-forward trend: all history files (uncapped) — sorted chronologically
+    carry_forward_trend = []
+    if history_dir.exists():
+        for f in sorted(history_dir.glob("*.md")):
+            parsed = _parse_history_file(f)
+            if parsed:
+                carry_forward_trend.append({
+                    "date":           f.stem[:10],
+                    "carryForward":   len(parsed["incomplete"]),
+                    "goalsCompleted": len(parsed["completed"]),
+                })
 
     # Intent drift timeline
     intent_history = _read_jsonl(ns_dir / "intent_history.jsonl")
@@ -421,6 +476,10 @@ def load_namespace(ns_dir):
         "intent_history":            intent_history,
         "corpus_health":             corpus_health,
         "external_signals":          external_signals,
+        "exploration_ratio":         exploration_ratio,
+        "last_reality_score":        last_reality_score,
+        "goal_type_by_session":      goal_type_by_session,
+        "carry_forward_trend":       carry_forward_trend,
     }
 
 
@@ -487,7 +546,24 @@ def _card_html(n, i):
     rcs = n["reality_completeness_score"]
     if rcs is not None:
         rc_cls = "high" if rcs >= 60 else "mid" if rcs >= 30 else "low"
-        completeness_html = f'<span class="rate-pill {rc_cls}" title="Reality completeness">{rcs:.0f}% done</span>'
+        lrs = n.get("last_reality_score")
+        delta_html = ""
+        if lrs is not None:
+            delta = rcs - lrs
+            if abs(delta) >= 1:
+                delta_sign = "+" if delta > 0 else ""
+                delta_col  = "green" if delta > 0 else "red"
+                delta_html = f' <span style="font-size:.7rem;color:var(--{delta_col})">{delta_sign}{delta:.0f}</span>'
+        completeness_html = f'<span class="rate-pill {rc_cls}" title="Reality completeness">{rcs:.0f}% done{delta_html}</span>'
+
+    # E14 — Exploration ratio badge
+    explore_html = ""
+    er = n.get("exploration_ratio")
+    if er and er.get("ratio") is not None:
+        er_style = "color:var(--amber)" if er.get("low") else "color:var(--muted)"
+        explore_html = (f'<span class="cadence-chip" style="{er_style}" '
+                        f'title="{er.get("sessionsWithTypes", 0)} typed sessions">'
+                        f'{er["ratio"]:.0f}% explore</span>')
 
     return f"""
     <div class="card" id="card-{i}" data-idx="{i}" onclick="selectCard({i})">
@@ -506,6 +582,7 @@ def _card_html(n, i):
         {dream_html}
         {research_html}
         {review_html}
+        {explore_html}
       </div>
       <div class="card-tags">{tags_html}</div>
     </div>"""
@@ -557,6 +634,10 @@ def _js_data(namespaces):
             "intentHistory":           n["intent_history"],
             "corpusHealth":            n["corpus_health"],
             "externalSignals":         n["external_signals"],
+            "explorationRatio":        n["exploration_ratio"],
+            "lastRealityScore":        n["last_reality_score"],
+            "goalTypeBySession":       n["goal_type_by_session"],
+            "carryForwardTrend":       n["carry_forward_trend"],
         })
     raw = json.dumps(data, ensure_ascii=False, default=str)
     # Prevent </script> from breaking the embedding
@@ -1588,11 +1669,16 @@ function renderState(ns) {
   // Cycle time sparkline
   if (ns.cycleHistory && ns.cycleHistory.length > 0) {
     const maxMins = Math.max(...ns.cycleHistory.map(s => s.minutes), 1);
+    const hasCmds = ns.cycleHistory.some(s => s.command_count != null);
     const bars = ns.cycleHistory.map(s => {
       const h   = Math.max(4, Math.round(s.minutes / maxMins * 32));
       const dt  = (s.opened_at || '').slice(0, 10);
       const cc  = s.command_count != null ? `, ${s.command_count} cmds` : '';
-      return `<span class="cycle-bar" title="${esc(dt)}: ${s.minutes}m${cc}" style="height:${h}px"></span>`;
+      const bar = `<span class="cycle-bar" style="height:${h}px"></span>`;
+      const lbl = hasCmds
+        ? `<span style="font-size:.62rem;color:var(--muted);line-height:1;min-width:10px;text-align:center">${s.command_count != null ? s.command_count : ''}</span>`
+        : '';
+      return `<div title="${esc(dt)}: ${s.minutes}m${cc}" style="display:flex;flex-direction:column;align-items:center;gap:2px">${bar}${lbl}</div>`;
     }).join('');
     const lastLabel = ns.lastCycleMinutes != null ? `${ns.lastCycleMinutes}m` : '\\u2014';
     const cmdEntries = ns.cycleHistory.filter(s => s.command_count != null);
@@ -1600,9 +1686,10 @@ function renderState(ns) {
       ? Math.round(cmdEntries.reduce((a, s) => a + s.command_count, 0) / cmdEntries.length)
       : null;
     const cmdLabel = avgCmds != null ? ` \\u00b7 avg ${avgCmds} cmds/session` : '';
+    const sparkHeight = hasCmds ? '50px' : '36px';
     html += `<div class="md-section"><h3>Session cycle time</h3>
-      <div style="display:flex;align-items:flex-end;gap:3px;height:36px;margin:.4rem 0 .3rem">${bars}</div>
-      <div style="font-size:.72rem;color:var(--muted)">Last: <strong style="color:var(--text)">${esc(lastLabel)}</strong> \\u00b7 ${ns.cycleHistory.length} session${ns.cycleHistory.length !== 1 ? 's' : ''} tracked${cmdLabel}</div>
+      <div style="display:flex;align-items:flex-end;gap:3px;height:${sparkHeight};margin:.4rem 0 .3rem">${bars}</div>
+      <div style="font-size:.72rem;color:var(--muted)">Last: <strong style="color:var(--text)">${esc(lastLabel)}</strong> \\u00b7 ${ns.cycleHistory.length} session${ns.cycleHistory.length !== 1 ? 's' : ''} tracked${cmdLabel}${hasCmds ? ' \\u00b7 cmd count shown below bars' : ''}</div>
     </div>`;
   }
 
@@ -2059,6 +2146,26 @@ function renderPriorities() {
           <div class="p-signals">${signalsHtml}</div>
         </div>
         <div class="p-score">Priority score: ${score}</div>
+        ${(() => {
+          const er = ns.explorationRatio;
+          if (!er || er.ratio == null) return '';
+          const exp   = er.explore || 0;
+          const tot   = er.total   || 1;
+          const xpPct = Math.round(exp / tot * 100);
+          const exPct = 100 - xpPct;
+          const col   = er.low ? 'var(--amber)' : 'var(--green)';
+          return `<div style="margin-top:.5rem">
+            <div style="font-size:.7rem;color:var(--muted);margin-bottom:.25rem">E/X split (last ${er.sessionsWithTypes} typed sessions)</div>
+            <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;background:var(--surface2)">
+              <div style="width:${exPct}%;background:var(--green);opacity:.7" title="Exploit: ${exPct}%"></div>
+              <div style="width:${xpPct}%;background:${col}" title="Explore: ${xpPct}%"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:.68rem;color:var(--muted);margin-top:.2rem">
+              <span style="color:var(--green)">exploit ${exPct}%</span>
+              <span style="color:${col}">explore ${xpPct}%</span>
+            </div>
+          </div>`;
+        })()}
       </div>`;
   }).join('');
 
@@ -2423,23 +2530,29 @@ function renderHeatmap() {
   if (container.dataset.rendered) return;
   container.dataset.rendered = '1';
   container.innerHTML = `<div class="hmap-toolbar">
-    <button class="dag-btn active" id="hbtn-sessions"  onclick="switchHeatmap('sessions')">Session Activity</button>
-    <button class="dag-btn"        id="hbtn-goals"     onclick="switchHeatmap('goals')">Goal Completion</button>
-    <button class="dag-btn"        id="hbtn-velocity"  onclick="switchHeatmap('velocity')">Velocity</button>
+    <button class="dag-btn active" id="hbtn-sessions"   onclick="switchHeatmap('sessions')">Session Activity</button>
+    <button class="dag-btn"        id="hbtn-goals"      onclick="switchHeatmap('goals')">Goal Completion</button>
+    <button class="dag-btn"        id="hbtn-velocity"   onclick="switchHeatmap('velocity')">Velocity</button>
+    <button class="dag-btn"        id="hbtn-goaltypes"  onclick="switchHeatmap('goaltypes')">Goal Types</button>
+    <button class="dag-btn"        id="hbtn-planning"   onclick="switchHeatmap('planning')">Planning</button>
   </div>
   <div id="hpanel-sessions"></div>
-  <div id="hpanel-goals"     style="display:none"></div>
-  <div id="hpanel-velocity"  style="display:none"></div>`;
+  <div id="hpanel-goals"      style="display:none"></div>
+  <div id="hpanel-velocity"   style="display:none"></div>
+  <div id="hpanel-goaltypes"  style="display:none"></div>
+  <div id="hpanel-planning"   style="display:none"></div>`;
   renderSessionHeatmapPanel();
 }
 
 function switchHeatmap(name) {
-  ['sessions', 'goals', 'velocity'].forEach(id => {
+  ['sessions', 'goals', 'velocity', 'goaltypes', 'planning'].forEach(id => {
     document.getElementById('hpanel-' + id).style.display = id === name ? '' : 'none';
     document.getElementById('hbtn-' + id).classList.toggle('active', id === name);
   });
-  if (name === 'goals')    renderGoalHeatmapPanel();
-  if (name === 'velocity') renderVelocityPanel();
+  if (name === 'goals')     renderGoalHeatmapPanel();
+  if (name === 'velocity')  renderVelocityPanel();
+  if (name === 'goaltypes') renderGoalTypesPanel();
+  if (name === 'planning')  renderPlanningPanel();
 }
 
 function renderSessionHeatmapPanel() {
@@ -2780,6 +2893,138 @@ function renderScorecard() {
     el.addEventListener('mouseenter', () => highlightScard(ri, true));
     el.addEventListener('mouseleave', () => highlightScard(ri, false));
   });
+}
+
+// ── E18: Goal type stacked timeline ───────────────────────────────────────────
+
+function renderGoalTypesPanel() {
+  const container = document.getElementById('hpanel-goaltypes');
+  if (container.dataset.rendered) return;
+  container.dataset.rendered = '1';
+
+  // Collect per-namespace per-session E/X data
+  const rows = NS.filter(ns => (ns.goalTypeBySession || []).length > 0);
+  if (!rows.length) {
+    container.innerHTML = '<div class="empty-state" style="padding:2rem">No goal type data yet. Use P23 goal type tagging (E/X) during session open to populate this chart.</div>';
+    return;
+  }
+
+  const BAR_W = 14, BAR_GAP = 3, NS_GAP = 24, LABEL_H = 16, BAR_MAX_H = 80, PAD_LEFT = 120, PAD_TOP = 12;
+
+  let svgParts = [];
+  let y = PAD_TOP;
+
+  rows.forEach(ns => {
+    const sessions = ns.goalTypeBySession;
+    const maxTotal = Math.max(...sessions.map(s => s.exploit + s.explore), 1);
+
+    // Namespace label
+    svgParts.push(`<text x="${PAD_LEFT - 8}" y="${y + BAR_MAX_H / 2 + 4}" text-anchor="end" font-size="11" fill="var(--muted)">${esc(ns.namespace)}</text>`);
+
+    sessions.forEach((s, i) => {
+      const total  = s.exploit + s.explore;
+      const exH    = Math.round(s.exploit / maxTotal * BAR_MAX_H);
+      const xpH    = Math.round(s.explore  / maxTotal * BAR_MAX_H);
+      const x      = PAD_LEFT + i * (BAR_W + BAR_GAP);
+      const exY    = y + (BAR_MAX_H - exH - xpH);
+      const xpY    = y + (BAR_MAX_H - xpH);
+      const tip    = `${esc(s.date)}: ${s.exploit} exploit, ${s.explore} explore`;
+
+      if (xpH > 0)
+        svgParts.push(`<rect x="${x}" y="${xpY}" width="${BAR_W}" height="${xpH}" fill="var(--blue)" opacity=".8"><title>${tip}</title></rect>`);
+      if (exH > 0)
+        svgParts.push(`<rect x="${x}" y="${exY}" width="${BAR_W}" height="${exH}" fill="var(--green)" opacity=".7"><title>${tip}</title></rect>`);
+      if (total === 0)
+        svgParts.push(`<rect x="${x}" y="${y + BAR_MAX_H - 2}" width="${BAR_W}" height="2" fill="var(--subtle)"><title>${esc(s.date)}: no type data</title></rect>`);
+
+      // Date label on first and last bar only
+      if (i === 0 || i === sessions.length - 1) {
+        svgParts.push(`<text x="${x + BAR_W / 2}" y="${y + BAR_MAX_H + LABEL_H}" text-anchor="middle" font-size="9" fill="var(--muted)">${esc(s.date.slice(5))}</text>`);
+      }
+    });
+
+    y += BAR_MAX_H + LABEL_H + NS_GAP;
+  });
+
+  const totalW = PAD_LEFT + Math.max(...rows.map(ns => ns.goalTypeBySession.length)) * (BAR_W + BAR_GAP) + 20;
+  const totalH = y + 20;
+
+  const legend = `<div style="display:flex;gap:1rem;font-size:.75rem;color:var(--muted);margin-bottom:.75rem">
+    <span><span style="display:inline-block;width:10px;height:10px;background:var(--green);opacity:.7;border-radius:2px;margin-right:4px"></span>exploit</span>
+    <span><span style="display:inline-block;width:10px;height:10px;background:var(--blue);opacity:.8;border-radius:2px;margin-right:4px"></span>explore</span>
+    <span style="color:var(--subtle)">bar height proportional to goal count per session</span>
+  </div>`;
+
+  container.innerHTML = `<div style="padding:1rem">
+    <h3 style="font-size:.85rem;margin-bottom:.5rem">Goal type timeline — exploit vs explore per session</h3>
+    ${legend}
+    <div style="overflow-x:auto">
+      <svg viewBox="0 0 ${totalW} ${totalH}" width="${totalW}" height="${totalH}" style="display:block">${svgParts.join('')}</svg>
+    </div>
+  </div>`;
+}
+
+// ── E15: Planning discipline — carry-forward trend ────────────────────────────
+
+function renderPlanningPanel() {
+  const container = document.getElementById('hpanel-planning');
+  if (container.dataset.rendered) return;
+  container.dataset.rendered = '1';
+
+  const rows = NS.filter(ns => (ns.carryForwardTrend || []).length > 0);
+  if (!rows.length) {
+    container.innerHTML = '<div class="empty-state" style="padding:2rem">No session history to analyse yet.</div>';
+    return;
+  }
+
+  const BAR_W = 12, BAR_GAP = 3, NS_GAP = 24, LABEL_H = 16, BAR_MAX_H = 60, PAD_LEFT = 120, PAD_TOP = 12;
+
+  let svgParts = [];
+  let y = PAD_TOP;
+
+  rows.forEach(ns => {
+    const sessions  = ns.carryForwardTrend;
+    const maxVal    = Math.max(...sessions.map(s => Math.max(s.carryForward, s.goalsCompleted)), 1);
+
+    svgParts.push(`<text x="${PAD_LEFT - 8}" y="${y + BAR_MAX_H / 2 + 4}" text-anchor="end" font-size="11" fill="var(--muted)">${esc(ns.namespace)}</text>`);
+
+    sessions.forEach((s, i) => {
+      const cfH  = Math.round(s.carryForward   / maxVal * BAR_MAX_H);
+      const gcH  = Math.round(s.goalsCompleted / maxVal * BAR_MAX_H);
+      const x    = PAD_LEFT + i * (BAR_W + BAR_GAP);
+      const tip  = `${esc(s.date)}: ${s.goalsCompleted} completed, ${s.carryForward} carried forward`;
+
+      // completed bar (green, background)
+      if (gcH > 0)
+        svgParts.push(`<rect x="${x}" y="${y + BAR_MAX_H - gcH}" width="${BAR_W}" height="${gcH}" fill="var(--green)" opacity=".35"><title>${tip}</title></rect>`);
+      // carry-forward bar (amber, overlay)
+      if (cfH > 0)
+        svgParts.push(`<rect x="${x}" y="${y + BAR_MAX_H - cfH}" width="${BAR_W}" height="${cfH}" fill="var(--amber)" opacity=".8"><title>${tip}</title></rect>`);
+
+      if (i === 0 || i === sessions.length - 1) {
+        svgParts.push(`<text x="${x + BAR_W / 2}" y="${y + BAR_MAX_H + LABEL_H}" text-anchor="middle" font-size="9" fill="var(--muted)">${esc(s.date.slice(5))}</text>`);
+      }
+    });
+
+    y += BAR_MAX_H + LABEL_H + NS_GAP;
+  });
+
+  const totalW = PAD_LEFT + Math.max(...rows.map(ns => ns.carryForwardTrend.length)) * (BAR_W + BAR_GAP) + 20;
+  const totalH = y + 20;
+
+  const legend = `<div style="display:flex;gap:1rem;font-size:.75rem;color:var(--muted);margin-bottom:.75rem">
+    <span><span style="display:inline-block;width:10px;height:10px;background:var(--green);opacity:.35;border-radius:2px;margin-right:4px"></span>goals completed</span>
+    <span><span style="display:inline-block;width:10px;height:10px;background:var(--amber);opacity:.8;border-radius:2px;margin-right:4px"></span>carried forward (incomplete)</span>
+    <span style="color:var(--subtle)">lower amber = better planning discipline</span>
+  </div>`;
+
+  container.innerHTML = `<div style="padding:1rem">
+    <h3 style="font-size:.85rem;margin-bottom:.5rem">Planning discipline — carry-forward vs goals completed</h3>
+    ${legend}
+    <div style="overflow-x:auto">
+      <svg viewBox="0 0 ${totalW} ${totalH}" width="${totalW}" height="${totalH}" style="display:block">${svgParts.join('')}</svg>
+    </div>
+  </div>`;
 }
 
 // ── Session velocity chart (stacked bars, all namespaces) ────────────────────
