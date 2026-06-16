@@ -171,16 +171,27 @@ def _stale_bullet_count(reality_md, state, days=30):
     return stale
 
 
+def _parse_goal_entry(entry):
+    """Normalise a goal_completions entry to (total_goals, hit_rate_pct)."""
+    if isinstance(entry, dict):
+        return entry.get("total_goals", 0), int(entry.get("hit_rate", 0))
+    if isinstance(entry, list) and entry:
+        n_done = sum(1 for s in entry if s == "completed")
+        total = len(entry)
+        return total, int(n_done / total * 100)
+    return 0, 0
+
+
 def _suggested_goal_count(state):
     completions = state.get("goal_completions", {})
     if not completions:
         return {"count": 4, "basis": "no history — using default"}
     rates = []
     for v in completions.values():
-        if isinstance(v, dict):
-            rates.append(v.get("hit_rate", 0))
-        elif isinstance(v, list) and v:
-            rates.append(int(sum(1 for s in v if s == "completed") / len(v) * 100))
+        if not v:
+            continue
+        _, rate = _parse_goal_entry(v)
+        rates.append(rate)
     if not rates:
         return {"count": 4, "basis": "no history — using default"}
     avg = sum(rates) / len(rates)
@@ -242,6 +253,25 @@ def _parse_history_file(path):
     return result
 
 
+def _classify_session(session, hit_rate=None):
+    """Classify a parsed history session as 'high', 'neutral', or 'poor'.
+
+    hit_rate (0–100) from goal_completions is preferred; falls back to
+    completed/planned ratio from the history file.
+    """
+    planned   = len(session.get("planned", []))
+    completed = len(session.get("completed", []))
+    if hit_rate is None:
+        if planned == 0:
+            return "neutral"
+        hit_rate = completed / planned * 100
+    if hit_rate >= 80:
+        return "high"
+    if hit_rate < 50:
+        return "poor"
+    return "neutral"
+
+
 def _top_tags(learnings, n=5):
     counts = {}
     for l in learnings:
@@ -257,24 +287,14 @@ def _goal_stats(state):
 
     sessions = sorted(completions.items())[-5:]
 
-    def _parse_entry(entry):
-        if isinstance(entry, dict):
-            total = entry.get("total_goals", 0)
-            rate  = int(entry.get("hit_rate", 0))
-            return total, rate
-        # Legacy: bare list of status strings
-        total = len(entry) if isinstance(entry, list) else 0
-        n_done = sum(1 for s in entry if s == "completed") if total else 0
-        return total, int(n_done / total * 100) if total else 0
-
     dots = []
     for _, entry in sessions:
-        total, rate = _parse_entry(entry)
+        total, rate = _parse_goal_entry(entry)
         level = "high" if rate >= 80 else "mid" if rate >= 50 else "low"
         dots.append({"level": level, "rate": rate})
 
     _, latest = sessions[-1] if sessions else (None, {})
-    total, rate = _parse_entry(latest)
+    total, rate = _parse_goal_entry(latest)
     return (rate if total else None), dots
 
 
@@ -287,13 +307,7 @@ def _goal_by_month(state):
         month = str(key)[:7]
         if len(month) != 7 or month[4] != '-':
             continue
-        if isinstance(entry, dict):
-            rate = int(entry.get("hit_rate", 0))
-        else:
-            # Legacy: list of status strings
-            total = len(entry)
-            n_done = sum(1 for s in entry if s == "completed")
-            rate = int(n_done / total * 100) if total else 0
+        _, rate = _parse_goal_entry(entry)
         if month not in monthly:
             monthly[month] = []
         monthly[month].append(rate)
@@ -398,8 +412,15 @@ def load_namespace(ns_dir):
     exploration_ratio    = _compute_exploration_ratio(state)
     last_reality_score   = state.get("last_reality_score")
     goal_type_by_session = _goal_type_by_session(state)
-    # Carry-forward trend: all history files (uncapped) — sorted chronologically
+    # Carry-forward trend + quality distribution: all history files (uncapped) — sorted chronologically
     carry_forward_trend = []
+    quality_dist = {"high": 0, "neutral": 0, "poor": 0}
+    # Build date-keyed lookup from goal_completions for hit_rate matching
+    completions_by_date = {}
+    for ts, entry in state.get("goal_completions", {}).items():
+        date = str(ts)[:10]
+        if isinstance(entry, dict):
+            completions_by_date[date] = entry.get("hit_rate")
     if history_dir.exists():
         for f in sorted(history_dir.glob("*.md")):
             parsed = _parse_history_file(f)
@@ -409,9 +430,18 @@ def load_namespace(ns_dir):
                     "carryForward":   len(parsed["incomplete"]),
                     "goalsCompleted": len(parsed["completed"]),
                 })
+                hit_rate = completions_by_date.get(f.stem[:10])
+                quality_dist[_classify_session(parsed, hit_rate)] += 1
 
     # Intent drift timeline
     intent_history = _read_jsonl(ns_dir / "intent_history.jsonl")
+
+    # Decay history — corpus maintenance events (newest first)
+    decay_history = list(reversed(_read_jsonl(ns_dir / "decay_history.jsonl")))
+
+    # Deferral escalation counts (used in Priorities scoring)
+    code_review_defer_count  = len(_read_jsonl(ns_dir / "code_review_deferrals.jsonl"))
+    research_defer_count     = len(_read_jsonl(ns_dir / "research_deferrals.jsonl"))
 
     # External research signals
     external_signals = list(reversed(_read_jsonl(ns_dir / "external_signals.jsonl")))
@@ -480,6 +510,10 @@ def load_namespace(ns_dir):
         "last_reality_score":        last_reality_score,
         "goal_type_by_session":      goal_type_by_session,
         "carry_forward_trend":       carry_forward_trend,
+        "quality_dist":              quality_dist,
+        "decay_history":             decay_history,
+        "code_review_defer_count":   code_review_defer_count,
+        "research_defer_count":      research_defer_count,
     }
 
 
@@ -638,6 +672,10 @@ def _js_data(namespaces):
             "lastRealityScore":        n["last_reality_score"],
             "goalTypeBySession":       n["goal_type_by_session"],
             "carryForwardTrend":       n["carry_forward_trend"],
+            "qualityDist":             n["quality_dist"],
+            "decayHistory":            n["decay_history"],
+            "codeReviewDeferCount":    n["code_review_defer_count"],
+            "researchDeferCount":      n["research_defer_count"],
         })
     raw = json.dumps(data, ensure_ascii=False, default=str)
     # Prevent </script> from breaking the embedding
@@ -802,6 +840,13 @@ HTML_TEMPLATE = """\
     .ch-low    { background: var(--red); }
     .ch-score  { font-weight: 700; color: var(--text); min-width: 2rem; }
     .ch-detail { color: var(--subtle); }
+    .decay-event {
+      padding: .45rem .6rem; border-left: 2px solid var(--border); margin-bottom: .4rem;
+    }
+    .decay-date   { color: var(--muted); font-size: .72rem; margin-right: .5rem; }
+    .decay-count  { color: var(--amber); font-size: .72rem; margin-right: .5rem; }
+    .decay-reason { color: var(--subtle); font-size: .7rem; }
+    .decay-texts  { margin: .25rem 0 0 .5rem; padding: 0; list-style: none; }
     .signals-list { display: flex; flex-direction: column; gap: .75rem; }
     .signal-entry {
       padding: .6rem .8rem; border: 1px solid var(--border); border-radius: 6px;
@@ -1772,13 +1817,40 @@ function renderLearnings(ns) {
       </tr>`;
   }).join('');
 
+  const decayHtml = renderDecayTimeline(ns);
   return corpusHealthHtml + supersededNote + `
     <table class="learnings-table">
       <thead>
         <tr><th>Wt</th><th>Learning</th><th>Tags</th><th>Type</th><th>Date</th></tr>
       </thead>
       <tbody>${rows}</tbody>
-    </table>`;
+    </table>` + decayHtml;
+}
+
+function renderDecayTimeline(ns) {
+  const events = ns.decayHistory || [];
+  if (!events.length) return '';
+  const reasonLabel = r => r === 'dream_pass_weak' ? 'dream pass (weak)' : r === 'dream_pass_merge' ? 'dream pass (merged)' : esc(r);
+  const items = events.map(e => {
+    const date  = (e.timestamp || '').slice(0, 10);
+    const count = e.removed_count || (e.removed_texts || []).length;
+    const texts = (e.removed_texts || []).slice(0, 3);
+    const more  = (e.removed_texts || []).length - texts.length;
+    const preview = texts.map(t => `<li style="color:var(--muted);font-size:.7rem">${esc(t.length > 80 ? t.slice(0, 80) + '\\u2026' : t)}</li>`).join('');
+    const moreNote = more > 0 ? `<li style="color:var(--subtle);font-size:.68rem">+${more} more</li>` : '';
+    return `<div class="decay-event">
+      <span class="decay-date">${date}</span>
+      <span class="decay-count">${count} removed</span>
+      <span class="decay-reason">${reasonLabel(e.reason || '')}</span>
+      <ul class="decay-texts">${preview}${moreNote}</ul>
+    </div>`;
+  }).join('');
+  return `<details class="decay-timeline" style="margin-top:1.25rem">
+    <summary style="font-size:.75rem;color:var(--muted);cursor:pointer;user-select:none">
+      Corpus maintenance &mdash; ${events.length} decay event${events.length !== 1 ? 's' : ''}
+    </summary>
+    <div style="margin-top:.5rem">${items}</div>
+  </details>`;
 }
 
 // ── Decisions ─────────────────────────────────────────────────────────────────
@@ -1841,6 +1913,31 @@ function renderExternalSignals(ns) {
 
 // ── History timeline ──────────────────────────────────────────────────────────
 
+function renderQualityBar(ns) {
+  const qd = ns.qualityDist || {};
+  const total = (qd.high || 0) + (qd.neutral || 0) + (qd.poor || 0);
+  if (!total) return '';
+  const pct = n => Math.round(n / total * 100);
+  const segments = [
+    { key: 'high',    color: '#38a86e', label: 'High' },
+    { key: 'neutral', color: '#5a7a8a', label: 'Neutral' },
+    { key: 'poor',    color: '#c0392b', label: 'Poor' },
+  ].filter(s => qd[s.key] > 0);
+  const barSegs = segments.map(s =>
+    `<div style="width:${pct(qd[s.key])}%;background:${s.color};height:100%;display:inline-block;vertical-align:top"
+          title="${s.label}: ${qd[s.key]} session${qd[s.key] !== 1 ? 's' : ''} (${pct(qd[s.key])}%)"></div>`
+  ).join('');
+  const legend = segments.map(s =>
+    `<span style="color:${s.color}">${s.label} ${qd[s.key]}</span>`
+  ).join('<span style="color:var(--muted)"> &#x00b7; </span>');
+  return `<div style="margin-bottom:1rem">
+    <div style="font-size:.75rem;color:var(--muted);margin-bottom:.35rem">
+      Session quality &mdash; ${total} total &nbsp; ${legend}
+    </div>
+    <div style="height:8px;border-radius:4px;overflow:hidden;background:var(--surface2)">${barSegs}</div>
+  </div>`;
+}
+
 function renderHistory(ns) {
   if (!ns.history.length) {
     return '<div class="empty-state">No session history recorded yet.</div>';
@@ -1885,7 +1982,7 @@ function renderHistory(ns) {
       </div>`;
   }).join('');
 
-  return `<div class="timeline">${sessions}</div>`;
+  return renderQualityBar(ns) + `<div class="timeline">${sessions}</div>`;
 }
 
 function toggleSession(i) {
@@ -2014,6 +2111,15 @@ function computePriorities() {
     if (ns.corpusHealth && ns.corpusHealth.score < 50) {
       score += 12;
       reasons.push({ icon: '🧪', text: `Low corpus health (${ns.corpusHealth.score}/100) — validate hypotheses or boost learnings` });
+    }
+
+    if ((ns.codeReviewDeferCount || 0) >= 2) {
+      score += 10;
+      reasons.push({ icon: '🔬', text: `Code review deferred ${ns.codeReviewDeferCount}x — overdue` });
+    }
+    if ((ns.researchDeferCount || 0) >= 2) {
+      score += 8;
+      reasons.push({ icon: '🔍', text: `External research deferred ${ns.researchDeferCount}x — overdue` });
     }
 
     return { ns, idx, score, reasons };
@@ -2525,6 +2631,21 @@ function dagPosTooltip(ev, tip) {
 
 // ── Heatmap ───────────────────────────────────────────────────────────────────
 
+function wireHeatmapTooltip(container, cellSelector) {
+  const tooltip = document.getElementById('heatmap-tooltip');
+  container.addEventListener('mousemove', ev => {
+    const cell = ev.target.closest(cellSelector);
+    if (!cell) { tooltip.style.display = 'none'; return; }
+    tooltip.textContent = cell.dataset.tip;
+    tooltip.style.display = 'block';
+    const x = ev.clientX + 14, y = ev.clientY + 14;
+    const tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
+    tooltip.style.left = (x + tw > window.innerWidth  - 8 ? ev.clientX - tw - 14 : x) + 'px';
+    tooltip.style.top  = (y + th > window.innerHeight - 8 ? ev.clientY - th - 14 : y) + 'px';
+  });
+  container.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+}
+
 function renderHeatmap() {
   const container = document.getElementById('view-heatmap');
   if (container.dataset.rendered) return;
@@ -2632,19 +2753,7 @@ function renderSessionHeatmapPanel() {
 
   container.innerHTML = html;
 
-  // Tooltip wiring
-  const tooltip = document.getElementById('heatmap-tooltip');
-  container.addEventListener('mousemove', ev => {
-    const cell = ev.target.closest('.heatmap-cell');
-    if (!cell) { tooltip.style.display = 'none'; return; }
-    tooltip.textContent = cell.dataset.tip;
-    tooltip.style.display = 'block';
-    const x = ev.clientX + 14, y = ev.clientY + 14;
-    const tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
-    tooltip.style.left = (x + tw > window.innerWidth  - 8 ? ev.clientX - tw - 14 : x) + 'px';
-    tooltip.style.top  = (y + th > window.innerHeight - 8 ? ev.clientY - th - 14 : y) + 'px';
-  });
-  container.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+  wireHeatmapTooltip(container, '.heatmap-cell');
 }
 
 // ── Learning timeline ─────────────────────────────────────────────────────────
@@ -3207,18 +3316,7 @@ function renderGoalHeatmapPanel() {
 
   container.innerHTML = html;
 
-  const tooltip = document.getElementById('heatmap-tooltip');
-  container.addEventListener('mousemove', ev => {
-    const cell = ev.target.closest('.goal-cell');
-    if (!cell) { tooltip.style.display = 'none'; return; }
-    tooltip.textContent = cell.dataset.tip;
-    tooltip.style.display = 'block';
-    const x = ev.clientX + 14, y = ev.clientY + 14;
-    const tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
-    tooltip.style.left = (x + tw > window.innerWidth  - 8 ? ev.clientX - tw - 14 : x) + 'px';
-    tooltip.style.top  = (y + th > window.innerHeight - 8 ? ev.clientY - th - 14 : y) + 'px';
-  });
-  container.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+  wireHeatmapTooltip(container, '.goal-cell');
 }
 
 function renderDAG() {
