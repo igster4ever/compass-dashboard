@@ -198,10 +198,21 @@ count as user-controlled.
 | 651–1090 | `HTML_TEMPLATE` — HTML structure + all CSS |
 | 1090–1455 | JS: constants, `esc()`, card rendering, detail panel, tab switching |
 | 1456–1511 | JS: `deriveTasks()`, `renderTasks()` |
-| 1512–1905 | JS: detail panel sub-tabs (state, learnings, decisions, history), `renderExternalSignals()` |
+| 1512–1905 | JS: detail panel sub-tabs — `renderState()` (slim dispatcher) + 10 `renderStateSection_*` helpers, learnings, decisions, history, `renderExternalSignals()` |
 | 1906–2100 | JS: `switchView()`, priority scoring helpers, `renderPriorities()` |
 | 2100–2551 | JS: search / command palette |
 | 2552–2899 | JS: `renderHeatmap()`, `renderSessionHeatmapPanel()`, `renderGoalHeatmapPanel()` |
 | 2900–3031 | JS: `renderGoalTypesPanel()` (E18), `renderPlanningPanel()` (E15) |
 | 3032–3223 | JS: `renderVelocityPanel()`, `renderLearningTimeline()`, `renderScorecard()` |
 | 3224–3590 | JS: `renderDAG()`, force simulation, DAG tooltip |
+
+**Tests (`tests/`):**
+
+| File | What it covers |
+|------|----------------|
+| `test_data_loading.py` | 33 unit tests for `_reality_completeness`, `_corpus_health`, `_goal_stats`, `_stale_bullet_count` — no filesystem deps |
+| `test_generate.py` | 12 smoke tests for `render_html()` — structural markers, `const NS = [` embedding, script-tag injection escaping |
+
+Run: `python3 -m pytest tests/ -q` from the repo root.
+
+**`scripts/MODULARISATION_SPIKE.md`** — spike assessment for extracting `HTML_TEMPLATE` to `template.html` + `dashboard.js`. Verdict: viable, ~2.5h, main win is eliminating the JS-in-Python escaping trap.

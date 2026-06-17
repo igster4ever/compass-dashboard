@@ -1433,7 +1433,7 @@ HTML_TEMPLATE = """\
 
 <script>
 const NS = [[DATA_JSON]];
-let selected = -1;
+const Search = { selected: -1, index: null, activeFilter: 'all', focusIdx: -1, flatResults: [] };
 
 // ── Markdown renderer (headings, lists, bold, inline code) ───────────────────
 
@@ -1478,16 +1478,16 @@ function esc(s) {
 // ── Card selection ────────────────────────────────────────────────────────────
 
 function selectCard(i) {
-  if (selected === i) {
+  if (Search.selected === i) {
     document.getElementById(`card-${i}`).classList.remove('selected');
     document.getElementById('detail').classList.remove('visible');
-    selected = -1;
+    Search.selected = -1;
     return;
   }
-  if (selected >= 0) {
-    document.getElementById(`card-${selected}`)?.classList.remove('selected');
+  if (Search.selected >= 0) {
+    document.getElementById(`card-${Search.selected}`)?.classList.remove('selected');
   }
-  selected = i;
+  Search.selected = i;
   document.getElementById(`card-${i}`).classList.add('selected');
   renderDetail(NS[i]);
   const detail = document.getElementById('detail');
@@ -1640,116 +1640,128 @@ function renderTasks(ns) {
   return `<div class="task-list">${rows}</div>`;
 }
 
-function renderState(ns) {
-  let html = '';
-
-  // Intent
+function renderStateSection_Intent(ns) {
   const intentVer = ns.intentVersion > 1 ? ` <span class="version-badge">v${ns.intentVersion}</span>` : '';
-  html += `<div class="md-section"><h3>Intent${intentVer}</h3><div>${md(ns.intent)}</div></div>`;
+  return `<div class="md-section"><h3>Intent${intentVer}</h3><div>${md(ns.intent)}</div></div>`;
+}
 
-  // Intent history (only if 2+ versions exist)
-  if (ns.intentHistory && ns.intentHistory.length > 1) {
-    const entries = [...ns.intentHistory].reverse().map(h => {
-      const date   = (h.recorded_at || '').slice(0, 10);
-      const oneliner = (h.text || '').split('\\n')[0].slice(0, 120);
-      const reason = h.reason ? `<div class="intent-hist-reason">${esc(h.reason)}</div>` : '';
-      return `<div class="intent-hist-entry">
-        <span class="intent-hist-ver">v${h.version}</span>
-        <span class="intent-hist-date">${esc(date)}</span>
-        <div class="intent-hist-text">${esc(oneliner)}</div>
-        ${reason}
-      </div>`;
-    }).join('');
-    html += `<div class="md-section"><h3>Intent history</h3>${entries}</div>`;
-  }
-
-  // Active goals (open sessions only)
-  if (ns.open && ns.plannedActions.length > 0) {
-    const items = ns.plannedActions.map(a => `<li>${esc(a)}</li>`).join('');
-    html += `<div class="md-section"><h3>Active goals</h3><ul class="goals-list">${items}</ul></div>`;
-  }
-
-  // Suggested goal count for next session (closed sessions only)
-  if (!ns.open && ns.suggestedGoalCount) {
-    const sgc = ns.suggestedGoalCount;
-    html += `<div class="md-section"><h3>Next session</h3>
-      <div style="font-size:.82rem">Suggested goals: <strong>${sgc.count}</strong>
-      <span style="color:var(--muted);font-size:.75rem"> \\u2014 ${esc(sgc.basis)}</span></div>
+function renderStateSection_IntentHistory(ns) {
+  if (!ns.intentHistory || ns.intentHistory.length <= 1) return '';
+  const entries = [...ns.intentHistory].reverse().map(h => {
+    const date   = (h.recorded_at || '').slice(0, 10);
+    const oneliner = (h.text || '').split('\\n')[0].slice(0, 120);
+    const reason = h.reason ? `<div class="intent-hist-reason">${esc(h.reason)}</div>` : '';
+    return `<div class="intent-hist-entry">
+      <span class="intent-hist-ver">v${h.version}</span>
+      <span class="intent-hist-date">${esc(date)}</span>
+      <div class="intent-hist-text">${esc(oneliner)}</div>
+      ${reason}
     </div>`;
-  }
+  }).join('');
+  return `<div class="md-section"><h3>Intent history</h3>${entries}</div>`;
+}
 
-  // Next session entry point (code_context.md)
-  if (ns.codeContext) {
-    html += `<div class="md-section"><h3>Next session entry point</h3>
-      <div class="context-block">${md(ns.codeContext)}</div>
-    </div>`;
-  }
+function renderStateSection_Goals(ns) {
+  if (!ns.open || ns.plannedActions.length === 0) return '';
+  const items = ns.plannedActions.map(a => `<li>${esc(a)}</li>`).join('');
+  return `<div class="md-section"><h3>Active goals</h3><ul class="goals-list">${items}</ul></div>`;
+}
 
-  // Reality
+function renderStateSection_NextSession(ns) {
+  if (ns.open || !ns.suggestedGoalCount) return '';
+  const sgc = ns.suggestedGoalCount;
+  return `<div class="md-section"><h3>Next session</h3>
+    <div style="font-size:.82rem">Suggested goals: <strong>${sgc.count}</strong>
+    <span style="color:var(--muted);font-size:.75rem"> \\u2014 ${esc(sgc.basis)}</span></div>
+  </div>`;
+}
+
+function renderStateSection_CodeContext(ns) {
+  if (!ns.codeContext) return '';
+  return `<div class="md-section"><h3>Next session entry point</h3>
+    <div class="context-block">${md(ns.codeContext)}</div>
+  </div>`;
+}
+
+function renderStateSection_Reality(ns) {
   const staleNote = ns.staleBulletCount > 0
     ? ` <span style="color:var(--amber);font-size:.66rem;font-weight:normal">\\u26a0 ${ns.staleBulletCount} unverified</span>`
     : '';
-  html += `<div class="md-section"><h3>Reality${staleNote}</h3><div>${md(ns.reality)}</div></div>`;
+  return `<div class="md-section"><h3>Reality${staleNote}</h3><div>${md(ns.reality)}</div></div>`;
+}
 
-  // Recent decisions (last 3, inline summary — full log in Decisions tab)
-  if (ns.decisions && ns.decisions.length > 0) {
-    const recent = [...ns.decisions].reverse().slice(0, 3);
-    const items = recent.map(d => {
-      const rat = d.rationale ? ` <span style="color:var(--muted);font-size:.75rem">— ${esc(d.rationale)}</span>` : '';
-      return `<li>${esc(d.decision || d.text || '')}${rat}</li>`;
-    }).join('');
-    html += `<div class="md-section"><h3>Recent decisions</h3><ul>${items}</ul></div>`;
-  }
+function renderStateSection_Decisions(ns) {
+  if (!ns.decisions || ns.decisions.length === 0) return '';
+  const recent = [...ns.decisions].reverse().slice(0, 3);
+  const items = recent.map(d => {
+    const rat = d.rationale ? ` <span style="color:var(--muted);font-size:.75rem">— ${esc(d.rationale)}</span>` : '';
+    return `<li>${esc(d.decision || d.text || '')}${rat}</li>`;
+  }).join('');
+  return `<div class="md-section"><h3>Recent decisions</h3><ul>${items}</ul></div>`;
+}
 
-  // Deferred opportunities
-  if (ns.deferred.length > 0) {
-    const items = ns.deferred.map(d => {
-      const text = d.text || d.opportunity_text || d.key;
-      const cnt  = d.defer_count || 1;
-      return `<li><span class="defer-count">×${cnt}</span>${esc(text)}</li>`;
-    }).join('');
-    html += `<div class="md-section"><h3>Deferred opportunities</h3><ul class="deferred-list">${items}</ul></div>`;
-  }
+function renderStateSection_Deferred(ns) {
+  if (ns.deferred.length === 0) return '';
+  const items = ns.deferred.map(d => {
+    const text = d.text || d.opportunity_text || d.key;
+    const cnt  = d.defer_count || 1;
+    return `<li><span class="defer-count">×${cnt}</span>${esc(text)}</li>`;
+  }).join('');
+  return `<div class="md-section"><h3>Deferred opportunities</h3><ul class="deferred-list">${items}</ul></div>`;
+}
 
-  // Cycle time sparkline
-  if (ns.cycleHistory && ns.cycleHistory.length > 0) {
-    const maxMins = Math.max(...ns.cycleHistory.map(s => s.minutes), 1);
-    const hasCmds = ns.cycleHistory.some(s => s.command_count != null);
-    const bars = ns.cycleHistory.map(s => {
-      const h   = Math.max(4, Math.round(s.minutes / maxMins * 32));
-      const dt  = (s.opened_at || '').slice(0, 10);
-      const cc  = s.command_count != null ? `, ${s.command_count} cmds` : '';
-      const bar = `<span class="cycle-bar" style="height:${h}px"></span>`;
-      const lbl = hasCmds
-        ? `<span style="font-size:.62rem;color:var(--muted);line-height:1;min-width:10px;text-align:center">${s.command_count != null ? s.command_count : ''}</span>`
-        : '';
-      return `<div title="${esc(dt)}: ${s.minutes}m${cc}" style="display:flex;flex-direction:column;align-items:center;gap:2px">${bar}${lbl}</div>`;
-    }).join('');
-    const lastLabel = ns.lastCycleMinutes != null ? `${ns.lastCycleMinutes}m` : '\\u2014';
-    const cmdEntries = ns.cycleHistory.filter(s => s.command_count != null);
-    const avgCmds    = cmdEntries.length > 0
-      ? Math.round(cmdEntries.reduce((a, s) => a + s.command_count, 0) / cmdEntries.length)
-      : null;
-    const cmdLabel = avgCmds != null ? ` \\u00b7 avg ${avgCmds} cmds/session` : '';
-    const sparkHeight = hasCmds ? '50px' : '36px';
-    html += `<div class="md-section"><h3>Session cycle time</h3>
-      <div style="display:flex;align-items:flex-end;gap:3px;height:${sparkHeight};margin:.4rem 0 .3rem">${bars}</div>
-      <div style="font-size:.72rem;color:var(--muted)">Last: <strong style="color:var(--text)">${esc(lastLabel)}</strong> \\u00b7 ${ns.cycleHistory.length} session${ns.cycleHistory.length !== 1 ? 's' : ''} tracked${cmdLabel}${hasCmds ? ' \\u00b7 cmd count shown below bars' : ''}</div>
-    </div>`;
-  }
+function renderStateSection_CycleSparkline(ns) {
+  if (!ns.cycleHistory || ns.cycleHistory.length === 0) return '';
+  const maxMins = Math.max(...ns.cycleHistory.map(s => s.minutes), 1);
+  const hasCmds = ns.cycleHistory.some(s => s.command_count != null);
+  const bars = ns.cycleHistory.map(s => {
+    const h   = Math.max(4, Math.round(s.minutes / maxMins * 32));
+    const dt  = (s.opened_at || '').slice(0, 10);
+    const cc  = s.command_count != null ? `, ${s.command_count} cmds` : '';
+    const bar = `<span class="cycle-bar" style="height:${h}px"></span>`;
+    const lbl = hasCmds
+      ? `<span style="font-size:.62rem;color:var(--muted);line-height:1;min-width:10px;text-align:center">${s.command_count != null ? s.command_count : ''}</span>`
+      : '';
+    return `<div title="${esc(dt)}: ${s.minutes}m${cc}" style="display:flex;flex-direction:column;align-items:center;gap:2px">${bar}${lbl}</div>`;
+  }).join('');
+  const lastLabel = ns.lastCycleMinutes != null ? `${ns.lastCycleMinutes}m` : '\\u2014';
+  const cmdEntries = ns.cycleHistory.filter(s => s.command_count != null);
+  const avgCmds    = cmdEntries.length > 0
+    ? Math.round(cmdEntries.reduce((a, s) => a + s.command_count, 0) / cmdEntries.length)
+    : null;
+  const cmdLabel = avgCmds != null ? ` \\u00b7 avg ${avgCmds} cmds/session` : '';
+  const sparkHeight = hasCmds ? '50px' : '36px';
+  return `<div class="md-section"><h3>Session cycle time</h3>
+    <div style="display:flex;align-items:flex-end;gap:3px;height:${sparkHeight};margin:.4rem 0 .3rem">${bars}</div>
+    <div style="font-size:.72rem;color:var(--muted)">Last: <strong style="color:var(--text)">${esc(lastLabel)}</strong> \\u00b7 ${ns.cycleHistory.length} session${ns.cycleHistory.length !== 1 ? 's' : ''} tracked${cmdLabel}${hasCmds ? ' \\u00b7 cmd count shown below bars' : ''}</div>
+  </div>`;
+}
 
-  // Dream consolidation status
+function renderStateSection_DreamStatus(ns) {
   const dsd       = ns.sessionsSinceDream || 0;
   const dreamIcon = ns.dreamDue ? '⚠' : '✓';
   const dreamCol  = ns.dreamDue ? 'var(--amber)' : 'var(--muted)';
   const dreamMsg  = ns.dreamDue
     ? `due — ${dsd} session${dsd !== 1 ? 's' : ''} since last consolidation`
     : `${dsd} session${dsd !== 1 ? 's' : ''} since last consolidation`;
-  html += `<div class="md-section"><h3>Dream consolidation</h3>
+  return `<div class="md-section"><h3>Dream consolidation</h3>
     <div style="font-size:.82rem;color:${dreamCol}">${dreamIcon} ${esc(dreamMsg)}</div>
   </div>`;
+}
 
-  return html;
+function renderState(ns) {
+  return [
+    renderStateSection_Intent(ns),
+    renderStateSection_IntentHistory(ns),
+    renderStateSection_Goals(ns),
+    renderStateSection_NextSession(ns),
+    renderStateSection_CodeContext(ns),
+    renderStateSection_Reality(ns),
+    renderStateSection_Decisions(ns),
+    renderStateSection_Deferred(ns),
+    renderStateSection_CycleSparkline(ns),
+    renderStateSection_DreamStatus(ns),
+  ].join('');
 }
 
 function renderLearnings(ns) {
@@ -2280,16 +2292,13 @@ function renderPriorities() {
 
 // ── Search (command palette) ────────────────────────────────────────────────────────────────────────────────
 
-let SEARCH_INDEX = null;
-let _activeFilter = 'all';
-let _focusIdx     = -1;
-let _flatResults  = [];
+// Search state is in the Search object (declared above near selectCard)
 
 function forceSelectCard(i) {
-  if (selected >= 0 && selected !== i) {
-    document.getElementById('card-' + selected)?.classList.remove('selected');
+  if (Search.selected >= 0 && Search.selected !== i) {
+    document.getElementById('card-' + Search.selected)?.classList.remove('selected');
   }
-  selected = i;
+  Search.selected = i;
   document.getElementById('card-' + i)?.classList.add('selected');
   renderDetail(NS[i]);
   const detail = document.getElementById('detail');
@@ -2305,13 +2314,13 @@ function openSearch() {
   inp.focus();
   inp.select();
   renderFilterPills();
-  if (inp.value.trim()) doSearch(inp.value.trim().toLowerCase(), _activeFilter);
+  if (inp.value.trim()) doSearch(inp.value.trim().toLowerCase(), Search.activeFilter);
 }
 
 function closeSearch() {
   document.getElementById('search-modal').style.display = 'none';
-  _focusIdx = -1;
-  _flatResults = [];
+  Search.focusIdx = -1;
+  Search.flatResults = [];
 }
 
 function closeSearchIfBackdrop(e) {
@@ -2368,27 +2377,27 @@ function handleSearch(val) {
   if (!q) {
     document.getElementById('search-results').innerHTML =
       '<div class="search-empty">Type to search\u2026</div>';
-    _flatResults = []; _focusIdx = -1;
+    Search.flatResults = []; Search.focusIdx = -1;
     return;
   }
-  if (!SEARCH_INDEX) SEARCH_INDEX = buildSearchIndex();
-  doSearch(q, _activeFilter);
+  if (!Search.index) Search.index = buildSearchIndex();
+  doSearch(q, Search.activeFilter);
 }
 
 function handleSearchKey(e) {
   if (e.key === 'Escape') { closeSearch(); return; }
   if (e.key === 'ArrowDown') {
     e.preventDefault();
-    _focusIdx = Math.min(_focusIdx + 1, _flatResults.length - 1);
+    Search.focusIdx = Math.min(Search.focusIdx + 1, Search.flatResults.length - 1);
     updateFocus(); return;
   }
   if (e.key === 'ArrowUp') {
     e.preventDefault();
-    _focusIdx = Math.max(_focusIdx - 1, 0);
+    Search.focusIdx = Math.max(Search.focusIdx - 1, 0);
     updateFocus(); return;
   }
-  if (e.key === 'Enter' && _focusIdx >= 0 && _flatResults[_focusIdx]) {
-    const r = _flatResults[_focusIdx];
+  if (e.key === 'Enter' && Search.focusIdx >= 0 && Search.flatResults[Search.focusIdx]) {
+    const r = Search.flatResults[Search.focusIdx];
     handleResultClick(r.nsIdx, r.section,
       r.subIdx !== undefined ? r.subIdx : -1, r.field || '');
   }
@@ -2396,14 +2405,14 @@ function handleSearchKey(e) {
 
 function updateFocus() {
   document.querySelectorAll('#search-results .search-result-item').forEach((el, i) => {
-    el.classList.toggle('focused', i === _focusIdx);
-    if (i === _focusIdx) el.scrollIntoView({block: 'nearest'});
+    el.classList.toggle('focused', i === Search.focusIdx);
+    if (i === Search.focusIdx) el.scrollIntoView({block: 'nearest'});
   });
 }
 
 function setFilter(filter) {
-  _activeFilter = filter;
-  _focusIdx = -1;
+  Search.activeFilter = filter;
+  Search.focusIdx = -1;
   renderFilterPills();
   const q = document.getElementById('search-palette-input').value.trim().toLowerCase();
   if (q) doSearch(q, filter);
@@ -2414,7 +2423,7 @@ function renderFilterPills() {
   const labels  = {all: 'All', state: 'State', learnings: 'Learnings',
                    decisions: 'Decisions', history: 'History'};
   document.getElementById('search-filters').innerHTML = filters.map(f =>
-    `<button class="search-filter-pill${f === _activeFilter ? ' active' : ''}" onclick="setFilter('${f}')">${labels[f]}</button>`
+    `<button class="search-filter-pill${f === Search.activeFilter ? ' active' : ''}" onclick="setFilter('${f}')">${labels[f]}</button>`
   ).join('');
 }
 
@@ -2425,7 +2434,7 @@ function doSearch(query, filter) {
   const SECT_CLS   = {state: 'state', learnings: 'learnings',
                       decisions: 'decisions', history: 'history'};
 
-  const hits = SEARCH_INDEX
+  const hits = Search.index
     .filter(item => filter === 'all' || item.section === filter)
     .map(item => ({item, score: scoreItem(item, query)}))
     .filter(({score}) => score > 0)
@@ -2447,11 +2456,11 @@ function doSearch(query, filter) {
   if (!totalHits) {
     document.getElementById('search-results').innerHTML =
       '<div class="search-empty">No matches for &ldquo;' + esc(query) + '&rdquo;</div>';
-    _flatResults = []; _focusIdx = -1;
+    Search.flatResults = []; Search.focusIdx = -1;
     return;
   }
 
-  _flatResults = [];
+  Search.flatResults = [];
   let html = '';
 
   Object.values(groups).sort((a, b) => a.nsIdx - b.nsIdx).forEach(g => {
@@ -2463,7 +2472,7 @@ function doSearch(query, filter) {
       if (!secMap || !secMap.size) return;
       const items = [...secMap.values()];
       items.slice(0, 6).forEach(item => {
-        _flatResults.push(item);
+        Search.flatResults.push(item);
         const subI = item.subIdx !== undefined ? item.subIdx : -1;
         const fld  = item.field || '';
         html += `<div class="search-result-item" onclick="handleResultClick(${item.nsIdx},'${sec}',${subI},'${fld}')">` +
@@ -2477,7 +2486,7 @@ function doSearch(query, filter) {
   });
 
   document.getElementById('search-results').innerHTML = html;
-  _focusIdx = -1;
+  Search.focusIdx = -1;
 }
 
 function makeSnippet(text, query) {
@@ -2555,9 +2564,7 @@ const EDGE_META = {
   concurrent: { color: '#3fb950', label: 'Concurrent',    dash: '',    arrow: false, title: 'both sessions open' },
 };
 
-const _dag = { nodes: [], edges: [], nodeMap: new Map(), raf: null, tick: 0, maxTick: 280, svgW: 900, svgH: 530, rendered: false };
-let _dagDrag = null;
-let _dagShowSystem = false;
+const _dag = { nodes: [], edges: [], nodeMap: new Map(), raf: null, tick: 0, maxTick: 280, svgW: 900, svgH: 530, rendered: false, drag: null, showSystem: false };
 
 function _addEdge(map, s, t, type, detail) {
   const key = type === 'dep' ? `${s}->${t}:dep` : `${Math.min(s,t)}-${Math.max(s,t)}:${type}`;
@@ -3331,20 +3338,20 @@ function renderDAG() {
 
   const container = document.getElementById('view-dag');
   const nodeData = NS.map((ns, i) => ({ ns, nsIdx: i, x: 0, y: 0, vx: 0, vy: 0, fixed: false }))
-    .filter(n => _dagShowSystem || !SYSTEM_NS.has(n.ns.namespace.toLowerCase()));
+    .filter(n => _dag.showSystem || !SYSTEM_NS.has(n.ns.namespace.toLowerCase()));
   if (!nodeData.length) {
     container.innerHTML = '<div class="empty-state" style="padding:2rem;text-align:center">No namespaces to visualise.</div>';
     return;
   }
-  const allEdges = computeAllEdges(_dagShowSystem)
+  const allEdges = computeAllEdges(_dag.showSystem)
     .filter(e => nodeData.some(n => n.nsIdx === e.source) && nodeData.some(n => n.nsIdx === e.target));
   const nodeMap = new Map(nodeData.map((n, i) => [n.nsIdx, i]));
   const W = _dag.svgW, H = _dag.svgH;
   Object.assign(_dag, { nodes: nodeData, edges: allEdges, nodeMap, tick: 0 });
   dagInitPositions();
 
-  const sysLabel = _dagShowSystem ? 'Hide system NS' : 'Show system NS';
-  const sysCls   = _dagShowSystem ? ' active' : '';
+  const sysLabel = _dag.showSystem ? 'Hide system NS' : 'Show system NS';
+  const sysCls   = _dag.showSystem ? ' active' : '';
   container.innerHTML = ''
     + '<div class="dag-toolbar">'
     +   '<span class="dag-title">Dependency Graph</span>'
@@ -3472,7 +3479,7 @@ function renderDAG() {
 }
 
 function toggleDAGSystem() {
-  _dagShowSystem = !_dagShowSystem;
+  _dag.showSystem = !_dag.showSystem;
   _dag.rendered = false;
   renderDAG();
 }
@@ -3587,17 +3594,17 @@ function startDagDrag(ev, ni) {
   if (!svg) return;
   const bb = svg.getBoundingClientRect();
   const sx = _dag.svgW / bb.width, sy = _dag.svgH / bb.height;
-  _dagDrag = { ni, ox: ev.clientX, oy: ev.clientY, nx: _dag.nodes[ni].x, ny: _dag.nodes[ni].y, sx, sy };
+  _dag.drag = { ni, ox: ev.clientX, oy: ev.clientY, nx: _dag.nodes[ni].x, ny: _dag.nodes[ni].y, sx, sy };
   _dag.nodes[ni].fixed = true;
   if (_dag.raf) { cancelAnimationFrame(_dag.raf); _dag.raf = null; }
   const onMove = e => {
-    if (!_dagDrag) return;
-    _dag.nodes[_dagDrag.ni].x = Math.max(40, Math.min(_dag.svgW-40, _dagDrag.nx + (e.clientX-_dagDrag.ox)*_dagDrag.sx));
-    _dag.nodes[_dagDrag.ni].y = Math.max(35, Math.min(_dag.svgH-35, _dagDrag.ny + (e.clientY-_dagDrag.oy)*_dagDrag.sy));
+    if (!_dag.drag) return;
+    _dag.nodes[_dag.drag.ni].x = Math.max(40, Math.min(_dag.svgW-40, _dag.drag.nx + (e.clientX-_dag.drag.ox)*_dag.drag.sx));
+    _dag.nodes[_dag.drag.ni].y = Math.max(35, Math.min(_dag.svgH-35, _dag.drag.ny + (e.clientY-_dag.drag.oy)*_dag.drag.sy));
     dagUpdatePositions();
   };
   const onUp = () => {
-    _dagDrag = null;
+    _dag.drag = null;
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
     _dag.tick = 0; _dag.raf = requestAnimationFrame(dagSimStep);
