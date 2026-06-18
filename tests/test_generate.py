@@ -1,5 +1,5 @@
 """
-Smoke test for render_html().
+Smoke test for generate().
 
 Checks:
   1. Output contains the expected JS data marker `const NS = [`
@@ -18,11 +18,11 @@ _spec = importlib.util.spec_from_file_location("compass_dashboard", _SCRIPT)
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 
-render_html = _mod.render_html
+render_html = _mod.generate
 
 
 def _minimal_ns(overrides=None):
-    """Return a minimal namespace dict accepted by render_html / _js_data."""
+    """Return a minimal namespace dict accepted by generate / _js_data."""
     ns = {
         "namespace":                "test-ns",
         "open_session":             False,

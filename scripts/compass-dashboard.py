@@ -101,23 +101,29 @@ _BACKLOG_HEADERS = frozenset({
 })
 
 
-def _reality_completeness(reality_md):
-    lines = reality_md.splitlines()
+def _iter_reality_bullets(reality_md):
+    """Yield (text, in_backlog) for every non-empty, non-underscore bullet in reality_md."""
     in_backlog = False
-    total = 0
-    achieved = 0
-    for line in lines:
+    for line in reality_md.splitlines():
         s = line.strip()
         if s.startswith("##"):
-            header_text = s.lstrip("#").strip().lower()
-            in_backlog = any(k in header_text for k in _BACKLOG_HEADERS)
+            in_backlog = any(k in s.lstrip("#").strip().lower() for k in _BACKLOG_HEADERS)
         elif s.startswith("- ") or s.startswith("* "):
             text = s[2:].strip()
-            if not text or text.startswith("_") or in_backlog:
+            if not text or text.startswith("_"):
                 continue
-            total += 1
-            if any(marker in text.lower() for marker in _COMPLETION_MARKERS):
-                achieved += 1
+            yield text, in_backlog
+
+
+def _reality_completeness(reality_md):
+    total = 0
+    achieved = 0
+    for text, in_backlog in _iter_reality_bullets(reality_md):
+        if in_backlog:
+            continue
+        total += 1
+        if any(marker in text.lower() for marker in _COMPLETION_MARKERS):
+            achieved += 1
     if total == 0:
         return None
     return round(achieved / total * 100, 1)
@@ -154,20 +160,15 @@ def _stale_bullet_count(reality_md, state, days=30):
     validation = state.get("reality_validation", {})
     now = _now_utc()
     stale = 0
-    for line in reality_md.splitlines():
-        s = line.strip()
-        if (s.startswith("- ") or s.startswith("* ")):
-            text = s[2:].strip()
-            if not text or text.startswith("_"):
-                continue
-            h = hashlib.sha256(text.encode()).hexdigest()[:8]
-            ts = validation.get(h)
-            if not ts:
+    for text, _ in _iter_reality_bullets(reality_md):
+        h = hashlib.sha256(text.encode()).hexdigest()[:8]
+        ts = validation.get(h)
+        if not ts:
+            stale += 1
+        else:
+            dt = _parse_iso(ts)
+            if dt and (now - dt) > timedelta(days=days):
                 stale += 1
-            else:
-                dt = _parse_iso(ts)
-                if dt and (now - dt) > timedelta(days=days):
-                    stale += 1
     return stale
 
 
@@ -1475,16 +1476,22 @@ function esc(s) {
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// Format a "YYYY-MM" period string as e.g. "Jun'26"
+function fmtYM(period) {
+  const [yr, mo] = period.split('-');
+  return new Date(+yr, +mo - 1, 1).toLocaleString('default', { month: 'short' }) + '\\u2019' + yr.slice(2);
+}
+
 // ── Card selection ────────────────────────────────────────────────────────────
 
-function selectCard(i) {
-  if (Search.selected === i) {
+function selectCard(i, {force = false} = {}) {
+  if (!force && Search.selected === i) {
     document.getElementById(`card-${i}`).classList.remove('selected');
     document.getElementById('detail').classList.remove('visible');
     Search.selected = -1;
     return;
   }
-  if (Search.selected >= 0) {
+  if (Search.selected >= 0 && Search.selected !== i) {
     document.getElementById(`card-${Search.selected}`)?.classList.remove('selected');
   }
   Search.selected = i;
@@ -2294,19 +2301,6 @@ function renderPriorities() {
 
 // Search state is in the Search object (declared above near selectCard)
 
-function forceSelectCard(i) {
-  if (Search.selected >= 0 && Search.selected !== i) {
-    document.getElementById('card-' + Search.selected)?.classList.remove('selected');
-  }
-  Search.selected = i;
-  document.getElementById('card-' + i)?.classList.add('selected');
-  renderDetail(NS[i]);
-  const detail = document.getElementById('detail');
-  detail.classList.add('visible');
-  requestAnimationFrame(() =>
-    detail.scrollIntoView({behavior: 'smooth', block: 'nearest'})
-  );
-}
 
 function openSearch() {
   document.getElementById('search-modal').style.display = '';
@@ -2512,7 +2506,7 @@ function handleResultClick(nsIdx, section, subIdx, field) {
 }
 
 function navigateToResult(nsIdx, section, subIdx, field) {
-  forceSelectCard(nsIdx);
+  selectCard(nsIdx, {force: true});
   switchTab(section);
 
   requestAnimationFrame(() => {
@@ -2683,6 +2677,20 @@ function switchHeatmap(name) {
   if (name === 'planning')  renderPlanningPanel();
 }
 
+function renderHeatmapGrid(periods, nsSorted, cellFn, legendHtml) {
+  let html = `<div class="heatmap-wrap">
+  <div class="heatmap-grid" style="grid-template-columns: minmax(120px,auto) repeat(${periods.length}, 28px)">`;
+  html += '<div class="heatmap-corner"></div>';
+  periods.forEach(p => { html += `<div class="heatmap-col-label">${fmtYM(p)}</div>`; });
+  nsSorted.forEach(ns => {
+    const openCls = ns.open ? ' open-ns' : '';
+    html += `<div class="heatmap-ns-label${openCls}">${esc(ns.namespace)}</div>`;
+    periods.forEach(p => { html += cellFn(ns, p); });
+  });
+  html += `</div><div class="heatmap-legend">${legendHtml}</div></div>`;
+  return html;
+}
+
 function renderSessionHeatmapPanel() {
   const container = document.getElementById('hpanel-sessions');
   if (container.dataset.rendered) return;
@@ -2706,7 +2714,6 @@ function renderSessionHeatmapPanel() {
     return;
   }
 
-  // Sort namespaces by total sessions descending
   const nsSorted = NS.slice().sort((a, b) => (b.sessionCount || 0) - (a.sessionCount || 0));
 
   // Colour levels: 0 = empty, 1–4 scaled to max count in any single cell
@@ -2717,48 +2724,23 @@ function renderSessionHeatmapPanel() {
     return Math.min(4, Math.ceil(count / maxCount * 4));
   }
 
-  // Build grid: col 0 = ns labels, cols 1..N = period columns
-  const cols = 1 + periods.length;
-  let html = `<div class="heatmap-wrap">
-  <div class="heatmap-grid" style="grid-template-columns: minmax(120px,auto) repeat(${periods.length}, 28px)">`;
-
-  // Header row: corner + month labels
-  html += '<div class="heatmap-corner"></div>';
-  periods.forEach(p => {
-    const [yr, mo] = p.split('-');
-    const label = new Date(+yr, +mo - 1, 1).toLocaleString('default', { month: 'short' }) + '\\u2019' + yr.slice(2);
-    html += `<div class="heatmap-col-label">${label}</div>`;
-  });
-
-  // Data rows
-  nsSorted.forEach(ns => {
-    const openCls = ns.open ? ' open-ns' : '';
-    const nsName = esc(ns.namespace);
-    html += `<div class="heatmap-ns-label${openCls}">${nsName}</div>`;
-    periods.forEach(p => {
-      const count = nsMap[ns.namespace][p] || 0;
-      const lv = level(count);
-      const tip = esc(count
-        ? `${ns.namespace} · ${p} · ${count} session${count > 1 ? 's' : ''}`
-        : `${ns.namespace} · ${p} · no sessions`);
-      html += `<div class="heatmap-cell" data-count="${count}" data-level="${lv}" data-tip="${tip}"></div>`;
-    });
-  });
-
-  html += `</div>
-  <div class="heatmap-legend">
-    <span>Less</span>
+  const legendHtml = `<span>Less</span>
     <div class="heatmap-legend-cell" style="background:var(--surface2)"></div>
     <div class="heatmap-legend-cell" style="background:#1a4731"></div>
     <div class="heatmap-legend-cell" style="background:#206040"></div>
     <div class="heatmap-legend-cell" style="background:#2a8055"></div>
     <div class="heatmap-legend-cell" style="background:#38a86e"></div>
     <span>More</span>
-    <span style="margin-left:1rem;color:var(--muted)">1 cell = 1 month · max ${maxCount} session${maxCount > 1 ? 's' : ''}</span>
-  </div>
-</div>`;
+    <span style="margin-left:1rem;color:var(--muted)">1 cell = 1 month · max ${maxCount} session${maxCount > 1 ? 's' : ''}</span>`;
 
-  container.innerHTML = html;
+  container.innerHTML = renderHeatmapGrid(periods, nsSorted, (ns, p) => {
+    const count = nsMap[ns.namespace][p] || 0;
+    const lv = level(count);
+    const tip = esc(count
+      ? `${ns.namespace} · ${p} · ${count} session${count > 1 ? 's' : ''}`
+      : `${ns.namespace} · ${p} · no sessions`);
+    return `<div class="heatmap-cell" data-count="${count}" data-level="${lv}" data-tip="${tip}"></div>`;
+  }, legendHtml);
 
   wireHeatmapTooltip(container, '.heatmap-cell');
 }
@@ -2829,9 +2811,7 @@ function renderLearningTimeline() {
 
   months.forEach((m, i) => {
     const x = PAD_L + (i + 0.5) * (chartW / months.length);
-    const [yr, mo] = m.split('-');
-    const label = new Date(+yr, +mo - 1, 1).toLocaleString('default', { month: 'short' }) + '\\u2019' + yr.slice(2);
-    svg += `<text x="${x.toFixed(1)}" y="${H - 6}" text-anchor="middle" fill="var(--muted)" font-size="9" font-family="monospace">${label}</text>`;
+    svg += `<text x="${x.toFixed(1)}" y="${H - 6}" text-anchor="middle" fill="var(--muted)" font-size="9" font-family="monospace">${fmtYM(m)}</text>`;
   });
 
   topTags.forEach((tag, ti) => {
@@ -3284,44 +3264,24 @@ function renderGoalHeatmapPanel() {
     return 4;
   }
 
-  let html = `<div class="heatmap-wrap">
-  <div class="heatmap-grid" style="grid-template-columns: minmax(120px,auto) repeat(${periods.length}, 28px)">`;
-
-  html += '<div class="heatmap-corner"></div>';
-  periods.forEach(p => {
-    const [yr, mo] = p.split('-');
-    const label = new Date(+yr, +mo - 1, 1).toLocaleString('default', { month: 'short' }) + '\\u2019' + yr.slice(2);
-    html += `<div class="heatmap-col-label">${label}</div>`;
-  });
-
-  nsSorted.forEach(ns => {
-    const openCls = ns.open ? ' open-ns' : '';
-    const byMonth = nsMap[ns.namespace];
-    html += `<div class="heatmap-ns-label${openCls}">${esc(ns.namespace)}</div>`;
-    periods.forEach(p => {
-      const rate = byMonth[p];
-      const ql = qlevel(rate);
-      const tipText = rate !== undefined
-        ? `${ns.namespace} \\u00b7 ${p} \\u00b7 ${rate}% avg completion`
-        : `${ns.namespace} \\u00b7 ${p} \\u00b7 no data`;
-      html += `<div class="goal-cell" data-qlevel="${ql}" data-tip="${esc(tipText)}"></div>`;
-    });
-  });
-
-  html += `</div>
-  <div class="heatmap-legend">
-    <span>0%</span>
+  const legendHtml = `<span>0%</span>
     <div class="heatmap-legend-cell" style="background:var(--surface2)"></div>
     <div class="heatmap-legend-cell" style="background:#0d2847"></div>
     <div class="heatmap-legend-cell" style="background:#154075"></div>
     <div class="heatmap-legend-cell" style="background:#1a5ba0"></div>
     <div class="heatmap-legend-cell" style="background:#2679cc"></div>
     <span>100%</span>
-    <span style="margin-left:1rem;color:var(--muted)">1 cell = 1 month &#x00b7; colour = avg goal completion %</span>
-  </div>
-</div>`;
+    <span style="margin-left:1rem;color:var(--muted)">1 cell = 1 month &#x00b7; colour = avg goal completion %</span>`;
 
-  container.innerHTML = html;
+  container.innerHTML = renderHeatmapGrid(periods, nsSorted, (ns, p) => {
+    const byMonth = nsMap[ns.namespace];
+    const rate = byMonth[p];
+    const ql = qlevel(rate);
+    const tipText = rate !== undefined
+      ? `${ns.namespace} \\u00b7 ${p} \\u00b7 ${rate}% avg completion`
+      : `${ns.namespace} \\u00b7 ${p} \\u00b7 no data`;
+    return `<div class="goal-cell" data-qlevel="${ql}" data-tip="${esc(tipText)}"></div>`;
+  }, legendHtml);
 
   wireHeatmapTooltip(container, '.goal-cell');
 }
@@ -3467,7 +3427,7 @@ function renderDAG() {
       g.appendChild(sc);
     }
 
-    g.addEventListener('click', ev => { ev.stopPropagation(); switchView('overview'); forceSelectCard(n.nsIdx); });
+    g.addEventListener('click', ev => { ev.stopPropagation(); switchView('overview'); selectCard(n.nsIdx, {force: true}); });
     g.addEventListener('mousedown', ev => { ev.preventDefault(); startDagDrag(ev, ni); });
     ng.appendChild(g);
   });
@@ -3632,7 +3592,7 @@ if (NS.length === 1) selectCard(0);
 # HTML assembly
 # ─────────────────────────────────────────────────────────────────────────────
 
-def render_html(namespaces):
+def generate(namespaces):
     now         = _now_utc().strftime("%d %b %Y %H:%M UTC")
     n_open      = sum(1 for n in namespaces if n["open_session"])
     n_learnings = sum(len(n["learnings"]) for n in namespaces)
@@ -3671,7 +3631,7 @@ def main():
         print(json.dumps({"ok": False, "error": msg}))
         sys.exit(1)
 
-    html      = render_html(namespaces)
+    html      = generate(namespaces)
     out_path  = Path(args.output)
     out_path.write_text(html, encoding="utf-8")
 
