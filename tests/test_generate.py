@@ -147,9 +147,24 @@ class TestRenderHtml(unittest.TestCase):
 
     def test_placeholder_markers_all_replaced(self):
         for placeholder in ("[[GENERATED_AT]]", "[[N_NS]]", "[[N_OPEN]]",
-                            "[[N_LEARNINGS]]", "[[N_SESSIONS]]", "[[CARDS]]", "[[DATA_JSON]]"):
+                            "[[N_LEARNINGS]]", "[[N_SESSIONS]]", "[[CARDS]]", "[[NS_DATA]]"):
             self.assertNotIn(placeholder, self.html,
                              msg=f"Unreplaced placeholder found: {placeholder}")
+
+
+class TestTemplateFile(unittest.TestCase):
+
+    def setUp(self):
+        self._template = Path(__file__).parent.parent / "scripts" / "template.html"
+
+    def test_template_file_exists(self):
+        self.assertTrue(self._template.exists(), "scripts/template.html not found")
+
+    def test_template_contains_all_placeholders(self):
+        content = self._template.read_text(encoding="utf-8")
+        for marker in ("[[GENERATED_AT]]", "[[N_NS]]", "[[N_OPEN]]",
+                       "[[N_LEARNINGS]]", "[[N_SESSIONS]]", "[[CARDS]]", "[[NS_DATA]]"):
+            self.assertIn(marker, content, msg=f"Missing placeholder in template.html: {marker}")
 
 
 if __name__ == "__main__":

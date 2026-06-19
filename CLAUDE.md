@@ -2,8 +2,9 @@
 
 ## What this is
 
-A single Python script (`scripts/compass-dashboard.py`) that reads all compass loop
-namespaces from `~/.claude/loop/` and generates a self-contained static HTML dashboard.
+A Python script (`scripts/compass-dashboard.py`) that reads all compass loop namespaces
+from `~/.claude/loop/` and generates a self-contained static HTML dashboard by injecting
+data into `scripts/template.html`.
 
 **Regenerate:**
 ```bash
@@ -16,12 +17,13 @@ python3 scripts/compass-dashboard.py
 ## Architecture
 
 ```
-compass-dashboard.py
-├── Python top (~330 lines)   — data loading, serialisation, HTML generation
-│   ├── load_namespace()       — reads state.json, *.md, *.jsonl, history/*.md
-│   ├── _js_data()             — serialises NS array as JSON embedded in HTML
-│   └── HTML_TEMPLATE          — the entire HTML/CSS/JS as a Python triple-quoted string
-└── JS inside HTML_TEMPLATE    — all interactivity; operates on const NS = [...]
+scripts/
+├── compass-dashboard.py   — data layer + generate() + main()   (~752 lines)
+│   ├── load_namespace()    — reads state.json, *.md, *.jsonl, history/*.md
+│   ├── _js_data()          — serialises NS array as JSON embedded in HTML
+│   └── generate()          — reads template.html, injects [[PLACEHOLDER]] markers
+└── template.html           — HTML + <style> + <script>          (~2,897 lines)
+    └── JS                  — all interactivity; operates on const NS = [...]
 ```
 
 All data is baked into `const NS = [...]` at generation time. There is no runtime backend
@@ -29,22 +31,11 @@ and there never will be — static HTML only.
 
 ---
 
-## Critical gotcha — JS regex/string escaping inside Python strings
+## Critical gotcha — single quotes inside JS string literals with inline `onclick`
 
-The JS lives inside a Python triple-quoted string. Any backslash that needs to reach the
-browser as `\` must be written as `\\` in the Python source:
+~~JS-in-Python double-backslash escaping is no longer needed — the JS lives in `template.html`, a real HTML file. Write `\n`, `\s`, `—` etc. directly.~~
 
-| You want in JS | Write in Python source |
-|----------------|------------------------|
-| `\n`           | `\\n`                  |
-| `\s`, `\d`     | `\\s`, `\\d`           |
-| `\.`           | `\\.`                  |
-| `×`       | `\\u00d7`              |
-
-Forgetting this produces **silent bugs** — the JS runs but regex patterns silently fail
-to match. Always verify new regex patterns render correctly in the generated HTML.
-
-**Second trap — single quotes inside JS string literals with inline `onclick`:**
+**Trap — single quotes inside JS string literals with inline `onclick`:**
 
 If you build an HTML string using JS single-quoted string literals and embed an `onclick`
 that calls a function with a string argument, the inner `'...'` breaks the outer string:
@@ -77,7 +68,7 @@ to find the line. If an Edit replacement reports "string not found" on a line yo
 clearly see, check for `\xa0` characters with:
 
 ```python
-python3 -c "lines = open('scripts/compass-dashboard.py').readlines(); [print(repr(l)) for l in lines[N-1:N+2]]"
+python3 -c "lines = open('scripts/template.html').readlines(); [print(repr(l)) for l in lines[N-1:N+2]]"
 ```
 
 Fix: use a Python script (`str.replace()`) to do the replacement, passing the `\xa0`
@@ -87,7 +78,7 @@ character explicitly in the old string.
 
 ## Template substitution
 
-HTML_TEMPLATE uses `[[PLACEHOLDER]]` markers replaced by `generate()`:
+`template.html` uses `[[PLACEHOLDER]]` markers replaced by `generate()`:
 
 | Marker | Replaced with |
 |--------|---------------|
@@ -188,31 +179,37 @@ count as user-controlled.
 
 ## Module map
 
+**`scripts/compass-dashboard.py`** (~752 lines — Python only):
+
 | Lines (approx) | What lives there |
 |----------------|-----------------|
 | 1–95 | Python helpers: file reading, time formatting, history parsing |
 | 96–302 | `_corpus_health()`, `_stale_bullet_count()`, `_goal_stats()`, `_goal_by_month()` |
 | 303–342 | `_compute_exploration_ratio()`, `_goal_type_by_session()` |
 | 343–594 | `load_namespace()`, `discover_namespaces()`, `_card_html()` |
-| 595–650 | `_js_data()`, `generate()`, `__main__` |
-| 651–1090 | `HTML_TEMPLATE` — HTML structure + all CSS |
-| 1090–1455 | JS: constants, `esc()`, card rendering, detail panel, tab switching |
-| 1456–1511 | JS: `deriveTasks()`, `renderTasks()` |
-| 1512–1905 | JS: detail panel sub-tabs — `renderState()` (slim dispatcher) + 10 `renderStateSection_*` helpers, learnings, decisions, history, `renderExternalSignals()` |
-| 1906–2100 | JS: `switchView()`, priority scoring helpers, `renderPriorities()` |
-| 2100–2551 | JS: search / command palette |
-| 2552–2899 | JS: `renderHeatmap()`, `renderSessionHeatmapPanel()`, `renderGoalHeatmapPanel()` |
-| 2900–3031 | JS: `renderGoalTypesPanel()` (E18), `renderPlanningPanel()` (E15) |
-| 3032–3223 | JS: `renderVelocityPanel()`, `renderLearningTimeline()`, `renderScorecard()` |
-| 3224–3590 | JS: `renderDAG()`, force simulation, DAG tooltip |
+| 595–685 | `_js_data()`, `generate()` (reads template.html), `main()`, `__main__` |
+
+**`scripts/template.html`** (~2,897 lines — HTML/CSS/JS):
+
+| Lines (approx) | What lives there |
+|----------------|-----------------|
+| 1–81 | HTML structure + `[[PLACEHOLDER]]` markers |
+| 82–746 | CSS `<style>` block |
+| 747–1186 | JS: constants, `esc()`, card rendering, detail panel, tab switching |
+| 1187–1242 | JS: `deriveTasks()`, `renderTasks()` |
+| 1243–1636 | JS: detail panel sub-tabs — `renderState()` (slim dispatcher) + 10 `renderStateSection_*` helpers, learnings, decisions, history, `renderExternalSignals()` |
+| 1637–1831 | JS: `switchView()`, priority scoring helpers, `renderPriorities()` |
+| 1832–2282 | JS: search / command palette |
+| 2283–2630 | JS: `renderHeatmap()`, `renderSessionHeatmapPanel()`, `renderGoalHeatmapPanel()` |
+| 2631–2762 | JS: `renderGoalTypesPanel()` (E18), `renderPlanningPanel()` (E15) |
+| 2763–2953 | JS: `renderVelocityPanel()`, `renderLearningTimeline()`, `renderScorecard()` |
+| 2954–end | JS: `renderDAG()`, force simulation, DAG tooltip |
 
 **Tests (`tests/`):**
 
 | File | What it covers |
 |------|----------------|
 | `test_data_loading.py` | 33 unit tests for `_reality_completeness`, `_corpus_health`, `_goal_stats`, `_stale_bullet_count` — no filesystem deps |
-| `test_generate.py` | 12 smoke tests for `render_html()` — structural markers, `const NS = [` embedding, script-tag injection escaping |
+| `test_generate.py` | 12 smoke tests for `generate()` — structural markers, `const NS = [` embedding, script-tag injection escaping |
 
 Run: `python3 -m pytest tests/ -q` from the repo root.
-
-**`scripts/MODULARISATION_SPIKE.md`** — spike assessment for extracting `HTML_TEMPLATE` to `template.html` + `dashboard.js`. Verdict: viable, ~2.5h, main win is eliminating the JS-in-Python escaping trap.
