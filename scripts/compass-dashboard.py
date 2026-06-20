@@ -518,6 +518,29 @@ def load_namespace(ns_dir):
     }
 
 
+def load_community():
+    """Parse _community/*.jsonl files and return COMMUNITY data object (P40-Dashboard Phase 1)."""
+    community_dir = LOOP_DIR / "_community"
+    enabled = community_dir.is_dir() and any(community_dir.glob("*.jsonl"))
+    if not enabled:
+        return {
+            "enabled":      False,
+            "feed":         [],
+            "inbox":        [],
+            "adoptions":    [],
+            "subscriptions": [],
+            "trust_registry": [],
+        }
+    return {
+        "enabled":        True,
+        "feed":           _read_jsonl(community_dir / "feed.jsonl"),
+        "inbox":          _read_jsonl(community_dir / "inbox.jsonl"),
+        "adoptions":      _read_jsonl(community_dir / "adoptions.jsonl"),
+        "subscriptions":  _read_jsonl(community_dir / "subscriptions.jsonl"),
+        "trust_registry": _read_jsonl(community_dir / "trust_registry.jsonl"),
+    }
+
+
 def discover_namespaces(filter_ns=None):
     if not LOOP_DIR.exists():
         return []
@@ -689,22 +712,29 @@ def _js_data(namespaces):
 # HTML assembly
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _js_community(community):
+    raw = json.dumps(community, ensure_ascii=False, default=str)
+    return raw.replace("</script>", r"<\/script>").replace("<!--", r"<\!--")
+
+
 def generate(namespaces):
     now         = _now_utc().strftime("%d %b %Y %H:%M UTC")
     n_open      = sum(1 for n in namespaces if n["open_session"])
     n_learnings = sum(len(n["learnings"]) for n in namespaces)
     n_sessions  = sum(n["session_count"] for n in namespaces)
 
-    cards = "".join(_card_html(n, i) for i, n in enumerate(namespaces))
+    cards     = "".join(_card_html(n, i) for i, n in enumerate(namespaces))
+    community = load_community()
 
     html = (Path(__file__).parent / "template.html").read_text(encoding="utf-8")
-    html = html.replace("[[GENERATED_AT]]", now)
-    html = html.replace("[[N_NS]]",         str(len(namespaces)))
-    html = html.replace("[[N_OPEN]]",       str(n_open))
-    html = html.replace("[[N_LEARNINGS]]",  str(n_learnings))
-    html = html.replace("[[N_SESSIONS]]",   str(n_sessions))
-    html = html.replace("[[CARDS]]",        cards)
-    html = html.replace("[[NS_DATA]]",      _js_data(namespaces))
+    html = html.replace("[[GENERATED_AT]]",   now)
+    html = html.replace("[[N_NS]]",           str(len(namespaces)))
+    html = html.replace("[[N_OPEN]]",         str(n_open))
+    html = html.replace("[[N_LEARNINGS]]",    str(n_learnings))
+    html = html.replace("[[N_SESSIONS]]",     str(n_sessions))
+    html = html.replace("[[CARDS]]",          cards)
+    html = html.replace("[[NS_DATA]]",        _js_data(namespaces))
+    html = html.replace("[[COMMUNITY_DATA]]", _js_community(community))
 
     return html
 
