@@ -447,6 +447,9 @@ def load_namespace(ns_dir):
     # External research signals
     external_signals = list(reversed(_read_jsonl(ns_dir / "external_signals.jsonl")))
 
+    # Session artefacts (P41)
+    artefacts = _read_jsonl(ns_dir / "artefacts.jsonl")
+
     # Cross-namespace learning links
     back_refs_raw = _read_jsonl(ns_dir / "back_references.jsonl")
     conflicts_raw = _read_jsonl(ns_dir / "conflict_resolutions.jsonl")
@@ -515,6 +518,7 @@ def load_namespace(ns_dir):
         "decay_history":             decay_history,
         "code_review_defer_count":   code_review_defer_count,
         "research_defer_count":      research_defer_count,
+        "artefacts":                 artefacts,
     }
 
 
@@ -700,6 +704,7 @@ def _js_data(namespaces):
             "decayHistory":            n["decay_history"],
             "codeReviewDeferCount":    n["code_review_defer_count"],
             "researchDeferCount":      n["research_defer_count"],
+            "artefacts":               n["artefacts"],
         })
     raw = json.dumps(data, ensure_ascii=False, default=str)
     # Prevent </script> from breaking the embedding

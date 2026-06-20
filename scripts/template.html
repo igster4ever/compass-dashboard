@@ -1335,7 +1335,21 @@ function renderHistory(ns) {
       </div>`;
   }).join('');
 
-  return renderQualityBar(ns) + `<div class="timeline">${sessions}</div>`;
+  const artefactsHtml = (() => {
+    if (!ns.artefacts || !ns.artefacts.length) return '';
+    const rows = ns.artefacts.map(a => {
+      const date = (a.created_at || '').slice(0, 10);
+      const typeBadge = `<span class="tag">${esc(a.type)}</span>`;
+      const tags = (a.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join(' ');
+      const desc = a.description ? ` — <span style="color:var(--muted)">${esc(a.description)}</span>` : '';
+      return `<li class="plain">${esc(a.title)} ${typeBadge}${tags ? ' ' + tags : ''} <span style="color:var(--muted);font-size:.72rem">${esc(date)}</span>${desc}</li>`;
+    }).join('');
+    return `<div style="margin-top:1rem">
+      <div class="session-label">Artefacts (${ns.artefacts.length})</div>
+      <ul class="session-items">${rows}</ul>
+    </div>`;
+  })();
+  return renderQualityBar(ns) + `<div class="timeline">${sessions}</div>` + artefactsHtml;
 }
 
 function toggleSession(i) {

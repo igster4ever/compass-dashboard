@@ -67,6 +67,7 @@ def _minimal_ns(overrides=None):
         "decay_history":            [],
         "code_review_defer_count":  0,
         "research_defer_count":     0,
+        "artefacts":                [],
     }
     if overrides:
         ns.update(overrides)
@@ -150,6 +151,46 @@ class TestRenderHtml(unittest.TestCase):
                             "[[N_LEARNINGS]]", "[[N_SESSIONS]]", "[[CARDS]]", "[[NS_DATA]]"):
             self.assertNotIn(placeholder, self.html,
                              msg=f"Unreplaced placeholder found: {placeholder}")
+
+
+class TestArtefacts(unittest.TestCase):
+
+    def _ns_block(self, html):
+        start = html.index("const NS = [")
+        end   = html.index(";", start)
+        return html[start:end]
+
+    def test_empty_artefacts_embedded_as_empty_array(self):
+        html = render_html([_minimal_ns()])
+        ns_block = self._ns_block(html)
+        self.assertIn('"artefacts": []', ns_block)
+
+    def test_artefacts_entries_embedded(self):
+        artefacts = [{"artefact_id": "abc", "title": "My Chart", "type": "svg",
+                      "file": "artefacts/my-chart-2026-06-20.svg", "tags": ["tooling"],
+                      "description": "A test chart", "created_at": "2026-06-20T10:00:00Z",
+                      "session_id": None, "linked_decision_id": None}]
+        html = render_html([_minimal_ns({"artefacts": artefacts})])
+        ns_block = self._ns_block(html)
+        self.assertIn("My Chart", ns_block)
+        self.assertIn("tooling", ns_block)
+
+    def test_artefact_script_tag_injection_escaped(self):
+        artefacts = [{"artefact_id": "x", "title": "Evil </script>", "type": "svg",
+                      "file": "artefacts/evil-2026-06-20.svg", "tags": [],
+                      "description": "", "created_at": "2026-06-20T10:00:00Z",
+                      "session_id": None, "linked_decision_id": None}]
+        html = render_html([_minimal_ns({"artefacts": artefacts})])
+        ns_block = self._ns_block(html)
+        self.assertNotIn("</script>", ns_block)
+        self.assertIn(r"<\/script>", ns_block)
+
+    def test_missing_artefacts_key_defaults_gracefully(self):
+        ns = _minimal_ns()
+        del ns["artefacts"]
+        # _js_data uses n["artefacts"] — should raise cleanly, not silently corrupt
+        with self.assertRaises(KeyError):
+            render_html([ns])
 
 
 class TestTemplateFile(unittest.TestCase):
