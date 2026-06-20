@@ -235,6 +235,7 @@
     .md-section li::before { content: "–"; position: absolute; left: 0; color: var(--subtle); }
     .md-section p { font-size: .82rem; color: var(--muted); line-height: 1.6; margin-bottom: .4rem; }
     .empty-state { font-size: .82rem; color: var(--subtle); font-style: italic; padding: .5rem 0; }
+    .panel-msg   { padding: 1rem; color: var(--muted); }
 
     /* ── Goals list ── */
     .goals-list { list-style: none; padding: 0; }
@@ -1423,9 +1424,8 @@ function _daysSince(timeAgoStr) {
 }
 
 function computePriorities() {
-  return NS.filter(ns => !SYSTEM_NS.has(ns.namespace.toLowerCase())).map((ns, idx) => {
-    // Remap idx to the original NS array position so selectCard() works correctly
-    idx = NS.indexOf(ns);
+  return NS.flatMap((ns, idx) => {
+    if (SYSTEM_NS.has(ns.namespace.toLowerCase())) return [];
     let score = 0;
     const reasons = [];
 
@@ -2169,7 +2169,7 @@ function renderSessionHeatmapPanel() {
 
   const periods = Array.from(periodSet).sort();
   if (!periods.length) {
-    container.innerHTML = '<p style="padding:1rem;color:var(--muted)">No session history to display.</p>';
+    container.innerHTML = '<p class="panel-msg">No session history to display.</p>';
     return;
   }
 
@@ -2217,7 +2217,7 @@ function renderLearningTimeline() {
   });
 
   if (!allLearnings.length) {
-    container.innerHTML = '<p style="padding:1rem;color:var(--muted)">No learnings with dates to display.</p>';
+    container.innerHTML = '<p class="panel-msg">No learnings with dates to display.</p>';
     return;
   }
 
@@ -2674,7 +2674,7 @@ function renderVelocityPanel() {
   NS.forEach(ns => (ns.sessionDates || []).forEach(d => allMonths.add(d.slice(0, 7))));
   const months = Array.from(allMonths).sort().slice(-12);
   if (!months.length) {
-    container.innerHTML = '<p style="padding:1rem;color:var(--muted)">No session data available.</p>';
+    container.innerHTML = '<p class="panel-msg">No session data available.</p>';
     return;
   }
 
@@ -2789,7 +2789,7 @@ function renderGoalHeatmapPanel() {
 
   const periods = Array.from(periodSet).sort();
   if (!periods.length) {
-    container.innerHTML = '<p style="padding:1rem;color:var(--muted)">No goal completion data yet — close a few sessions with goals to populate this view.</p>';
+    container.innerHTML = '<p class="panel-msg">No goal completion data yet — close a few sessions with goals to populate this view.</p>';
     return;
   }
 
