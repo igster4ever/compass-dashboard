@@ -703,6 +703,7 @@
     <button class="view-tab"        id="vtab-heatmap"       onclick="switchView('heatmap')">Heatmap</button>
     <button class="view-tab"        id="vtab-timeline"      onclick="switchView('timeline')">Learning Timeline</button>
     <button class="view-tab"        id="vtab-decisions"     onclick="switchView('decisions')">Decisions</button>
+    <button class="view-tab"        id="vtab-artefacts"     onclick="switchView('artefacts')">Artefacts</button>
   </nav>
 
   <div id="view-overview">
@@ -721,6 +722,7 @@
   <div id="view-heatmap"      style="display:none"></div>
   <div id="view-timeline"     style="display:none"></div>
   <div id="view-decisions"    style="display:none"></div>
+  <div id="view-artefacts"   style="display:none"></div>
   <div id="heatmap-tooltip" class="heatmap-tooltip"></div>
 
   </div>
@@ -1364,7 +1366,7 @@ function toggleSession(i) {
 
 function switchView(v) {
   if (v !== 'dag' && _dag.raf) { cancelAnimationFrame(_dag.raf); _dag.raf = null; }
-  ['overview', 'priorities', 'scorecard', 'dag', 'heatmap', 'timeline', 'decisions'].forEach(id => {
+  ['overview', 'priorities', 'scorecard', 'dag', 'heatmap', 'timeline', 'decisions', 'artefacts'].forEach(id => {
     document.getElementById('view-' + id).style.display = id === v ? '' : 'none';
     document.getElementById('vtab-' + id).classList.toggle('active', id === v);
   });
@@ -1374,6 +1376,7 @@ function switchView(v) {
   if (v === 'heatmap')    renderHeatmap();
   if (v === 'timeline')   renderLearningTimeline();
   if (v === 'decisions')  renderDecisionsView();
+  if (v === 'artefacts')  renderArtefactsView();
 }
 
 // ── Attention queue (E9) ─────────────────────────────────────────────────────
@@ -2000,6 +2003,81 @@ function renderDecisionsView() {
     expandedIdx = expandedIdx === i ? null : i;
     render();
   };
+
+  render();
+  container.dataset.rendered = '1';
+}
+
+// ── Artefacts view ───────────────────────────────────────────────────────────
+
+function renderArtefactsView() {
+  const container = document.getElementById('view-artefacts');
+  if (container.dataset.rendered) return;
+
+  const palette = ['#6366f1','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
+  const nsBadgeColour = {};
+  NS.forEach((ns, i) => { nsBadgeColour[ns.namespace] = palette[i % palette.length]; });
+
+  const all = NS.flatMap(ns =>
+    (ns.artefacts || []).map(a => ({ ...a, namespace: ns.namespace }))
+  ).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+
+  let filterNs = '';
+
+  function render() {
+    const rows = (filterNs ? all.filter(a => a.namespace === filterNs) : all);
+    const nsOptions = [...new Set(all.map(a => a.namespace))].sort();
+
+    const header = `
+      <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem;flex-wrap:wrap">
+        <h2 style="margin:0;font-size:1.1rem">Artefacts</h2>
+        <span style="color:var(--muted);font-size:.8rem">${rows.length} / ${all.length}</span>
+        <select id="art-ns-filter" style="padding:.25rem .5rem;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:.8rem">
+          <option value="">All namespaces</option>
+          ${nsOptions.map(ns => `<option value="${esc(ns)}" ${filterNs === ns ? 'selected' : ''}>${esc(ns)}</option>`).join('')}
+        </select>
+      </div>`;
+
+    const thStyle = 'padding:.5rem .75rem;text-align:left;font-size:.75rem;color:var(--muted);font-weight:600;white-space:nowrap;border-bottom:1px solid var(--border)';
+
+    const tableRows = rows.map(a => {
+      const bg    = nsBadgeColour[a.namespace] || '#888';
+      const date  = (a.created_at || '').slice(0, 10);
+      const tags  = (a.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join(' ');
+      const desc  = a.description ? `<span style="color:var(--muted);font-size:.78rem"> — ${esc(a.description)}</span>` : '';
+      return `
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:.45rem .75rem;font-size:.75rem;color:var(--muted);white-space:nowrap">${esc(date)}</td>
+          <td style="padding:.45rem .75rem">
+            <span style="background:${bg};color:#fff;padding:.15rem .4rem;border-radius:3px;font-size:.7rem;white-space:nowrap">${esc(a.namespace)}</span>
+          </td>
+          <td style="padding:.45rem .75rem"><span class="tag">${esc(a.type || '')}</span></td>
+          <td style="padding:.45rem .75rem;font-size:.82rem">${esc(a.title || '')}${desc}</td>
+          <td style="padding:.45rem .75rem">${tags}</td>
+        </tr>`;
+    }).join('');
+
+    const empty = `<div class="panel-msg">No artefacts saved yet. Use <code>save-artefact</code> from compass to record SVGs or HTML generated during a session.</div>`;
+
+    const table = rows.length === 0 ? empty
+      : `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
+          <thead><tr>
+            <th style="${thStyle}">Date</th>
+            <th style="${thStyle}">Namespace</th>
+            <th style="${thStyle}">Type</th>
+            <th style="${thStyle}">Title</th>
+            <th style="${thStyle}">Tags</th>
+          </tr></thead>
+          <tbody>${tableRows}</tbody>
+        </table></div>`;
+
+    container.innerHTML = `<div style="padding:1.25rem">${header}${table}</div>`;
+
+    document.getElementById('art-ns-filter').addEventListener('change', e => {
+      filterNs = e.target.value;
+      render();
+    });
+  }
 
   render();
   container.dataset.rendered = '1';
