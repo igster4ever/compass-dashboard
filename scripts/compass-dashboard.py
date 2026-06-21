@@ -452,8 +452,17 @@ def load_namespace(ns_dir):
     # External research signals
     external_signals = list(reversed(_read_jsonl(ns_dir / "external_signals.jsonl")))
 
-    # Session artefacts (P41)
-    artefacts = _read_jsonl(ns_dir / "artefacts.jsonl")
+    # Session artefacts (P41) — resolve abs_file so JS can open/preview via file://
+    artefacts = []
+    for _a in _read_jsonl(ns_dir / "artefacts.jsonl"):
+        _ac = dict(_a)
+        _rel = _a.get("file", "")
+        if _rel:
+            _abs = ns_dir / _rel
+            _ac["abs_file"] = str(_abs) if _abs.exists() else None
+        else:
+            _ac["abs_file"] = None
+        artefacts.append(_ac)
 
     # Cross-namespace learning links
     back_refs_raw = _read_jsonl(ns_dir / "back_references.jsonl")

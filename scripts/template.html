@@ -2040,12 +2040,39 @@ function renderArtefactsView() {
       </div>`;
 
     const thStyle = 'padding:.5rem .75rem;text-align:left;font-size:.75rem;color:var(--muted);font-weight:600;white-space:nowrap;border-bottom:1px solid var(--border)';
+    const btnStyle = 'padding:.2rem .5rem;font-size:.72rem;border-radius:3px;border:1px solid var(--border);background:var(--panel);color:var(--text);cursor:pointer';
 
     const tableRows = rows.map(a => {
-      const bg    = nsBadgeColour[a.namespace] || '#888';
-      const date  = (a.created_at || '').slice(0, 10);
-      const tags  = (a.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join(' ');
-      const desc  = a.description ? `<span style="color:var(--muted);font-size:.78rem"> — ${esc(a.description)}</span>` : '';
+      const bg       = nsBadgeColour[a.namespace] || '#888';
+      const date     = (a.created_at || '').slice(0, 10);
+      const tags     = (a.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join(' ');
+      const desc     = a.description ? `<span style="color:var(--muted);font-size:.78rem"> — ${esc(a.description)}</span>` : '';
+      const absFile  = a.abs_file || null;
+      const typeLc   = (a.type || '').toLowerCase();
+      const isHtml   = typeLc === 'html';
+      const isImage  = ['svg','png','jpg','jpeg','gif','webp'].includes(typeLc);
+      const id       = a.artefact_id || '';
+
+      let actionCell = `<td style="padding:.45rem .75rem;white-space:nowrap">`;
+      if (!absFile) {
+        actionCell += `<span style="color:var(--muted);font-size:.7rem">file missing</span>`;
+      } else if (isHtml) {
+        actionCell += `<button class="art-view-btn" data-file="${esc(absFile)}" style="${btnStyle}">Open ↗</button>`;
+      } else if (isImage) {
+        actionCell += `<button class="art-prev-btn" data-id="${esc(id)}" style="${btnStyle}">Preview</button>`;
+      }
+      actionCell += `</td>`;
+
+      const previewRow = (isImage && absFile && id) ? `
+        <tr id="art-prev-${esc(id)}" style="display:none;background:var(--panel)">
+          <td colspan="6" style="padding:1rem 1.5rem">
+            ${typeLc === 'svg'
+              ? `<object type="image/svg+xml" data="file://${esc(absFile)}" style="max-width:100%;max-height:420px;display:block"></object>`
+              : `<img src="file://${esc(absFile)}" alt="${esc(a.title||'')}" style="max-width:100%;max-height:420px;border-radius:4px;display:block">`
+            }
+          </td>
+        </tr>` : '';
+
       return `
         <tr style="border-bottom:1px solid var(--border)">
           <td style="padding:.45rem .75rem;font-size:.75rem;color:var(--muted);white-space:nowrap">${esc(date)}</td>
@@ -2055,7 +2082,8 @@ function renderArtefactsView() {
           <td style="padding:.45rem .75rem"><span class="tag">${esc(a.type || '')}</span></td>
           <td style="padding:.45rem .75rem;font-size:.82rem">${esc(a.title || '')}${desc}</td>
           <td style="padding:.45rem .75rem">${tags}</td>
-        </tr>`;
+          ${actionCell}
+        </tr>${previewRow}`;
     }).join('');
 
     const empty = `<div class="panel-msg">No artefacts saved yet. Use <code>save-artefact</code> from compass to record SVGs or HTML generated during a session.</div>`;
@@ -2068,6 +2096,7 @@ function renderArtefactsView() {
             <th style="${thStyle}">Type</th>
             <th style="${thStyle}">Title</th>
             <th style="${thStyle}">Tags</th>
+            <th style="${thStyle}">Actions</th>
           </tr></thead>
           <tbody>${tableRows}</tbody>
         </table></div>`;
@@ -2079,6 +2108,24 @@ function renderArtefactsView() {
       render();
     });
   }
+
+  // Event delegation for action buttons — survives render() rebuilds
+  container.addEventListener('click', e => {
+    const viewBtn = e.target.closest('.art-view-btn');
+    if (viewBtn) {
+      window.open('file://' + viewBtn.dataset.file, '_blank');
+      return;
+    }
+    const prevBtn = e.target.closest('.art-prev-btn');
+    if (prevBtn) {
+      const row = document.getElementById('art-prev-' + prevBtn.dataset.id);
+      if (row) {
+        const showing = row.style.display !== 'none';
+        row.style.display = showing ? 'none' : '';
+        prevBtn.textContent = showing ? 'Preview' : 'Hide';
+      }
+    }
+  });
 
   render();
   container.dataset.rendered = '1';
