@@ -106,8 +106,10 @@ def _iter_reality_bullets(reality_md):
     in_backlog = False
     for line in reality_md.splitlines():
         s = line.strip()
-        if s.startswith("##"):
-            in_backlog = any(k in s.lstrip("#").strip().lower() for k in _BACKLOG_HEADERS)
+        if s.startswith("#"):
+            level = len(s) - len(s.lstrip("#"))
+            if level == 2:
+                in_backlog = any(k in s.lstrip("#").strip().lower() for k in _BACKLOG_HEADERS)
         elif s.startswith("- ") or s.startswith("* "):
             text = s[2:].strip()
             if not text or text.startswith("_"):
@@ -434,6 +436,9 @@ def load_namespace(ns_dir):
                 hit_rate = completions_by_date.get(f.stem[:10])
                 quality_dist[_classify_session(parsed, hit_rate)] += 1
 
+    # Most recent session's incomplete items — used by _extract_blocking_edges()
+    recent_incomplete_items = history_files[0]["incomplete"] if history_files else []
+
     # Intent drift timeline
     intent_history = _read_jsonl(ns_dir / "intent_history.jsonl")
 
@@ -516,9 +521,10 @@ def load_namespace(ns_dir):
         "carry_forward_trend":       carry_forward_trend,
         "quality_dist":              quality_dist,
         "decay_history":             decay_history,
-        "code_review_defer_count":   code_review_defer_count,
-        "research_defer_count":      research_defer_count,
-        "artefacts":                 artefacts,
+        "code_review_defer_count":    code_review_defer_count,
+        "research_defer_count":       research_defer_count,
+        "artefacts":                  artefacts,
+        "recent_incomplete_items":    recent_incomplete_items,
     }
 
 
@@ -651,6 +657,65 @@ def _card_html(n, i):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Cross-namespace blocking edge extraction (E24a)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_BLOCKED_RE = re.compile(r'\[(?::\s*)?blocked:\s*(.+?)\]', re.IGNORECASE)
+
+
+def _extract_blocking_edges(namespaces):
+    """Return cross-namespace blocking edges parsed from carry-forward incomplete items.
+
+    Each edge: {source, target, reason, carryForward, pcodes, tags}
+    source  — namespace whose carry-forward item is blocked
+    target  — namespace named as the blocker in the [blocked: ...] annotation
+    """
+    # Build name lookup sorted longest-first to avoid "compass" matching inside
+    # "compass-dashboard" when both are present.
+    ns_by_len = sorted(
+        ((n["namespace"].lower(), n["namespace"]) for n in namespaces),
+        key=lambda t: -len(t[0]),
+    )
+
+    edges = []
+    for ns in namespaces:
+        for item in ns.get("recent_incomplete_items", []):
+            m = _BLOCKED_RE.search(item)
+            if not m:
+                continue
+            reason = m.group(1).strip()
+            reason_lower = reason.lower()
+
+            blocker = None
+            for name_lower, name_orig in ns_by_len:
+                if name_lower == ns["namespace"].lower():
+                    continue
+                if name_lower in reason_lower:
+                    blocker = name_orig
+                    break
+
+            if not blocker:
+                continue
+
+            pcodes = list(dict.fromkeys(re.findall(r'\bP\d+\b', item)))
+            edges.append({
+                "source":       ns["namespace"],
+                "target":       blocker,
+                "reason":       reason,
+                "carryForward": item,
+                "pcodes":       pcodes,
+                "tags":         [p.lower() for p in pcodes],
+            })
+
+    return edges
+
+
+def _js_blocking_edges(namespaces):
+    raw = json.dumps(_extract_blocking_edges(namespaces), ensure_ascii=False, default=str)
+    return raw.replace("</script>", r"<\/script>").replace("<!--", r"<\!--")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # JS data serialisation
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -738,8 +803,9 @@ def generate(namespaces):
     html = html.replace("[[N_LEARNINGS]]",    str(n_learnings))
     html = html.replace("[[N_SESSIONS]]",     str(n_sessions))
     html = html.replace("[[CARDS]]",          cards)
-    html = html.replace("[[NS_DATA]]",        _js_data(namespaces))
-    html = html.replace("[[COMMUNITY_DATA]]", _js_community(community))
+    html = html.replace("[[NS_DATA]]",           _js_data(namespaces))
+    html = html.replace("[[COMMUNITY_DATA]]",    _js_community(community))
+    html = html.replace("[[BLOCKING_EDGES]]",    _js_blocking_edges(namespaces))
 
     return html
 

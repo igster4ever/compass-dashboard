@@ -83,6 +83,8 @@ character explicitly in the old string.
 | Marker | Replaced with |
 |--------|---------------|
 | `[[NS_DATA]]` | JSON-serialised namespace array |
+| `[[COMMUNITY_DATA]]` | JSON-serialised community federation data |
+| `[[BLOCKING_EDGES]]` | JSON array of cross-namespace blocking edges (E24a) |
 | `[[CARDS]]` | namespace card HTML |
 | `[[GENERATED_AT]]` | generation timestamp |
 | `[[N_NS]]`, `[[N_OPEN]]`, `[[N_LEARNINGS]]`, `[[N_SESSIONS]]` | header stats |
@@ -187,7 +189,8 @@ count as user-controlled.
 | 96–302 | `_corpus_health()`, `_stale_bullet_count()`, `_goal_stats()`, `_goal_by_month()` |
 | 303–342 | `_compute_exploration_ratio()`, `_goal_type_by_session()` |
 | 343–594 | `load_namespace()`, `discover_namespaces()`, `_card_html()` |
-| 595–685 | `_js_data()`, `generate()` (reads template.html), `main()`, `__main__` |
+| 595–660 | `_extract_blocking_edges()`, `_js_blocking_edges()` (E24a cross-namespace blocking edges) |
+| 661–755 | `_js_data()`, `_js_community()`, `generate()` (reads template.html), `main()`, `__main__` |
 
 **`scripts/template.html`** (~2,897 lines — HTML/CSS/JS):
 

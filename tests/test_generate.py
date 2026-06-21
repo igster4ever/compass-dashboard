@@ -68,6 +68,7 @@ def _minimal_ns(overrides=None):
         "code_review_defer_count":  0,
         "research_defer_count":     0,
         "artefacts":                [],
+        "recent_incomplete_items":  [],
     }
     if overrides:
         ns.update(overrides)
@@ -148,7 +149,8 @@ class TestRenderHtml(unittest.TestCase):
 
     def test_placeholder_markers_all_replaced(self):
         for placeholder in ("[[GENERATED_AT]]", "[[N_NS]]", "[[N_OPEN]]",
-                            "[[N_LEARNINGS]]", "[[N_SESSIONS]]", "[[CARDS]]", "[[NS_DATA]]"):
+                            "[[N_LEARNINGS]]", "[[N_SESSIONS]]", "[[CARDS]]",
+                            "[[NS_DATA]]", "[[BLOCKING_EDGES]]"):
             self.assertNotIn(placeholder, self.html,
                              msg=f"Unreplaced placeholder found: {placeholder}")
 
@@ -204,8 +206,88 @@ class TestTemplateFile(unittest.TestCase):
     def test_template_contains_all_placeholders(self):
         content = self._template.read_text(encoding="utf-8")
         for marker in ("[[GENERATED_AT]]", "[[N_NS]]", "[[N_OPEN]]",
-                       "[[N_LEARNINGS]]", "[[N_SESSIONS]]", "[[CARDS]]", "[[NS_DATA]]"):
+                       "[[N_LEARNINGS]]", "[[N_SESSIONS]]", "[[CARDS]]",
+                       "[[NS_DATA]]", "[[BLOCKING_EDGES]]"):
             self.assertIn(marker, content, msg=f"Missing placeholder in template.html: {marker}")
+
+
+class TestBlockingEdges(unittest.TestCase):
+
+    _extract = staticmethod(_mod._extract_blocking_edges)
+
+    def _ns(self, name, incomplete=None):
+        ns = _minimal_ns({"namespace": name})
+        ns["recent_incomplete_items"] = incomplete or []
+        return ns
+
+    def test_no_blocked_annotations_returns_empty(self):
+        namespaces = [self._ns("alpha"), self._ns("beta")]
+        self.assertEqual(self._extract(namespaces), [])
+
+    def test_basic_blocking_edge_detected(self):
+        namespaces = [
+            self._ns("alpha", ["Do thing [: blocked: beta not shipped yet]"]),
+            self._ns("beta"),
+        ]
+        edges = self._extract(namespaces)
+        self.assertEqual(len(edges), 1)
+        self.assertEqual(edges[0]["source"], "alpha")
+        self.assertEqual(edges[0]["target"], "beta")
+        self.assertIn("beta not shipped yet", edges[0]["reason"])
+
+    def test_blocking_without_leading_colon(self):
+        namespaces = [
+            self._ns("alpha", ["Do thing [blocked: beta missing]"]),
+            self._ns("beta"),
+        ]
+        edges = self._extract(namespaces)
+        self.assertEqual(len(edges), 1)
+        self.assertEqual(edges[0]["target"], "beta")
+
+    def test_self_reference_not_emitted(self):
+        namespaces = [
+            self._ns("alpha", ["Do thing [: blocked: alpha issue]"]),
+        ]
+        self.assertEqual(self._extract(namespaces), [])
+
+    def test_unknown_namespace_in_reason_not_emitted(self):
+        namespaces = [
+            self._ns("alpha", ["Do thing [: blocked: external-api not ready]"]),
+            self._ns("beta"),
+        ]
+        self.assertEqual(self._extract(namespaces), [])
+
+    def test_pcodes_extracted(self):
+        namespaces = [
+            self._ns("alpha", ["P40-D Phase 2 [: blocked: beta P40 Phase 2 not shipped]"]),
+            self._ns("beta"),
+        ]
+        edges = self._extract(namespaces)
+        self.assertIn("P40", edges[0]["pcodes"])
+
+    def test_longer_name_matched_before_prefix(self):
+        # "compass-dashboard" should NOT match when reason says "compass" only.
+        namespaces = [
+            self._ns("compass-dashboard", ["Thing [: blocked: compass script missing]"]),
+            self._ns("compass"),
+        ]
+        edges = self._extract(namespaces)
+        self.assertEqual(len(edges), 1)
+        self.assertEqual(edges[0]["target"], "compass")
+
+    def test_blocking_edges_embedded_in_html(self):
+        namespaces = [
+            self._ns("alpha", ["Do thing [: blocked: beta not shipped]"]),
+            self._ns("beta"),
+        ]
+        html = render_html(namespaces)
+        self.assertIn("const BLOCKING_EDGES = [", html)
+        self.assertIn('"source": "alpha"', html)
+        self.assertIn('"target": "beta"', html)
+
+    def test_empty_blocking_edges_in_html(self):
+        html = render_html([_minimal_ns()])
+        self.assertIn("const BLOCKING_EDGES = []", html)
 
 
 if __name__ == "__main__":

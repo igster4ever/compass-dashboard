@@ -88,6 +88,35 @@ class TestRealityCompleteness(unittest.TestCase):
         md = "## What exists\n- ✓ deployed\n"
         self.assertEqual(_reality_completeness(md), 100.0)
 
+    def test_subsection_header_under_backlog_does_not_reset_in_backlog(self):
+        # ### headers inside a backlog section should NOT reset in_backlog=False.
+        # Regression: "### P40-Dashboard" under "## What is next" previously
+        # reset in_backlog because "p40-dashboard" contains no backlog keyword.
+        md = (
+            "## What exists\n- Done thing live\n"
+            "## What is next\n"
+            "### P40-Dashboard — future phases\n"
+            "- P40-D Phase 2: pending\n"
+            "- P40-D Phase 3: pending\n"
+        )
+        # "Done thing live" counts (achieved); the two phase bullets are in backlog.
+        self.assertEqual(_reality_completeness(md), 100.0)
+
+    def test_subsection_header_under_non_backlog_does_not_flip_in_backlog(self):
+        # ### under "## What exists" should keep in_backlog=False.
+        md = (
+            "## What exists\n"
+            "### Core features\n"
+            "- Feature shipped\n"
+            "- Feature B live\n"
+        )
+        self.assertAlmostEqual(_reality_completeness(md), 100.0)
+
+    def test_level1_header_does_not_set_in_backlog(self):
+        # A # title at the top should not affect section classification.
+        md = "# Reality — myns\n## What exists\n- Thing done\n"
+        self.assertEqual(_reality_completeness(md), 100.0)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # _corpus_health
