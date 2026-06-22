@@ -317,5 +317,207 @@ class TestStaleBulletCount(unittest.TestCase):
             self.assertEqual(_stale_bullet_count(md, {}, days=30), 2)
 
 
+class TestMindmapData(unittest.TestCase):
+    """E25a — _mindmap_data() hierarchy builder."""
+
+    _mindmap = staticmethod(_mod._mindmap_data)
+
+    def _ns(self, **overrides):
+        base = {
+            "namespace":  "test-ns",
+            "learnings":  [],
+            "decisions":  [],
+            "history":    [],
+            "reality":    "",
+            "artefacts":  [],
+        }
+        base.update(overrides)
+        return base
+
+    # ── Root node ─────────────────────────────────────────────────────────────
+
+    def test_root_node_structure(self):
+        mm = self._mindmap(self._ns())
+        self.assertEqual(mm["id"],    "root")
+        self.assertEqual(mm["type"],  "root")
+        self.assertEqual(mm["label"], "test-ns")
+
+    def test_five_primary_branches(self):
+        mm = self._mindmap(self._ns())
+        ids = [c["id"] for c in mm["children"]]
+        self.assertEqual(ids, ["learnings", "decisions", "goals", "reality", "artefacts"])
+
+    def test_all_branches_are_branch_type(self):
+        mm = self._mindmap(self._ns())
+        for child in mm["children"]:
+            self.assertEqual(child["type"], "branch")
+
+    # ── Learnings branch ──────────────────────────────────────────────────────
+
+    def test_learnings_count_in_label(self):
+        ns = self._ns(learnings=[
+            {"text": "A fact", "tags": ["tooling"], "weight": 1, "learning_type": "fact"},
+            {"text": "B fact", "tags": ["tooling"], "weight": 1, "learning_type": "fact"},
+        ])
+        branch = self._mindmap(ns)["children"][0]
+        self.assertIn("2", branch["label"])
+
+    def test_learnings_clustered_by_primary_tag(self):
+        ns = self._ns(learnings=[
+            {"text": "T1", "tags": ["tooling"], "weight": 1, "learning_type": "fact"},
+            {"text": "T2", "tags": ["tooling"], "weight": 1, "learning_type": "fact"},
+            {"text": "A1", "tags": ["architecture"], "weight": 1, "learning_type": "fact"},
+        ])
+        branch = self._mindmap(ns)["children"][0]
+        cluster_ids = [c["id"] for c in branch["children"]]
+        self.assertIn("cluster-tooling",      cluster_ids)
+        self.assertIn("cluster-architecture", cluster_ids)
+
+    def test_learning_cluster_children_are_leaves(self):
+        ns = self._ns(learnings=[
+            {"text": "Some learning", "tags": ["tooling"], "weight": 2, "learning_type": "fact"},
+        ])
+        branch   = self._mindmap(ns)["children"][0]
+        cluster  = branch["children"][0]
+        leaf     = cluster["children"][0]
+        self.assertEqual(leaf["type"], "leaf")
+        self.assertIn("Some learning", leaf["label"])
+        self.assertEqual(leaf["meta"]["weight"], 2)
+
+    def test_learning_text_truncated_at_60(self):
+        long_text = "x" * 80
+        ns = self._ns(learnings=[
+            {"text": long_text, "tags": ["t"], "weight": 1, "learning_type": "fact"},
+        ])
+        branch  = self._mindmap(ns)["children"][0]
+        cluster = branch["children"][0]
+        leaf    = cluster["children"][0]
+        self.assertLessEqual(len(leaf["label"]), 62)  # 60 + "…"
+        self.assertEqual(leaf["meta"]["full_text"], long_text)
+
+    def test_learning_without_tags_falls_back_to_untagged(self):
+        ns = self._ns(learnings=[
+            {"text": "No tags", "tags": [], "weight": 1, "learning_type": "fact"},
+        ])
+        branch = self._mindmap(ns)["children"][0]
+        self.assertEqual(branch["children"][0]["id"], "cluster-untagged")
+
+    def test_clusters_ordered_by_size_descending(self):
+        ns = self._ns(learnings=[
+            {"text": "A", "tags": ["rare"],    "weight": 1, "learning_type": "fact"},
+            {"text": "B", "tags": ["common"],  "weight": 1, "learning_type": "fact"},
+            {"text": "C", "tags": ["common"],  "weight": 1, "learning_type": "fact"},
+            {"text": "D", "tags": ["common"],  "weight": 1, "learning_type": "fact"},
+        ])
+        branch = self._mindmap(ns)["children"][0]
+        self.assertEqual(branch["children"][0]["id"], "cluster-common")
+
+    # ── Decisions branch ──────────────────────────────────────────────────────
+
+    def test_decisions_are_leaves(self):
+        ns = self._ns(decisions=[
+            {"decision": "Use D3 only", "rationale": "already loaded", "date": "2026-01-01"},
+        ])
+        branch = self._mindmap(ns)["children"][1]
+        self.assertEqual(branch["children"][0]["type"], "leaf")
+        self.assertIn("Use D3", branch["children"][0]["label"])
+
+    def test_decision_meta_contains_rationale(self):
+        ns = self._ns(decisions=[
+            {"decision": "A", "rationale": "because B", "alternatives": "C", "date": "2026-01-01"},
+        ])
+        branch = self._mindmap(ns)["children"][1]
+        self.assertEqual(branch["children"][0]["meta"]["rationale"], "because B")
+
+    # ── Goals branch ──────────────────────────────────────────────────────────
+
+    def test_goals_sessions_are_session_type(self):
+        ns = self._ns(history=[
+            {"opened": "2026-06-21T08:00:00Z", "completed": ["Goal A", "Goal B"],
+             "filename": "2026-06-21T0800.md", "closed": None,
+             "planned": [], "incomplete": [], "notes": "", "learnings_extracted": []},
+        ])
+        branch  = self._mindmap(ns)["children"][2]
+        session = branch["children"][0]
+        self.assertEqual(session["type"], "session")
+        self.assertEqual(session["label"][:10], "2026-06-21")
+
+    def test_goals_completed_items_are_leaves(self):
+        ns = self._ns(history=[
+            {"opened": "2026-06-21T08:00:00Z", "completed": ["Ship E25a"],
+             "filename": "2026-06-21T0800.md", "closed": None,
+             "planned": [], "incomplete": [], "notes": "", "learnings_extracted": []},
+        ])
+        branch  = self._mindmap(ns)["children"][2]
+        session = branch["children"][0]
+        leaf    = session["children"][0]
+        self.assertEqual(leaf["type"], "leaf")
+        self.assertIn("Ship E25a", leaf["label"])
+
+    def test_goals_capped_at_5_sessions(self):
+        history = [
+            {"opened": f"2026-06-{20-i:02d}T08:00:00Z", "completed": [],
+             "filename": f"2026-06-{20-i:02d}T0800.md", "closed": None,
+             "planned": [], "incomplete": [], "notes": "", "learnings_extracted": []}
+            for i in range(8)
+        ]
+        branch = self._mindmap(self._ns(history=history))["children"][2]
+        self.assertLessEqual(len(branch["children"]), 5)
+
+    # ── Reality branch ────────────────────────────────────────────────────────
+
+    def test_reality_sections_parsed(self):
+        ns = self._ns(reality="## What exists\n- A\n- B\n## What is next\n- C\n")
+        branch = self._mindmap(ns)["children"][3]
+        labels = [c["label"] for c in branch["children"]]
+        self.assertIn("What exists",  labels)
+        self.assertIn("What is next", labels)
+
+    def test_reality_bullet_count_in_meta(self):
+        ns = self._ns(reality="## What exists\n- A\n- B\n- C\n")
+        branch = self._mindmap(ns)["children"][3]
+        self.assertEqual(branch["children"][0]["meta"]["bullet_count"], 3)
+
+    def test_reality_empty_string_produces_empty_branch(self):
+        branch = self._mindmap(self._ns(reality=""))["children"][3]
+        self.assertEqual(branch["children"], [])
+
+    # ── Artefacts branch ──────────────────────────────────────────────────────
+
+    def test_artefacts_are_leaves(self):
+        ns = self._ns(artefacts=[
+            {"title": "My Chart", "type": "svg", "created_at": "2026-06-20T10:00:00Z",
+             "description": "A chart", "tags": ["tooling"], "artefact_id": "abc",
+             "file": "artefacts/my-chart.svg", "session_id": None, "linked_decision_id": None},
+        ])
+        branch = self._mindmap(ns)["children"][4]
+        leaf   = branch["children"][0]
+        self.assertEqual(leaf["type"], "leaf")
+        self.assertIn("My Chart", leaf["label"])
+        self.assertEqual(leaf["meta"]["artefact_type"], "svg")
+
+    def test_artefact_count_in_label(self):
+        ns = self._ns(artefacts=[
+            {"title": "A", "type": "svg", "created_at": "", "description": "", "tags": [],
+             "artefact_id": "1", "file": "a.svg", "session_id": None, "linked_decision_id": None},
+            {"title": "B", "type": "html", "created_at": "", "description": "", "tags": [],
+             "artefact_id": "2", "file": "b.html", "session_id": None, "linked_decision_id": None},
+        ])
+        branch = self._mindmap(ns)["children"][4]
+        self.assertIn("2", branch["label"])
+
+    # ── generate() integration ────────────────────────────────────────────────
+
+    def test_mindmap_key_embedded_in_ns_json(self):
+        mm = self._mindmap(self._ns())
+        self.assertEqual(mm["type"], "root")
+        branch_ids = [c["id"] for c in mm["children"]]
+        self.assertIn("learnings", branch_ids)
+        self.assertIn("decisions", branch_ids)
+        self.assertIn("goals",     branch_ids)
+        self.assertIn("reality",   branch_ids)
+        self.assertIn("artefacts", branch_ids)
+
+
 if __name__ == "__main__":
     unittest.main()

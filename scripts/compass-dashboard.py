@@ -732,6 +732,167 @@ def _js_blocking_edges(namespaces):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Mind map data layer (E25a)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _mindmap_data(n: dict) -> dict:
+    """Return a D3-ready nested hierarchy for namespace n (E25a data layer)."""
+    ns_name = n["namespace"]
+
+    # ── Learnings branch: clustered by primary tag ────────────────────────────
+    tag_clusters: dict[str, list] = {}
+    for i, l in enumerate(n["learnings"]):
+        tag = (l.get("tags") or ["untagged"])[0]
+        tag_clusters.setdefault(tag, []).append(
+            {
+                "id":    f"l-{i}",
+                "label": l["text"][:60] + ("…" if len(l["text"]) > 60 else ""),
+                "type":  "leaf",
+                "meta":  {
+                    "weight":        l.get("weight", 1),
+                    "learning_type": l.get("learning_type", "fact"),
+                    "confidence":    l.get("confidence"),
+                    "date":          l.get("date", ""),
+                    "full_text":     l["text"],
+                },
+            }
+        )
+    learning_children = [
+        {
+            "id":       f"cluster-{tag}",
+            "label":    f"{tag} ({len(leaves)})",
+            "type":     "cluster",
+            "children": leaves,
+        }
+        for tag, leaves in sorted(tag_clusters.items(), key=lambda kv: -len(kv[1]))
+    ]
+    learnings_branch = {
+        "id":       "learnings",
+        "label":    f"Learnings ({len(n['learnings'])})",
+        "type":     "branch",
+        "children": learning_children,
+    }
+
+    # ── Decisions branch: flat, newest first ─────────────────────────────────
+    decision_leaves = [
+        {
+            "id":    f"d-{i}",
+            "label": (d.get("decision") or "")[:60] + ("…" if len(d.get("decision") or "") > 60 else ""),
+            "type":  "leaf",
+            "meta":  {
+                "rationale":    d.get("rationale", ""),
+                "alternatives": d.get("alternatives", ""),
+                "date":         d.get("date", ""),
+                "full_text":    d.get("decision", ""),
+            },
+        }
+        for i, d in enumerate(n["decisions"])
+    ]
+    decisions_branch = {
+        "id":       "decisions",
+        "label":    f"Decisions ({len(n['decisions'])})",
+        "type":     "branch",
+        "children": decision_leaves,
+    }
+
+    # ── Goals branch: last 5 sessions → completed items as leaves ────────────
+    session_nodes = []
+    for hi, h in enumerate(n["history"][:5]):
+        date_label = (h.get("opened") or h.get("filename", ""))[:10]
+        completed  = h.get("completed") or []
+        session_nodes.append(
+            {
+                "id":    f"s-{hi}",
+                "label": date_label or f"session-{hi+1}",
+                "type":  "session",
+                "children": [
+                    {
+                        "id":    f"s-{hi}-g-{gi}",
+                        "label": g[:60] + ("…" if len(g) > 60 else ""),
+                        "type":  "leaf",
+                        "meta":  {"full_text": g},
+                    }
+                    for gi, g in enumerate(completed)
+                ],
+            }
+        )
+    goals_branch = {
+        "id":       "goals",
+        "label":    "Goals (recent)",
+        "type":     "branch",
+        "children": session_nodes,
+    }
+
+    # ── Reality branch: top-level ## sections ────────────────────────────────
+    reality_sections: list[dict] = []
+    current_title = None
+    bullet_count  = 0
+    for line in (n.get("reality") or "").splitlines():
+        if line.startswith("## "):
+            if current_title is not None:
+                reality_sections.append(
+                    {"title": current_title, "bullets": bullet_count}
+                )
+            current_title = line[3:].strip()
+            bullet_count  = 0
+        elif current_title and line.strip().startswith(("- ", "* ")):
+            bullet_count += 1
+    if current_title is not None:
+        reality_sections.append({"title": current_title, "bullets": bullet_count})
+
+    reality_leaves = [
+        {
+            "id":    f"r-{i}",
+            "label": sec["title"][:50] + ("…" if len(sec["title"]) > 50 else ""),
+            "type":  "leaf",
+            "meta":  {"bullet_count": sec["bullets"]},
+        }
+        for i, sec in enumerate(reality_sections)
+    ]
+    reality_branch = {
+        "id":       "reality",
+        "label":    "Reality",
+        "type":     "branch",
+        "children": reality_leaves,
+    }
+
+    # ── Artefacts branch: flat list ───────────────────────────────────────────
+    artefact_leaves = [
+        {
+            "id":    f"a-{i}",
+            "label": a.get("title", "")[:60] + ("…" if len(a.get("title", "")) > 60 else ""),
+            "type":  "leaf",
+            "meta":  {
+                "artefact_type": a.get("type", ""),
+                "created_at":    a.get("created_at", ""),
+                "description":   a.get("description", ""),
+                "tags":          a.get("tags", []),
+            },
+        }
+        for i, a in enumerate(n["artefacts"])
+    ]
+    artefacts_branch = {
+        "id":       "artefacts",
+        "label":    f"Artefacts ({len(n['artefacts'])})",
+        "type":     "branch",
+        "children": artefact_leaves,
+    }
+
+    return {
+        "id":       "root",
+        "label":    ns_name,
+        "type":     "root",
+        "children": [
+            learnings_branch,
+            decisions_branch,
+            goals_branch,
+            reality_branch,
+            artefacts_branch,
+        ],
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # JS data serialisation
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -786,6 +947,7 @@ def _js_data(namespaces):
             "codeReviewDeferCount":    n["code_review_defer_count"],
             "researchDeferCount":      n["research_defer_count"],
             "artefacts":               n["artefacts"],
+            "mindmap":                 _mindmap_data(n),
         })
     raw = json.dumps(data, ensure_ascii=False, default=str)
     # Prevent </script> from breaking the embedding
