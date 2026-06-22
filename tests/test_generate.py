@@ -68,7 +68,7 @@ def _minimal_ns(overrides=None):
         "code_review_defer_count":  0,
         "research_defer_count":     0,
         "artefacts":                [],
-        "recent_incomplete_items":  [],
+        "all_incomplete_items":     [],
     }
     if overrides:
         ns.update(overrides)
@@ -217,7 +217,7 @@ class TestBlockingEdges(unittest.TestCase):
 
     def _ns(self, name, incomplete=None):
         ns = _minimal_ns({"namespace": name})
-        ns["recent_incomplete_items"] = incomplete or []
+        ns["all_incomplete_items"] = incomplete or []
         return ns
 
     def test_no_blocked_annotations_returns_empty(self):

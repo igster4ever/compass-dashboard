@@ -3162,18 +3162,21 @@ function applyDAGFocus(nsIdx) {
   const ns = NS[nsIdx];
   if (!ns) return;
 
-  // Partition blocking edges into "blocks others" and "blocked by others"
-  const blocksOthers  = _dag.edges.filter(e => e.type === 'blocking' && e.source === nsIdx);
-  const blockedBy     = _dag.edges.filter(e => e.type === 'blocking' && e.target === nsIdx);
+  // Partition edges by type and direction
+  const blocksOthers = _dag.edges.filter(e => e.type === 'blocking' && e.source === nsIdx);
+  const blockedBy    = _dag.edges.filter(e => e.type === 'blocking' && e.target === nsIdx);
+  const dependsOn    = _dag.edges.filter(e => e.type === 'dep' && e.source === nsIdx);
+  const referencedBy = _dag.edges.filter(e => e.type === 'dep' && e.target === nsIdx);
+
   const focusEdgeIdxs = new Set();
   _dag.edges.forEach((e, i) => {
-    if (e.type === 'blocking' && (e.source === nsIdx || e.target === nsIdx)) focusEdgeIdxs.add(i);
+    if ((e.type === 'blocking' || e.type === 'dep') && (e.source === nsIdx || e.target === nsIdx))
+      focusEdgeIdxs.add(i);
   });
 
   // Dim / highlight edges
   _dag.edges.forEach((e, i) => {
-    const ln  = document.getElementById('dag-edge-' + i);
-    const hit = document.getElementById('dag-hit-'  + i);
+    const ln = document.getElementById('dag-edge-' + i);
     if (!ln) return;
     if (focusEdgeIdxs.has(i)) {
       ln.setAttribute('stroke-opacity', '1');
@@ -3188,35 +3191,38 @@ function applyDAGFocus(nsIdx) {
   const chain = document.getElementById('dag-chain');
   if (!chain) return;
 
+  const _chainItem = (nsName, reason) =>
+    `<div class="dag-chain-item"><span class="chain-ns">${esc(nsName)}</span>`
+    + (reason ? `<div class="chain-reason">${esc(reason.slice(0, 80))}</div>` : '')
+    + '</div>';
+
   const blocksSect = blocksOthers.length
     ? '<div class="dag-chain-section">Blocks</div>'
-      + blocksOthers.map(e => {
-          const tgt = NS[e.target]?.namespace || '?';
-          const reason = (e.details || [])[0] || '';
-          return `<div class="dag-chain-item"><span class="chain-ns">${esc(tgt)}</span>`
-            + (reason ? `<div class="chain-reason">${esc(reason.slice(0, 80))}</div>` : '')
-            + '</div>';
-        }).join('')
+      + blocksOthers.map(e => _chainItem(NS[e.target]?.namespace || '?', (e.details||[])[0]||'')).join('')
     : '';
 
   const blockedSect = blockedBy.length
     ? '<div class="dag-chain-section">Blocked by</div>'
-      + blockedBy.map(e => {
-          const src = NS[e.source]?.namespace || '?';
-          const reason = (e.details || [])[0] || '';
-          return `<div class="dag-chain-item"><span class="chain-ns">${esc(src)}</span>`
-            + (reason ? `<div class="chain-reason">${esc(reason.slice(0, 80))}</div>` : '')
-            + '</div>';
-        }).join('')
+      + blockedBy.map(e => _chainItem(NS[e.source]?.namespace || '?', (e.details||[])[0]||'')).join('')
     : '';
 
-  const emptySect = (!blocksOthers.length && !blockedBy.length)
-    ? '<div class="dag-chain-empty">No blocking edges</div>'
+  const depOnSect = dependsOn.length
+    ? '<div class="dag-chain-section">Depends on</div>'
+      + dependsOn.map(e => _chainItem(NS[e.target]?.namespace || '?', (e.details||[])[0]||'')).join('')
+    : '';
+
+  const refBySect = referencedBy.length
+    ? '<div class="dag-chain-section">Referenced by</div>'
+      + referencedBy.map(e => _chainItem(NS[e.source]?.namespace || '?', (e.details||[])[0]||'')).join('')
+    : '';
+
+  const emptySect = (!blocksOthers.length && !blockedBy.length && !dependsOn.length && !referencedBy.length)
+    ? '<div class="dag-chain-empty">No dependency edges</div>'
     : '';
 
   chain.innerHTML = `<div class="dag-chain-title">Work chain</div>`
     + `<div class="dag-chain-ns">${esc(ns.namespace)}</div>`
-    + blocksSect + blockedSect + emptySect
+    + blocksSect + blockedSect + depOnSect + refBySect + emptySect
     + `<div class="dag-chain-nav">`
     +   `<button class="dag-chain-btn" onclick="switchView('overview');selectCard(${nsIdx},{force:true})">Open →</button>`
     +   `<button class="dag-chain-btn" onclick="clearDAGFocus()">✕</button>`

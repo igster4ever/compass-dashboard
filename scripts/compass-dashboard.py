@@ -436,8 +436,14 @@ def load_namespace(ns_dir):
                 hit_rate = completions_by_date.get(f.stem[:10])
                 quality_dist[_classify_session(parsed, hit_rate)] += 1
 
-    # Most recent session's incomplete items — used by _extract_blocking_edges()
-    recent_incomplete_items = history_files[0]["incomplete"] if history_files else []
+    # All sessions' incomplete items, deduped — used by _extract_blocking_edges()
+    _seen_items: set = set()
+    all_incomplete_items: list = []
+    for _hf in history_files:
+        for _item in _hf.get("incomplete", []):
+            if _item not in _seen_items:
+                _seen_items.add(_item)
+                all_incomplete_items.append(_item)
 
     # Intent drift timeline
     intent_history = _read_jsonl(ns_dir / "intent_history.jsonl")
@@ -533,7 +539,7 @@ def load_namespace(ns_dir):
         "code_review_defer_count":    code_review_defer_count,
         "research_defer_count":       research_defer_count,
         "artefacts":                  artefacts,
-        "recent_incomplete_items":    recent_incomplete_items,
+        "all_incomplete_items":       all_incomplete_items,
     }
 
 
@@ -695,7 +701,7 @@ def _extract_blocking_edges(namespaces):
 
     edges = []
     for ns in namespaces:
-        for item in ns.get("recent_incomplete_items", []):
+        for item in ns.get("all_incomplete_items", []):
             m = _BLOCKED_RE.search(item)
             if not m:
                 continue
