@@ -588,7 +588,7 @@ def discover_namespaces(filter_ns=None):
 # HTML card generation (Python side — static markup)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _card_html(n, i):
+def _card_html(n, i, community_published=None):
     status_cls   = "open" if n["open_session"] else "closed"
     status_label = "OPEN" if n["open_session"] else "CLOSED"
     time_label   = _time_ago(n["last_open"] if n["open_session"] else n["last_close"])
@@ -642,6 +642,12 @@ def _card_html(n, i):
                         f'title="{er.get("sessionsWithTypes", 0)} typed sessions">'
                         f'{er["ratio"]:.0f}% explore</span>')
 
+    community_html = ""
+    if community_published:
+        published = community_published.get(n["namespace"], 0)
+        if published > 0:
+            community_html = f'<span class="community-chip">📡 {published} shared</span>'
+
     return f"""
     <div class="card" id="card-{i}" data-idx="{i}" onclick="selectCard({i})">
       <div class="card-top">
@@ -660,6 +666,7 @@ def _card_html(n, i):
         {research_html}
         {review_html}
         {explore_html}
+        {community_html}
       </div>
       <div class="card-tags">{tags_html}</div>
     </div>"""
@@ -802,8 +809,14 @@ def generate(namespaces):
     n_learnings = sum(len(n["learnings"]) for n in namespaces)
     n_sessions  = sum(n["session_count"] for n in namespaces)
 
-    cards     = "".join(_card_html(n, i) for i, n in enumerate(namespaces))
     community = load_community()
+    community_published: dict[str, int] = {}
+    if community["enabled"]:
+        for entry in community.get("feed", []):
+            ns_id = entry.get("source_loop_id", "")
+            if ns_id:
+                community_published[ns_id] = community_published.get(ns_id, 0) + 1
+    cards = "".join(_card_html(n, i, community_published) for i, n in enumerate(namespaces))
 
     html = (Path(__file__).parent / "template.html").read_text(encoding="utf-8")
     html = html.replace("[[GENERATED_AT]]",   now)

@@ -112,6 +112,11 @@
     }
     .cadence-chip.research { background: rgba(56,189,248,.12); color: #38bdf8; }
     .cadence-chip.review   { background: rgba(52,211,153,.12); color: #34d399; }
+    .community-chip {
+      font-size: .62rem; padding: .15em .5em; border-radius: 999px;
+      background: rgba(99,102,241,.12); color: #818cf8; font-weight: 600;
+    }
+    .community-chip.inbox  { background: rgba(251,191,36,.12); color: var(--amber); }
     .version-badge {
       font-size: .6rem; font-weight: 600; background: var(--border);
       color: var(--muted); padding: .1em .45em; border-radius: 999px;
@@ -551,6 +556,28 @@
       display: flex; align-items: center; gap: .5rem;
       font-size: .72rem; color: var(--text); margin-bottom: .42rem;
     }
+    .dag-chain {
+      width: 200px; flex-shrink: 0; background: var(--surface);
+      border: 1px solid var(--border); border-radius: var(--radius); padding: .75rem;
+      display: none;
+    }
+    .dag-chain.visible { display: block; }
+    .dag-chain-title { font-size: .72rem; font-weight: 700; color: var(--text); margin-bottom: .5rem; }
+    .dag-chain-ns { font-size: .65rem; font-weight: 600; color: var(--blue); margin-bottom: .6rem;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .dag-chain-section { font-size: .6rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .07em; color: var(--muted); margin: .5rem 0 .3rem; }
+    .dag-chain-item { font-size: .68rem; color: var(--text); margin-bottom: .3rem;
+      border-left: 2px solid var(--border); padding-left: .4rem; }
+    .dag-chain-item .chain-ns { color: var(--red); font-weight: 600; }
+    .dag-chain-item .chain-reason { color: var(--muted); font-size: .62rem; margin-top: .1rem; }
+    .dag-chain-empty { font-size: .68rem; color: var(--subtle); font-style: italic; }
+    .dag-chain-nav { margin-top: .7rem; border-top: 1px solid var(--border); padding-top: .5rem;
+      display: flex; gap: .4rem; }
+    .dag-chain-btn { font-size: .65rem; padding: .2em .55em; border-radius: 4px;
+      border: 1px solid var(--border); background: transparent; color: var(--muted);
+      cursor: pointer; }
+    .dag-chain-btn:hover { color: var(--text); border-color: var(--blue); }
     .dag-tooltip {
       position: fixed; z-index: 8000; pointer-events: none;
       background: var(--surface2); border: 1px solid var(--border);
@@ -1494,6 +1521,12 @@ function computePriorities() {
       reasons.push({ icon: '🔍', text: `External research deferred ${ns.researchDeferCount}x — overdue` });
     }
 
+    const inboxCount = COMMUNITY.enabled ? (COMMUNITY.inbox || []).length : 0;
+    if (inboxCount > 0) {
+      score += 6;
+      reasons.push({ icon: '📡', text: `${inboxCount} community learning${inboxCount !== 1 ? 's' : ''} in inbox — review for adoption` });
+    }
+
     return { ns, idx, score, reasons };
   })
   .sort((a, b) => b.score - a.score)
@@ -2138,9 +2171,10 @@ const EDGE_META = {
   shared:     { color: '#58a6ff', label: 'Shared themes', dash: '5,3', arrow: false, title: 'shared tag themes (≥2)' },
   conflict:   { color: '#f85149', label: 'Theme overlap', dash: '2,3', arrow: false, title: 'high-weight learning overlap' },
   concurrent: { color: '#3fb950', label: 'Concurrent',    dash: '',    arrow: false, title: 'both sessions open' },
+  blocking:   { color: '#f85149', label: 'Blocking',      dash: '',    arrow: true,  title: 'carry-forward blocked annotation' },
 };
 
-const _dag = { nodes: [], edges: [], nodeMap: new Map(), raf: null, tick: 0, maxTick: 280, svgW: 900, svgH: 530, rendered: false, drag: null, showSystem: false };
+const _dag = { nodes: [], edges: [], nodeMap: new Map(), raf: null, tick: 0, maxTick: 280, svgW: 900, svgH: 530, rendered: false, drag: null, showSystem: false, focusedNs: null };
 
 function _addEdge(map, s, t, type, detail) {
   const key = type === 'dep' ? `${s}->${t}:dep` : `${Math.min(s,t)}-${Math.max(s,t)}:${type}`;
@@ -2177,6 +2211,19 @@ function computeAllEdges(includeSystem) {
       }
     });
   });
+
+  // Blocking edges from carry-forward annotations (E24a data layer)
+  if (BLOCKING_EDGES.length) {
+    const nsNameToIdx = new Map(NS.map((ns, i) => [ns.namespace, i]));
+    BLOCKING_EDGES.forEach(be => {
+      const si = nsNameToIdx.get(be.source);
+      const ti = nsNameToIdx.get(be.target);
+      if (si === undefined || ti === undefined) return;
+      if (!includeSystem && (SYSTEM_NS.has(be.source.toLowerCase()) || SYSTEM_NS.has(be.target.toLowerCase()))) return;
+      _addEdge(map, si, ti, 'blocking', be.reason || 'Carry-forward blocker');
+    });
+  }
+
   return [...map.values()];
 }
 
@@ -2980,12 +3027,13 @@ function renderDAG() {
   container.innerHTML = ''
     + '<div class="dag-toolbar">'
     +   '<span class="dag-title">Dependency Graph</span>'
-    +   '<span class="dag-hint">Drag nodes · hover edges for details · click node to navigate</span>'
+    +   '<span class="dag-hint">Drag nodes · hover edges for details · click node for chain</span>'
     +   '<button class="dag-btn' + sysCls + '" id="dag-sys-btn" onclick="toggleDAGSystem()">&#x2699; ' + sysLabel + '</button>'
     +   '<button class="dag-btn" onclick="resetDAGLayout()">&#x21ba; Reset</button>'
     + '</div>'
     + '<div class="dag-wrap">'
     +   '<svg id="dag-svg" viewBox="0 0 ' + W + ' ' + H + '" class="dag-svg" preserveAspectRatio="xMidYMid meet"></svg>'
+    +   '<div id="dag-chain" class="dag-chain"></div>'
     +   '<div class="dag-legend">' + buildDAGLegend(allEdges) + '</div>'
     + '</div>'
     + '<div id="dag-tooltip" class="dag-tooltip" style="display:none"></div>';
@@ -3092,7 +3140,7 @@ function renderDAG() {
       g.appendChild(sc);
     }
 
-    g.addEventListener('click', ev => { ev.stopPropagation(); switchView('overview'); selectCard(n.nsIdx, {force: true}); });
+    g.addEventListener('click', ev => { ev.stopPropagation(); applyDAGFocus(n.nsIdx); });
     g.addEventListener('mousedown', ev => { ev.preventDefault(); startDagDrag(ev, ni); });
     ng.appendChild(g);
   });
@@ -3107,6 +3155,84 @@ function toggleDAGSystem() {
   _dag.showSystem = !_dag.showSystem;
   _dag.rendered = false;
   renderDAG();
+}
+
+function applyDAGFocus(nsIdx) {
+  _dag.focusedNs = nsIdx;
+  const ns = NS[nsIdx];
+  if (!ns) return;
+
+  // Partition blocking edges into "blocks others" and "blocked by others"
+  const blocksOthers  = _dag.edges.filter(e => e.type === 'blocking' && e.source === nsIdx);
+  const blockedBy     = _dag.edges.filter(e => e.type === 'blocking' && e.target === nsIdx);
+  const focusEdgeIdxs = new Set();
+  _dag.edges.forEach((e, i) => {
+    if (e.type === 'blocking' && (e.source === nsIdx || e.target === nsIdx)) focusEdgeIdxs.add(i);
+  });
+
+  // Dim / highlight edges
+  _dag.edges.forEach((e, i) => {
+    const ln  = document.getElementById('dag-edge-' + i);
+    const hit = document.getElementById('dag-hit-'  + i);
+    if (!ln) return;
+    if (focusEdgeIdxs.has(i)) {
+      ln.setAttribute('stroke-opacity', '1');
+      ln.setAttribute('stroke-width', '2.5');
+    } else {
+      ln.setAttribute('stroke-opacity', '0.12');
+      ln.setAttribute('stroke-width', '1.5');
+    }
+  });
+
+  // Build chain sidebar
+  const chain = document.getElementById('dag-chain');
+  if (!chain) return;
+
+  const blocksSect = blocksOthers.length
+    ? '<div class="dag-chain-section">Blocks</div>'
+      + blocksOthers.map(e => {
+          const tgt = NS[e.target]?.namespace || '?';
+          const reason = (e.details || [])[0] || '';
+          return `<div class="dag-chain-item"><span class="chain-ns">${esc(tgt)}</span>`
+            + (reason ? `<div class="chain-reason">${esc(reason.slice(0, 80))}</div>` : '')
+            + '</div>';
+        }).join('')
+    : '';
+
+  const blockedSect = blockedBy.length
+    ? '<div class="dag-chain-section">Blocked by</div>'
+      + blockedBy.map(e => {
+          const src = NS[e.source]?.namespace || '?';
+          const reason = (e.details || [])[0] || '';
+          return `<div class="dag-chain-item"><span class="chain-ns">${esc(src)}</span>`
+            + (reason ? `<div class="chain-reason">${esc(reason.slice(0, 80))}</div>` : '')
+            + '</div>';
+        }).join('')
+    : '';
+
+  const emptySect = (!blocksOthers.length && !blockedBy.length)
+    ? '<div class="dag-chain-empty">No blocking edges</div>'
+    : '';
+
+  chain.innerHTML = `<div class="dag-chain-title">Work chain</div>`
+    + `<div class="dag-chain-ns">${esc(ns.namespace)}</div>`
+    + blocksSect + blockedSect + emptySect
+    + `<div class="dag-chain-nav">`
+    +   `<button class="dag-chain-btn" onclick="switchView('overview');selectCard(${nsIdx},{force:true})">Open →</button>`
+    +   `<button class="dag-chain-btn" onclick="clearDAGFocus()">✕</button>`
+    + `</div>`;
+  chain.classList.add('visible');
+}
+
+function clearDAGFocus() {
+  _dag.focusedNs = null;
+  const chain = document.getElementById('dag-chain');
+  if (chain) chain.classList.remove('visible');
+  // Restore all edge opacities
+  _dag.edges.forEach((e, i) => {
+    const ln = document.getElementById('dag-edge-' + i);
+    if (ln) { ln.setAttribute('stroke-opacity', '0.65'); ln.setAttribute('stroke-width', '1.5'); }
+  });
 }
 
 // Seed positions using topological layers (depends/conflict edges determine depth).

@@ -290,5 +290,65 @@ class TestBlockingEdges(unittest.TestCase):
         self.assertIn("const BLOCKING_EDGES = []", html)
 
 
+class TestCommunityChips(unittest.TestCase):
+    """P40-D Phase 2 — community health chip rendering."""
+
+    _card_html = staticmethod(_mod._card_html)
+
+    def _ns(self, name="test-ns"):
+        return _minimal_ns({"namespace": name})
+
+    # ── _card_html() unit tests (no filesystem) ──────────────────────────────
+
+    def test_chip_present_when_namespace_has_published(self):
+        html = self._card_html(self._ns("compass"), 0, {"compass": 2})
+        self.assertIn("community-chip", html)
+        self.assertIn("2 shared", html)
+
+    def test_chip_absent_when_namespace_not_in_published(self):
+        html = self._card_html(self._ns("test-ns"), 0, {"other-ns": 3})
+        self.assertNotIn("community-chip", html)
+
+    def test_chip_absent_when_community_published_is_none(self):
+        html = self._card_html(self._ns("test-ns"), 0, None)
+        self.assertNotIn("community-chip", html)
+
+    def test_chip_count_reflects_published_value(self):
+        html = self._card_html(self._ns("my-ns"), 0, {"my-ns": 5})
+        self.assertIn("5 shared", html)
+
+    # ── generate() integration — patched load_community ──────────────────────
+
+    def test_chip_rendered_in_full_html_when_community_enabled(self):
+        from unittest.mock import patch
+        community = {
+            "enabled": True,
+            "feed": [{"source_loop_id": "test-ns", "text": "a learning"}],
+            "inbox": [], "adoptions": [], "subscriptions": [], "trust_registry": [],
+        }
+        with patch.object(_mod, "load_community", return_value=community):
+            html = render_html([_minimal_ns({"namespace": "test-ns"})])
+        self.assertIn("community-chip", html)
+        self.assertIn("1 shared", html)
+
+    def test_no_chip_in_html_when_community_disabled(self):
+        from unittest.mock import patch
+        community = {
+            "enabled": False,
+            "feed": [], "inbox": [], "adoptions": [], "subscriptions": [], "trust_registry": [],
+        }
+        with patch.object(_mod, "load_community", return_value=community):
+            html = render_html([_minimal_ns()])
+        self.assertNotIn("shared</span>", html)
+
+    def test_community_chip_css_present_in_template(self):
+        template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
+        self.assertIn(".community-chip", template)
+
+    def test_community_inbox_signal_in_template(self):
+        template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
+        self.assertIn("community learning", template)
+
+
 if __name__ == "__main__":
     unittest.main()
