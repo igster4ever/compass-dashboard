@@ -69,6 +69,9 @@ def _minimal_ns(overrides=None):
         "research_defer_count":     0,
         "artefacts":                [],
         "all_incomplete_items":     [],
+        "skill_feedback":           [],
+        "sessions_since_skill_opt": 0,
+        "skill_opt_due":            False,
     }
     if overrides:
         ns.update(overrides)
@@ -348,6 +351,88 @@ class TestCommunityChips(unittest.TestCase):
     def test_community_inbox_signal_in_template(self):
         template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
         self.assertIn("community learning", template)
+
+
+class TestMindMap(unittest.TestCase):
+    """E25b — Mind Map tab wiring and data layer."""
+
+    def _html(self, overrides=None):
+        return render_html([_minimal_ns(overrides or {})])
+
+    # ── Template structure ─────────────────────────────────────────────────
+
+    def test_vtab_mindmap_button_in_template(self):
+        template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
+        self.assertIn('id="vtab-mindmap"', template)
+
+    def test_view_mindmap_div_in_template(self):
+        template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
+        self.assertIn('id="view-mindmap"', template)
+
+    def test_switchview_includes_mindmap(self):
+        template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
+        self.assertIn("'mindmap'", template)
+        self.assertIn("renderMindMap", template)
+
+    def test_mm_state_object_defined(self):
+        template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
+        self.assertIn("const _mm =", template)
+
+    # ── Data layer — mindmap field embedded in NS ──────────────────────────
+
+    def test_mindmap_field_present_in_ns(self):
+        html = self._html()
+        self.assertIn('"mindmap":', html)
+
+    def test_mindmap_root_label_is_namespace_name(self):
+        html = self._html({"namespace": "my-test-ns"})
+        # root node label should be the namespace name
+        self.assertIn('"label": "my-test-ns"', html)
+
+    def test_mindmap_learnings_branch_present(self):
+        html = self._html({"learnings": [
+            {"text": "A test learning", "tags": ["tooling"], "weight": 1}
+        ]})
+        self.assertIn('"id": "learnings"', html)
+
+    def test_mindmap_learnings_cluster_by_tag(self):
+        html = self._html({"learnings": [
+            {"text": "A test learning", "tags": ["tooling"], "weight": 1},
+            {"text": "Another", "tags": ["tooling"], "weight": 2},
+        ]})
+        # tag cluster label includes count
+        self.assertIn("tooling (2)", html)
+
+    def test_mindmap_decisions_branch_present(self):
+        html = self._html({"decisions": [
+            {"decision": "We chose X", "rationale": "because Y", "date": "2026-01-01"}
+        ]})
+        self.assertIn('"id": "decisions"', html)
+
+    def test_mindmap_goals_branch_present(self):
+        html = self._html()
+        self.assertIn('"id": "goals"', html)
+
+    def test_mindmap_reality_branch_present(self):
+        html = self._html()
+        self.assertIn('"id": "reality"', html)
+
+    def test_mindmap_artefacts_branch_present(self):
+        html = self._html()
+        self.assertIn('"id": "artefacts"', html)
+
+    def test_mindmap_leaf_text_truncated_at_60(self):
+        long_text = "X" * 80
+        html = self._html({"learnings": [
+            {"text": long_text, "tags": ["tooling"], "weight": 1}
+        ]})
+        # leaf label is truncated; full_text is preserved in meta
+        self.assertIn("…", html)
+        self.assertIn(long_text, html)  # full text in meta.full_text
+
+    def test_mindmap_script_tag_injection_escaped(self):
+        html = self._html({"namespace": "evil</script><script>alert(1)</script>"})
+        self.assertNotIn("</script><script>", html)
 
 
 if __name__ == "__main__":

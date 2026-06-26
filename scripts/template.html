@@ -598,6 +598,51 @@
     .dag-tip-concurrent { background: var(--green-bg); color: var(--green); }
     .dag-tip-detail { font-size: .72rem; color: var(--muted); line-height: 1.5; }
 
+    /* ── Community view (P40-D Phase 3) ── */
+    .community-wrap { padding: 1.2rem 1.5rem; max-width: 900px; }
+    .community-section { margin-bottom: 1.8rem; }
+    .community-section-title { font-size: .8rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .06em; color: var(--text-muted); margin-bottom: .7rem; }
+    .community-health-bar { display: flex; gap: 1.2rem; flex-wrap: wrap; margin-bottom: .6rem; }
+    .community-stat { background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+      padding: .5rem .9rem; display: flex; flex-direction: column; align-items: center; min-width: 80px; }
+    .community-stat-val { font-size: 1.4rem; font-weight: 700; color: var(--blue); }
+    .community-stat-lbl { font-size: .65rem; color: var(--text-muted); margin-top: .1rem; }
+    .community-stat.inbox .community-stat-val { color: var(--amber); }
+    .community-stat.adopted .community-stat-val { color: var(--green); }
+    .community-disabled { font-size: .85rem; color: var(--text-muted); font-style: italic; padding: 2rem; text-align: center; }
+    .trust-table { width: 100%; border-collapse: collapse; font-size: .78rem; }
+    .trust-table th { text-align: left; padding: .4rem .7rem; font-size: .68rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted);
+      border-bottom: 1px solid var(--border); }
+    .trust-table td { padding: .45rem .7rem; border-bottom: 1px solid var(--border); color: var(--text); vertical-align: top; }
+    .trust-table tr:last-child td { border-bottom: none; }
+    .trust-level-badge { font-size: .65rem; padding: .15em .5em; border-radius: 3px; font-weight: 600; }
+    .trust-level-high   { background: var(--green-bg); color: var(--green); }
+    .trust-level-medium { background: var(--amber-bg); color: var(--amber); }
+    .trust-level-low    { background: var(--surface); color: var(--text-muted); border: 1px solid var(--border); }
+    .feed-list { display: flex; flex-direction: column; gap: .6rem; }
+    .feed-entry { background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+      padding: .6rem .9rem; font-size: .78rem; }
+    .feed-entry-meta { font-size: .65rem; color: var(--text-muted); margin-bottom: .3rem; display: flex; gap: .6rem; flex-wrap: wrap; }
+    .feed-entry-text { color: var(--text); line-height: 1.5; }
+    .feed-tag { font-size: .62rem; padding: .1em .4em; border-radius: 3px;
+      background: var(--blue-bg); color: var(--blue); }
+
+    /* ── Mind Map view (E25b) ── */
+    #view-mindmap { display: flex; flex-direction: column; height: calc(100vh - 120px); }
+    .mm-toolbar { padding: .5rem 1rem; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    .mm-ns-picker { display: flex; flex-wrap: wrap; gap: .4rem; }
+    .mm-ns-btn { font-size: .7rem; padding: .2em .6em; border-radius: 4px; border: 1px solid var(--border);
+                 background: transparent; color: var(--text-muted); cursor: pointer; }
+    .mm-ns-btn:hover { color: var(--text); border-color: var(--blue); }
+    .mm-ns-btn.active { color: var(--blue); border-color: var(--blue); background: var(--blue-bg); font-weight: 600; }
+    .mm-detail { font-size: .75rem; color: var(--text-muted); padding: .4rem 1rem;
+                 min-height: 1.8rem; border-bottom: 1px solid var(--border); flex-shrink: 0;
+                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mm-svg { flex: 1; width: 100%; }
+    .mm-link { fill: none; stroke-width: 1.2px; }
+
     /* ── Heatmap view ── */
     .heatmap-wrap { overflow-x: auto; padding-bottom: .5rem; }
     .heatmap-grid {
@@ -731,6 +776,8 @@
     <button class="view-tab"        id="vtab-timeline"      onclick="switchView('timeline')">Learning Timeline</button>
     <button class="view-tab"        id="vtab-decisions"     onclick="switchView('decisions')">Decisions</button>
     <button class="view-tab"        id="vtab-artefacts"     onclick="switchView('artefacts')">Artefacts</button>
+    <button class="view-tab"        id="vtab-mindmap"       onclick="switchView('mindmap')">Mind Map</button>
+    <button class="view-tab"        id="vtab-community"     onclick="switchView('community')">Community</button>
   </nav>
 
   <div id="view-overview">
@@ -750,6 +797,8 @@
   <div id="view-timeline"     style="display:none"></div>
   <div id="view-decisions"    style="display:none"></div>
   <div id="view-artefacts"   style="display:none"></div>
+  <div id="view-mindmap"     style="display:none"></div>
+  <div id="view-community"   style="display:none"></div>
   <div id="heatmap-tooltip" class="heatmap-tooltip"></div>
 
   </div>
@@ -1100,6 +1149,43 @@ function renderStateSection_DreamStatus(ns) {
   </div>`;
 }
 
+function renderStateSection_SkillOptStatus(ns) {
+  const n    = ns.sessionsSinceSkillOpt || 0;
+  const due  = ns.skillOptDue;
+  const icon = due ? '⚠' : '✓';
+  const col  = due ? 'var(--amber)' : 'var(--muted)';
+  const msg  = due
+    ? `due — ${n} session${n !== 1 ? 's' : ''} since last optimisation pass`
+    : `${n} session${n !== 1 ? 's' : ''} since last optimisation pass`;
+  return `<div class="md-section"><h3>Skill optimisation (P53)</h3>
+    <div style="font-size:.82rem;color:${col}">${icon} ${esc(msg)}</div>
+  </div>`;
+}
+
+function renderStateSection_SkillFeedback(ns) {
+  const fb = ns.skillFeedback || [];
+  if (!fb.length) {
+    return `<div class="md-section"><h3>Skill feedback (P52)</h3>
+      <div style="font-size:.78rem;color:var(--muted);font-style:italic">No feedback logged yet.</div>
+    </div>`;
+  }
+  // sort by weight desc
+  const sorted = fb.slice().sort((a, b) => (b.weight || 1) - (a.weight || 1));
+  const rows = sorted.map(f => {
+    const w    = f.weight || 1;
+    const step = esc(f.step_ref || 'general');
+    const bar  = '█'.repeat(Math.min(w, 5)) + '░'.repeat(Math.max(0, 5 - w));
+    return `<div style="margin-bottom:.5rem;font-size:.78rem">
+      <span style="color:var(--amber);font-family:monospace;font-size:.7rem">${bar}</span>
+      <span style="color:var(--muted);font-size:.68rem;margin-left:.4rem">[${step}]</span>
+      <div style="color:var(--text);margin-top:.15rem">${esc(f.text || '')}</div>
+    </div>`;
+  }).join('');
+  return `<div class="md-section"><h3>Skill feedback (P52) — ${fb.length} item${fb.length !== 1 ? 's' : ''}</h3>
+    ${rows}
+  </div>`;
+}
+
 function renderState(ns) {
   return [
     renderStateSection_Intent(ns),
@@ -1112,6 +1198,8 @@ function renderState(ns) {
     renderStateSection_Deferred(ns),
     renderStateSection_CycleSparkline(ns),
     renderStateSection_DreamStatus(ns),
+    renderStateSection_SkillOptStatus(ns),
+    renderStateSection_SkillFeedback(ns),
   ].join('');
 }
 
@@ -1394,7 +1482,7 @@ function toggleSession(i) {
 
 function switchView(v) {
   if (v !== 'dag' && _dag.raf) { cancelAnimationFrame(_dag.raf); _dag.raf = null; }
-  ['overview', 'priorities', 'scorecard', 'dag', 'heatmap', 'timeline', 'decisions', 'artefacts'].forEach(id => {
+  ['overview', 'priorities', 'scorecard', 'dag', 'heatmap', 'timeline', 'decisions', 'artefacts', 'mindmap', 'community'].forEach(id => {
     document.getElementById('view-' + id).style.display = id === v ? '' : 'none';
     document.getElementById('vtab-' + id).classList.toggle('active', id === v);
   });
@@ -1405,6 +1493,8 @@ function switchView(v) {
   if (v === 'timeline')   renderLearningTimeline();
   if (v === 'decisions')  renderDecisionsView();
   if (v === 'artefacts')  renderArtefactsView();
+  if (v === 'mindmap')    renderMindMap();
+  if (v === 'community')  renderCommunityView();
 }
 
 // ── Attention queue (E9) ─────────────────────────────────────────────────────
@@ -2176,6 +2266,8 @@ const EDGE_META = {
 
 const _dag = { nodes: [], edges: [], nodeMap: new Map(), raf: null, tick: 0, maxTick: 280, svgW: 900, svgH: 530, rendered: false, drag: null, showSystem: false, focusedNs: null };
 
+const _mm = { rendered: false, nsIdx: 0 };
+
 function _addEdge(map, s, t, type, detail) {
   const key = type === 'dep' ? `${s}->${t}:dep` : `${Math.min(s,t)}-${Math.max(s,t)}:${type}`;
   if (!map.has(key)) map.set(key, { source: s, target: t, type, details: [] });
@@ -2287,18 +2379,20 @@ function renderHeatmap() {
     <button class="dag-btn"        id="hbtn-goaltypes"  onclick="switchHeatmap('goaltypes')">Goal Types</button>
     <button class="dag-btn"        id="hbtn-planning"   onclick="switchHeatmap('planning')">Planning</button>
     <button class="dag-btn"        id="hbtn-swimlane"   onclick="switchHeatmap('swimlane')">Session Timeline</button>
+    <button class="dag-btn"        id="hbtn-quality"    onclick="switchHeatmap('quality')">Quality (P51)</button>
   </div>
   <div id="hpanel-sessions"></div>
   <div id="hpanel-goals"      style="display:none"></div>
   <div id="hpanel-velocity"   style="display:none"></div>
   <div id="hpanel-goaltypes"  style="display:none"></div>
   <div id="hpanel-planning"   style="display:none"></div>
-  <div id="hpanel-swimlane"   style="display:none"></div>`;
+  <div id="hpanel-swimlane"   style="display:none"></div>
+  <div id="hpanel-quality"    style="display:none"></div>`;
   renderSessionHeatmapPanel();
 }
 
 function switchHeatmap(name) {
-  ['sessions', 'goals', 'velocity', 'goaltypes', 'planning', 'swimlane'].forEach(id => {
+  ['sessions', 'goals', 'velocity', 'goaltypes', 'planning', 'swimlane', 'quality'].forEach(id => {
     document.getElementById('hpanel-' + id).style.display = id === name ? '' : 'none';
     document.getElementById('hbtn-' + id).classList.toggle('active', id === name);
   });
@@ -2307,6 +2401,7 @@ function switchHeatmap(name) {
   if (name === 'goaltypes') renderGoalTypesPanel();
   if (name === 'planning')  renderPlanningPanel();
   if (name === 'swimlane')  renderSwimlane();
+  if (name === 'quality')   renderQualityTrendPanel();
 }
 
 function renderHeatmapGrid(periods, nsSorted, cellFn, legendHtml) {
@@ -2835,6 +2930,89 @@ function renderSwimlane() {
     </div>`;
 }
 
+// ── Quality trend panel (P51) — goal hit-rate bar chart per namespace ─────────
+
+function renderQualityTrendPanel() {
+  const container = document.getElementById('hpanel-quality');
+  if (container.dataset.rendered) return;
+  container.dataset.rendered = '1';
+
+  // derive trend from goalByMonth (avg hit-rate per month, per namespace)
+  const allMonths = new Set();
+  NS.forEach(ns => Object.keys(ns.goalByMonth || {}).forEach(m => allMonths.add(m)));
+  const months = Array.from(allMonths).sort();
+
+  if (!months.length) {
+    container.innerHTML = '<div class="empty-state" style="padding:2rem;text-align:center">No goal completion data yet.</div>';
+    return;
+  }
+
+  const BAR_W = 12, BAR_GAP = 2, NS_GAP = 6;
+  const BAR_H = 120, LABEL_H = 50;
+  const nsCount = NS.length;
+  const groupW  = nsCount * (BAR_W + BAR_GAP) + NS_GAP;
+  const W = months.length * groupW + 60;
+  const H = BAR_H + LABEL_H + 30;
+
+  const COLORS = ['#58a6ff','#3fb950','#d29922','#f85149','#bc8cff','#79c0ff','#56d364','#f0883e','#e3b341','#38bdf8','#34d399','#a78bfa'];
+
+  let bars = '', xLabels = '', legendItems = '';
+  NS.forEach((ns, ni) => {
+    legendItems += `<span style="display:inline-flex;align-items:center;gap:.3rem;margin-right:.8rem;font-size:.68rem;color:var(--text-muted)">
+      <span style="width:10px;height:10px;border-radius:2px;background:${COLORS[ni % COLORS.length]};display:inline-block"></span>${esc(ns.namespace)}</span>`;
+  });
+
+  months.forEach((m, mi) => {
+    const gx = 40 + mi * groupW;
+    NS.forEach((ns, ni) => {
+      const rate = (ns.goalByMonth || {})[m];
+      if (rate == null) return;
+      const barH = Math.round((rate / 100) * BAR_H);
+      const x = gx + ni * (BAR_W + BAR_GAP);
+      const y = BAR_H - barH + 10;
+      const col = COLORS[ni % COLORS.length];
+      const tip = `${esc(ns.namespace)} · ${m} · ${rate}% avg`;
+      bars += `<rect x="${x}" y="${y}" width="${BAR_W}" height="${barH}" fill="${col}" opacity="0.8" rx="2"
+        data-tip="${tip}" style="cursor:default"/>`;
+    });
+    // x-axis label (month)
+    xLabels += `<text x="${gx + (nsCount * (BAR_W + BAR_GAP)) / 2}" y="${BAR_H + 24}" text-anchor="middle"
+      font-size="9" fill="var(--text-muted)" transform="rotate(-40 ${gx + (nsCount * (BAR_W + BAR_GAP)) / 2} ${BAR_H + 24})">${fmtYM(m)}</text>`;
+  });
+
+  // y-axis ticks
+  let yAxis = '';
+  [0, 25, 50, 75, 100].forEach(pct => {
+    const y = BAR_H - Math.round((pct / 100) * BAR_H) + 10;
+    yAxis += `<line x1="36" x2="${W}" y1="${y}" y2="${y}" stroke="var(--border)" stroke-width="0.5"/>
+      <text x="34" y="${y + 3}" text-anchor="end" font-size="9" fill="var(--text-muted)">${pct}%</text>`;
+  });
+
+  container.innerHTML = `
+    <div style="padding:.8rem 1rem .4rem">
+      <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.5rem">
+        Goal hit-rate by month · each bar = one namespace</div>
+      <div style="overflow-x:auto">
+        <svg width="${W}" height="${H}" style="display:block">
+          ${yAxis}${bars}${xLabels}
+        </svg>
+      </div>
+      <div style="margin-top:.6rem;flex-wrap:wrap;display:flex">${legendItems}</div>
+    </div>`;
+
+  container.querySelectorAll('[data-tip]').forEach(el => {
+    el.addEventListener('mouseenter', e => {
+      const tip = document.getElementById('heatmap-tooltip');
+      if (tip) { tip.textContent = el.getAttribute('data-tip'); tip.style.display = 'block';
+        tip.style.left = (e.clientX + 10) + 'px'; tip.style.top = (e.clientY - 28) + 'px'; }
+    });
+    el.addEventListener('mouseleave', () => {
+      const tip = document.getElementById('heatmap-tooltip');
+      if (tip) tip.style.display = 'none';
+    });
+  });
+}
+
 // ── Session velocity chart (stacked bars, all namespaces) ────────────────────
 
 function renderVelocityPanel() {
@@ -2996,6 +3174,262 @@ function renderGoalHeatmapPanel() {
   }, legendHtml);
 
   wireHeatmapTooltip(container, '.goal-cell');
+}
+
+// ── Community view (P40-D Phase 3) ───────────────────────────────────────────
+
+function renderCommunityView() {
+  const container = document.getElementById('view-community');
+
+  if (!COMMUNITY.enabled) {
+    container.innerHTML = '<div class="community-disabled">Community federation not enabled — no _community/*.jsonl files found.</div>';
+    return;
+  }
+
+  const feed    = COMMUNITY.feed    || [];
+  const inbox   = COMMUNITY.inbox   || [];
+  const adopted = COMMUNITY.adoptions || [];
+  const trust   = COMMUNITY.trust_registry || [];
+
+  // ── Health bar ────────────────────────────────────────────────────────────
+  const healthHtml = `
+    <div class="community-stat">
+      <span class="community-stat-val">${feed.length}</span>
+      <span class="community-stat-lbl">Published</span>
+    </div>
+    <div class="community-stat inbox">
+      <span class="community-stat-val">${inbox.length}</span>
+      <span class="community-stat-lbl">In inbox</span>
+    </div>
+    <div class="community-stat adopted">
+      <span class="community-stat-val">${adopted.length}</span>
+      <span class="community-stat-lbl">Adopted</span>
+    </div>
+    <div class="community-stat">
+      <span class="community-stat-val">${trust.length}</span>
+      <span class="community-stat-lbl">Trusted peers</span>
+    </div>`;
+
+  // ── Trust registry table ──────────────────────────────────────────────────
+  let trustHtml;
+  if (!trust.length) {
+    trustHtml = '<div style="font-size:.78rem;color:var(--text-muted);font-style:italic">No trusted peers registered.</div>';
+  } else {
+    const rows = trust.map(t => {
+      const lvl = esc(t.trust_level || 'low');
+      return `<tr>
+        <td>${esc(t.peer_id || t.source_loop_id || '—')}</td>
+        <td><span class="trust-level-badge trust-level-${lvl}">${lvl}</span></td>
+        <td>${esc(t.registered_at ? t.registered_at.slice(0, 10) : '—')}</td>
+        <td>${esc(t.notes || '')}</td>
+      </tr>`;
+    }).join('');
+    trustHtml = `<table class="trust-table">
+      <thead><tr><th>Peer</th><th>Trust</th><th>Since</th><th>Notes</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  }
+
+  // ── Feed entries ──────────────────────────────────────────────────────────
+  let feedHtml;
+  if (!feed.length) {
+    feedHtml = '<div style="font-size:.78rem;color:var(--text-muted);font-style:italic">No published learnings.</div>';
+  } else {
+    feedHtml = '<div class="feed-list">' + feed.slice().reverse().map(e => {
+      const tags = (e.tags || []).map(t => `<span class="feed-tag">${esc(t)}</span>`).join(' ');
+      const src  = esc(e.source_loop_id || '?');
+      const date = esc((e.published_at || '').slice(0, 10));
+      const lvl  = esc(e.trust_level || 'low');
+      return `<div class="feed-entry">
+        <div class="feed-entry-meta">
+          <span>📡 ${src}</span><span>${date}</span>
+          <span class="trust-level-badge trust-level-${lvl}">${lvl}</span>
+          ${tags}
+        </div>
+        <div class="feed-entry-text">${esc(e.text || '')}</div>
+      </div>`;
+    }).join('') + '</div>';
+  }
+
+  container.innerHTML = `<div class="community-wrap">
+    <div class="community-section">
+      <div class="community-section-title">Federation health</div>
+      <div class="community-health-bar">${healthHtml}</div>
+    </div>
+    <div class="community-section">
+      <div class="community-section-title">Trust registry</div>
+      ${trustHtml}
+    </div>
+    <div class="community-section">
+      <div class="community-section-title">Published feed (${feed.length})</div>
+      ${feedHtml}
+    </div>
+  </div>`;
+}
+
+// ── Mind Map (E25b) ──────────────────────────────────────────────────────────
+
+function renderMindMap() {
+  if (_mm.rendered) return;
+
+  const container = document.getElementById('view-mindmap');
+
+  // ── Namespace picker ──────────────────────────────────────────────────────
+  const pickerHtml = NS.map((ns, i) =>
+    `<button class="mm-ns-btn${i === _mm.nsIdx ? ' active' : ''}"
+             onclick="mmSelectNs(${i})">${esc(ns.namespace)}</button>`
+  ).join('');
+
+  container.innerHTML = `
+    <div class="mm-toolbar">
+      <div class="mm-ns-picker">${pickerHtml}</div>
+    </div>
+    <div id="mm-detail" class="mm-detail"></div>
+    <svg id="mm-svg" class="mm-svg"></svg>`;
+
+  mmDraw(_mm.nsIdx);
+  _mm.rendered = true;
+}
+
+function mmSelectNs(idx) {
+  _mm.nsIdx = idx;
+  _mm.rendered = false;
+  const container = document.getElementById('view-mindmap');
+  container.innerHTML = '';
+  renderMindMap();
+}
+
+// Vanilla radial tree layout — no D3 needed.
+// Assigns angles proportional to leaf count, positions nodes at fixed radii per depth.
+function mmLayout(node, angleStart, angleEnd, depth) {
+  node._angle = (angleStart + angleEnd) / 2;
+  node._depth = depth;
+  const children = node.children || [];
+  if (!children.length) return;
+  const totalLeaves = mmLeafCount(node);
+  let cursor = angleStart;
+  children.forEach(child => {
+    const share = (mmLeafCount(child) / totalLeaves) * (angleEnd - angleStart);
+    mmLayout(child, cursor, cursor + share, depth + 1);
+    cursor += share;
+  });
+}
+function mmLeafCount(node) {
+  const ch = node.children || [];
+  if (!ch.length) return 1;
+  return ch.reduce((s, c) => s + mmLeafCount(c), 0);
+}
+function mmDescendants(node) {
+  const out = [node];
+  (node.children || []).forEach(c => out.push(...mmDescendants(c)));
+  return out;
+}
+function mmLinks(node) {
+  const out = [];
+  (node.children || []).forEach(c => { out.push({ parent: node, child: c }); out.push(...mmLinks(c)); });
+  return out;
+}
+
+function mmDraw(nsIdx) {
+  const ns   = NS[nsIdx];
+  const data = ns.mindmap;
+  if (!data) return;
+
+  const svg = document.getElementById('mm-svg');
+  const W   = svg.clientWidth  || 900;
+  const H   = svg.clientHeight || 600;
+  const maxR = Math.min(W, H) / 2 - 30;
+
+  // radii per depth proportional to available space
+  const RADII = [0, maxR * 0.28, maxR * 0.55, maxR * 0.82, maxR];
+  mmLayout(data, 0, 2 * Math.PI, 0);
+
+  function rx(node) { return (RADII[Math.min(node._depth, RADII.length - 1)] || 0) * Math.cos(node._angle - Math.PI / 2); }
+  function ry(node) { return (RADII[Math.min(node._depth, RADII.length - 1)] || 0) * Math.sin(node._angle - Math.PI / 2); }
+
+  const branchColours = { learnings: '#58a6ff', decisions: '#f0883e', goals: '#3fb950', reality: '#bc8cff', artefacts: '#e3b341' };
+  function nodeColour(node) {
+    if (node._depth === 0) return '#e6edf3';
+    // walk up to find branch (depth=1 ancestor)
+    let n = node;
+    while (n._depth > 1 && n._parent) n = n._parent;
+    return branchColours[n.id] || '#8b949e';
+  }
+
+  // attach parent refs for colour walk
+  function attachParents(node, parent) {
+    node._parent = parent || null;
+    (node.children || []).forEach(c => attachParents(c, node));
+  }
+  attachParents(data, null);
+
+  // cubic bezier link between parent and child (radial feel)
+  function linkPath(p, c) {
+    const px = rx(p), py = ry(p), cx2 = rx(c), cy2 = ry(c);
+    const mx = (px + cx2) / 2, my = (py + cy2) / 2;
+    return `M${px},${py} Q${mx},${my} ${cx2},${cy2}`;
+  }
+
+  let svgHtml = `<g transform="translate(${W/2},${H/2})">`;
+
+  // links
+  mmLinks(data).forEach(({ parent, child }) => {
+    const col = nodeColour(child);
+    svgHtml += `<path class="mm-link" d="${linkPath(parent, child)}" stroke="${col}" opacity="0.3"/>`;
+  });
+
+  // nodes + labels
+  mmDescendants(data).forEach(node => {
+    const x = rx(node), y = ry(node);
+    const col = nodeColour(node);
+    const r   = node._depth === 0 ? 7 : node._depth === 1 ? 5 : 3;
+    const lbl = esc(node.label || '');
+    const anchor = x >= 0 ? 'start' : 'end';
+    const dx = x >= 0 ? r + 4 : -(r + 4);
+    const tipText = (node.meta && (node.meta.full_text || node.label)) || node.label || '';
+    const dataAttr = `data-tip="${esc(tipText)}"`;
+    const clickable = node._depth >= 2;
+    svgHtml += `<circle cx="${x}" cy="${y}" r="${r}" fill="${col}" stroke="var(--surface)" stroke-width="1.5"
+      ${dataAttr} style="cursor:${clickable ? 'pointer' : 'default'}"
+      onclick="mmNodeClick(${JSON.stringify(JSON.stringify({label: node.label, meta: node.meta || null}))})"/>`;
+    if (node._depth <= 2) {
+      const fs = node._depth === 0 ? 13 : node._depth === 1 ? 11 : 9;
+      const fw = node._depth <= 1 ? '600' : 'normal';
+      svgHtml += `<text x="${x + dx}" y="${y}" text-anchor="${anchor}" dominant-baseline="middle"
+        font-size="${fs}" font-weight="${fw}" fill="${col}" style="pointer-events:none">${lbl}</text>`;
+    }
+  });
+
+  svgHtml += '</g>';
+  svg.innerHTML = svgHtml;
+
+  // tooltip
+  svg.querySelectorAll('[data-tip]').forEach(el => {
+    el.addEventListener('mouseenter', e => {
+      const detail = document.getElementById('mm-detail');
+      if (detail) detail.textContent = el.getAttribute('data-tip');
+    });
+    el.addEventListener('mouseleave', () => {
+      const detail = document.getElementById('mm-detail');
+      if (detail) detail.textContent = '';
+    });
+  });
+}
+
+function mmNodeClick(dataJson) {
+  try {
+    const d    = JSON.parse(dataJson);
+    const detail = document.getElementById('mm-detail');
+    if (!detail) return;
+    const meta = d.meta || {};
+    const lines = [d.label || ''];
+    if (meta.full_text && meta.full_text !== d.label) lines.push(meta.full_text);
+    if (meta.weight)        lines.push(`Weight: ${meta.weight}`);
+    if (meta.learning_type) lines.push(`Type: ${meta.learning_type}`);
+    if (meta.rationale)     lines.push(`Rationale: ${meta.rationale}`);
+    if (meta.bullet_count !== undefined) lines.push(`${meta.bullet_count} bullet(s)`);
+    detail.textContent = lines.join(' · ');
+  } catch (_) {}
 }
 
 function renderDAG() {

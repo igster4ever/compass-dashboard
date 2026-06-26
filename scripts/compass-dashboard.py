@@ -458,6 +458,11 @@ def load_namespace(ns_dir):
     # External research signals
     external_signals = list(reversed(_read_jsonl(ns_dir / "external_signals.jsonl")))
 
+    # P51–P53: skill feedback + skillopt cadence
+    skill_feedback           = _read_jsonl(ns_dir / "skill_feedback.jsonl")
+    sessions_since_skill_opt = state.get("sessions_since_skill_opt", 0)
+    skill_opt_due            = state.get("sessions_since_skill_opt", 0) >= state.get("skill_opt_interval", 10)
+
     # Session artefacts (P41) — resolve abs_file so JS can open/preview via file://
     artefacts = []
     for _a in _read_jsonl(ns_dir / "artefacts.jsonl"):
@@ -540,6 +545,9 @@ def load_namespace(ns_dir):
         "research_defer_count":       research_defer_count,
         "artefacts":                  artefacts,
         "all_incomplete_items":       all_incomplete_items,
+        "skill_feedback":             skill_feedback,
+        "sessions_since_skill_opt":   sessions_since_skill_opt,
+        "skill_opt_due":              skill_opt_due,
     }
 
 
@@ -953,6 +961,9 @@ def _js_data(namespaces):
             "codeReviewDeferCount":    n["code_review_defer_count"],
             "researchDeferCount":      n["research_defer_count"],
             "artefacts":               n["artefacts"],
+            "skillFeedback":           n["skill_feedback"],
+            "sessionsSinceSkillOpt":   n["sessions_since_skill_opt"],
+            "skillOptDue":             n["skill_opt_due"],
             "mindmap":                 _mindmap_data(n),
         })
     raw = json.dumps(data, ensure_ascii=False, default=str)
