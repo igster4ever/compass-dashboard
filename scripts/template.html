@@ -1150,15 +1150,30 @@ function renderStateSection_DreamStatus(ns) {
 }
 
 function renderStateSection_SkillOptStatus(ns) {
-  const n    = ns.sessionsSinceSkillOpt || 0;
-  const due  = ns.skillOptDue;
-  const icon = due ? '⚠' : '✓';
-  const col  = due ? 'var(--amber)' : 'var(--muted)';
-  const msg  = due
+  const n       = ns.sessionsSinceSkillOpt || 0;
+  const due     = ns.skillOptDue;
+  const frozen  = ns.skilloptHoldoutFrozen;
+  const icon    = due ? '⚠' : '✓';
+  const col     = due ? 'var(--amber)' : 'var(--muted)';
+  const msg     = due
     ? `due — ${n} session${n !== 1 ? 's' : ''} since last optimisation pass`
     : `${n} session${n !== 1 ? 's' : ''} since last optimisation pass`;
+
+  let holdoutHtml = '';
+  if (frozen) {
+    const mean   = ns.skilloptHoldoutMean != null ? (ns.skilloptHoldoutMean * 100).toFixed(1) + '%' : '—';
+    const rounds = ns.skilloptRoundsCompleted || 0;
+    const rwi    = ns.skilloptRwi || 0;
+    const localMax = rwi >= 2;
+    holdoutHtml = `<div style="font-size:.75rem;color:var(--muted);margin-top:.3rem">
+      Holdout frozen · baseline ${esc(mean)} · ${rounds} round${rounds !== 1 ? 's' : ''}
+      ${localMax ? `<span style="color:var(--amber)"> · ⚠ local maximum</span>` : ''}
+    </div>`;
+  }
+
   return `<div class="md-section"><h3>Skill optimisation (P53)</h3>
     <div style="font-size:.82rem;color:${col}">${icon} ${esc(msg)}</div>
+    ${holdoutHtml}
   </div>`;
 }
 
@@ -2930,7 +2945,57 @@ function renderSwimlane() {
     </div>`;
 }
 
-// ── Quality trend panel (P51) — goal hit-rate bar chart per namespace ─────────
+// ── Quality trend panel (P51) — composite score sparklines + goal hit-rate ────
+
+function _renderQualityScoreSparklines() {
+  // P51 composite quality score (score 0–1) per session, one sparkline per namespace
+  const nsWithHistory = NS.filter(ns => (ns.qualityHistory || []).length > 0);
+  if (!nsWithHistory.length) return '';
+
+  const COLORS = ['#58a6ff','#3fb950','#d29922','#f85149','#bc8cff','#79c0ff'];
+  const W = 120, H = 36, PAD = 2;
+
+  const rows = nsWithHistory.map((ns, ni) => {
+    const hist = ns.qualityHistory;
+    const scores = hist.map(e => e.score || 0);
+    const latest = scores[scores.length - 1];
+    const weakest = hist[hist.length - 1]?.weakest_component || '';
+    const col = COLORS[NS.indexOf(ns) % COLORS.length];
+
+    // mini sparkline
+    const pts = scores.map((s, i) => {
+      const x = PAD + (scores.length === 1 ? W / 2 : i * (W - PAD * 2) / (scores.length - 1));
+      const y = H - PAD - Math.round(s * (H - PAD * 2));
+      return `${x},${y}`;
+    }).join(' ');
+
+    const trendIcon = scores.length >= 2
+      ? (scores[scores.length - 1] > scores[scores.length - 2] ? '↑' : scores[scores.length - 1] < scores[scores.length - 2] ? '↓' : '→')
+      : '';
+    const trendCol = trendIcon === '↑' ? 'var(--green)' : trendIcon === '↓' ? 'var(--red)' : 'var(--muted)';
+
+    return `<div style="display:flex;align-items:center;gap:.8rem;padding:.3rem 0;border-bottom:1px solid var(--border)">
+      <div style="width:7rem;font-size:.72rem;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(ns.namespace)}</div>
+      <svg width="${W}" height="${H}" style="flex-shrink:0">
+        <polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.5" opacity="0.8"/>
+        ${scores.map((s, i) => {
+          const x = PAD + (scores.length === 1 ? W / 2 : i * (W - PAD * 2) / (scores.length - 1));
+          const y = H - PAD - Math.round(s * (H - PAD * 2));
+          return `<circle cx="${x}" cy="${y}" r="2.5" fill="${col}" opacity="0.9"><title>${Math.round(s * 100)}%</title></circle>`;
+        }).join('')}
+      </svg>
+      <div style="width:2.8rem;font-size:.78rem;color:var(--text);text-align:right">${Math.round(latest * 100)}%</div>
+      <div style="font-size:.72rem;color:${trendCol};width:1rem">${trendIcon}</div>
+      ${weakest ? `<div style="font-size:.68rem;color:var(--muted)">↓ ${esc(weakest.replace(/_/g, ' '))}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  return `<div style="padding:.8rem 1rem .6rem">
+    <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.5rem">
+      P51 composite quality score · goal completion · outcome rate · learning density · reality freshness</div>
+    ${rows}
+  </div>`;
+}
 
 function renderQualityTrendPanel() {
   const container = document.getElementById('hpanel-quality');
@@ -2943,7 +3008,8 @@ function renderQualityTrendPanel() {
   const months = Array.from(allMonths).sort();
 
   if (!months.length) {
-    container.innerHTML = '<div class="empty-state" style="padding:2rem;text-align:center">No goal completion data yet.</div>';
+    container.innerHTML = _renderQualityScoreSparklines() ||
+      '<div class="empty-state" style="padding:2rem;text-align:center">No goal completion data yet.</div>';
     return;
   }
 
@@ -2988,8 +3054,8 @@ function renderQualityTrendPanel() {
       <text x="34" y="${y + 3}" text-anchor="end" font-size="9" fill="var(--text-muted)">${pct}%</text>`;
   });
 
-  container.innerHTML = `
-    <div style="padding:.8rem 1rem .4rem">
+  container.innerHTML = _renderQualityScoreSparklines() + `
+    <div style="padding:.8rem 1rem .4rem;border-top:1px solid var(--border)">
       <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.5rem">
         Goal hit-rate by month · each bar = one namespace</div>
       <div style="overflow-x:auto">

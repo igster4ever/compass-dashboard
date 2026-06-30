@@ -72,6 +72,11 @@ def _minimal_ns(overrides=None):
         "skill_feedback":           [],
         "sessions_since_skill_opt": 0,
         "skill_opt_due":            False,
+        "quality_history":          [],
+        "skillopt_holdout_frozen":  False,
+        "skillopt_holdout_mean":    None,
+        "skillopt_rounds_completed": 0,
+        "skillopt_rwi":             0,
     }
     if overrides:
         ns.update(overrides)

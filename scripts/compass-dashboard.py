@@ -458,10 +458,17 @@ def load_namespace(ns_dir):
     # External research signals
     external_signals = list(reversed(_read_jsonl(ns_dir / "external_signals.jsonl")))
 
-    # P51–P53: skill feedback + skillopt cadence
+    # P51–P53: skill feedback + skillopt cadence + quality history + holdout state
     skill_feedback           = _read_jsonl(ns_dir / "skill_feedback.jsonl")
     sessions_since_skill_opt = state.get("sessions_since_skill_opt", 0)
-    skill_opt_due            = state.get("sessions_since_skill_opt", 0) >= state.get("skill_opt_interval", 10)
+    skill_opt_due            = sessions_since_skill_opt >= 10
+    quality_history          = state.get("quality_history", [])
+    holdout_session_ids      = state.get("holdout_session_ids", [])
+    skillopt_rounds          = state.get("skillopt_rounds", [])
+    skillopt_rwi             = state.get("skillopt_rounds_without_improvement", 0)
+    holdout_score_map        = {e["session_id"]: e["score"] for e in quality_history}
+    holdout_scores           = [holdout_score_map[s] for s in holdout_session_ids if s in holdout_score_map]
+    holdout_mean             = round(sum(holdout_scores) / len(holdout_scores), 3) if holdout_scores else None
 
     # Session artefacts (P41) — resolve abs_file so JS can open/preview via file://
     artefacts = []
@@ -548,6 +555,11 @@ def load_namespace(ns_dir):
         "skill_feedback":             skill_feedback,
         "sessions_since_skill_opt":   sessions_since_skill_opt,
         "skill_opt_due":              skill_opt_due,
+        "quality_history":            quality_history,
+        "skillopt_holdout_frozen":    bool(holdout_session_ids),
+        "skillopt_holdout_mean":      holdout_mean,
+        "skillopt_rounds_completed":  len(skillopt_rounds),
+        "skillopt_rwi":               skillopt_rwi,
     }
 
 
@@ -964,6 +976,11 @@ def _js_data(namespaces):
             "skillFeedback":           n["skill_feedback"],
             "sessionsSinceSkillOpt":   n["sessions_since_skill_opt"],
             "skillOptDue":             n["skill_opt_due"],
+            "qualityHistory":          n["quality_history"],
+            "skilloptHoldoutFrozen":   n["skillopt_holdout_frozen"],
+            "skilloptHoldoutMean":     n["skillopt_holdout_mean"],
+            "skilloptRoundsCompleted": n["skillopt_rounds_completed"],
+            "skilloptRwi":             n["skillopt_rwi"],
             "mindmap":                 _mindmap_data(n),
         })
     raw = json.dumps(data, ensure_ascii=False, default=str)
