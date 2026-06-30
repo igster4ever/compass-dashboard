@@ -640,7 +640,7 @@
     .mm-detail { font-size: .75rem; color: var(--text-muted); padding: .4rem 1rem;
                  min-height: 1.8rem; border-bottom: 1px solid var(--border); flex-shrink: 0;
                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .mm-svg { flex: 1; width: 100%; }
+    .mm-svg { flex: 1; width: 100%; cursor: grab; }
     .mm-link { fill: none; stroke-width: 1.2px; }
 
     /* ── Heatmap view ── */
@@ -2281,7 +2281,7 @@ const EDGE_META = {
 
 const _dag = { nodes: [], edges: [], nodeMap: new Map(), raf: null, tick: 0, maxTick: 280, svgW: 900, svgH: 530, rendered: false, drag: null, showSystem: false, focusedNs: null };
 
-const _mm = { rendered: false, nsIdx: 0 };
+const _mm = { rendered: false, nsIdx: 0, pan: { x: 0, y: 0, scale: 1 }, drag: { active: false, sx: 0, sy: 0 }, cx: 0, cy: 0, _onMouseMove: null, _onMouseUp: null };
 
 function _addEdge(map, s, t, type, detail) {
   const key = type === 'dep' ? `${s}->${t}:dep` : `${Math.min(s,t)}-${Math.max(s,t)}:${type}`;
@@ -3347,19 +3347,21 @@ function renderMindMap() {
   ).join('');
 
   container.innerHTML = `
-    <div class="mm-toolbar">
+    <div class="mm-toolbar" style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
       <div class="mm-ns-picker">${pickerHtml}</div>
+      <button class="mm-ns-btn" onclick="mmResetView()" title="Reset zoom and pan" style="margin-left:auto;flex-shrink:0">⊙ Reset</button>
     </div>
     <div id="mm-detail" class="mm-detail"></div>
     <svg id="mm-svg" class="mm-svg"></svg>`;
 
-  mmDraw(_mm.nsIdx);
   _mm.rendered = true;
+  requestAnimationFrame(() => mmDraw(_mm.nsIdx));
 }
 
 function mmSelectNs(idx) {
   _mm.nsIdx = idx;
   _mm.rendered = false;
+  _mm.pan = { x: 0, y: 0, scale: 1 };
   const container = document.getElementById('view-mindmap');
   container.innerHTML = '';
   renderMindMap();
@@ -3389,6 +3391,20 @@ function mmDescendants(node) {
   const out = [node];
   (node.children || []).forEach(c => out.push(...mmDescendants(c)));
   return out;
+}
+function mmBranch(node) {
+  if (node._depth === 0) return 'root';
+  let n = node;
+  while (n._depth > 1 && n._parent) n = n._parent;
+  return n.id || String(n.label || 'root');
+}
+function mmApplyTransform() {
+  const g = document.getElementById('mm-root-g');
+  if (g) g.setAttribute('transform', `translate(${_mm.cx + _mm.pan.x},${_mm.cy + _mm.pan.y}) scale(${_mm.pan.scale})`);
+}
+function mmResetView() {
+  _mm.pan = { x: 0, y: 0, scale: 1 };
+  mmApplyTransform();
 }
 function mmLinks(node) {
   const out = [];
@@ -3436,12 +3452,14 @@ function mmDraw(nsIdx) {
     return `M${px},${py} Q${mx},${my} ${cx2},${cy2}`;
   }
 
-  let svgHtml = `<g transform="translate(${W/2},${H/2})">`;
+  _mm.cx = W / 2; _mm.cy = H / 2;
+  let svgHtml = `<g id="mm-root-g" transform="translate(${W/2 + _mm.pan.x},${H/2 + _mm.pan.y}) scale(${_mm.pan.scale})">`;
 
   // links
   mmLinks(data).forEach(({ parent, child }) => {
     const col = nodeColour(child);
-    svgHtml += `<path class="mm-link" d="${linkPath(parent, child)}" stroke="${col}" opacity="0.3"/>`;
+    const branch = esc(mmBranch(child));
+    svgHtml += `<path class="mm-link" d="${linkPath(parent, child)}" stroke="${col}" opacity="0.3" data-branch="${branch}"/>`;
   });
 
   // nodes + labels
@@ -3454,32 +3472,74 @@ function mmDraw(nsIdx) {
     const dx = x >= 0 ? r + 4 : -(r + 4);
     const tipText = (node.meta && (node.meta.full_text || node.label)) || node.label || '';
     const dataAttr = `data-tip="${esc(tipText)}"`;
+    const branch = esc(mmBranch(node));
     const clickable = node._depth >= 2;
     svgHtml += `<circle cx="${x}" cy="${y}" r="${r}" fill="${col}" stroke="var(--surface)" stroke-width="1.5"
-      ${dataAttr} style="cursor:${clickable ? 'pointer' : 'default'}"
+      ${dataAttr} data-branch="${branch}" data-depth="${node._depth}" style="cursor:${clickable ? 'pointer' : 'default'}"
       onclick="mmNodeClick(${JSON.stringify(JSON.stringify({label: node.label, meta: node.meta || null}))})"/>`;
     if (node._depth <= 2) {
       const fs = node._depth === 0 ? 13 : node._depth === 1 ? 11 : 9;
       const fw = node._depth <= 1 ? '600' : 'normal';
       svgHtml += `<text x="${x + dx}" y="${y}" text-anchor="${anchor}" dominant-baseline="middle"
-        font-size="${fs}" font-weight="${fw}" fill="${col}" style="pointer-events:none">${lbl}</text>`;
+        font-size="${fs}" font-weight="${fw}" fill="${col}" data-branch="${branch}" style="pointer-events:none">${lbl}</text>`;
     }
   });
 
   svgHtml += '</g>';
   svg.innerHTML = svgHtml;
 
-  // tooltip
+  // tooltip + subtree hover highlight
   svg.querySelectorAll('[data-tip]').forEach(el => {
-    el.addEventListener('mouseenter', e => {
+    el.addEventListener('mouseenter', () => {
       const detail = document.getElementById('mm-detail');
       if (detail) detail.textContent = el.getAttribute('data-tip');
+      if (el.getAttribute('data-depth') === '1') {
+        const branch = el.getAttribute('data-branch');
+        svg.querySelectorAll('[data-branch]').forEach(bel => {
+          const b = bel.getAttribute('data-branch');
+          bel.style.opacity = (b === branch || b === 'root') ? '' : '0.1';
+        });
+      }
     });
     el.addEventListener('mouseleave', () => {
       const detail = document.getElementById('mm-detail');
       if (detail) detail.textContent = '';
+      svg.querySelectorAll('[data-branch]').forEach(bel => { bel.style.opacity = ''; });
     });
   });
+
+  // zoom via mouse wheel
+  svg.addEventListener('wheel', e => {
+    e.preventDefault();
+    const factor = e.deltaY > 0 ? 0.9 : 1.1;
+    _mm.pan.scale = Math.max(0.2, Math.min(5, _mm.pan.scale * factor));
+    mmApplyTransform();
+  }, { passive: false });
+
+  // pan via drag — use window listeners so drag survives leaving the SVG bounds
+  svg.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    _mm.drag.active = true;
+    _mm.drag.sx = e.clientX - _mm.pan.x;
+    _mm.drag.sy = e.clientY - _mm.pan.y;
+    svg.style.cursor = 'grabbing';
+  });
+  if (_mm._onMouseMove) window.removeEventListener('mousemove', _mm._onMouseMove);
+  if (_mm._onMouseUp)   window.removeEventListener('mouseup',   _mm._onMouseUp);
+  _mm._onMouseMove = e => {
+    if (!_mm.drag.active) return;
+    _mm.pan.x = e.clientX - _mm.drag.sx;
+    _mm.pan.y = e.clientY - _mm.drag.sy;
+    mmApplyTransform();
+  };
+  _mm._onMouseUp = () => {
+    _mm.drag.active = false;
+    const s = document.getElementById('mm-svg');
+    if (s) s.style.cursor = 'grab';
+  };
+  window.addEventListener('mousemove', _mm._onMouseMove);
+  window.addEventListener('mouseup',   _mm._onMouseUp);
+  svg.style.cursor = 'grab';
 }
 
 function mmNodeClick(dataJson) {
