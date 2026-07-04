@@ -293,6 +293,11 @@
     .type-fact       { background: var(--blue-bg);  color: var(--blue); }
     .type-hypothesis { background: var(--amber-bg); color: var(--amber); }
 
+    .zone-badge { font-size: .62rem; padding: .1em .45em; border-radius: 4px; font-weight: 600; }
+    .zone-golden     { background: var(--green-bg); color: var(--green); }
+    .zone-warning    { background: var(--amber-bg); color: var(--amber); }
+    .zone-preference { background: rgba(139,148,158,.12); color: var(--muted); }
+
     .learning-text { line-height: 1.5; color: var(--text); }
 
     /* ── History timeline ── */
@@ -1262,6 +1267,10 @@ function renderLearnings(ns) {
         staleHtml = ` <span style="color:var(--amber);font-size:.66rem" title="Unvalidated hypothesis \u2014 ${Math.round(ageDays)}d old">\u26a0 stale</span>`;
       }
     }
+    const zoneLabels = { golden: 'golden', warning: 'warning', preference: 'preference' };
+    const zoneHtml = l.zone && zoneLabels[l.zone]
+      ? `<span class="zone-badge zone-${l.zone}">${zoneLabels[l.zone]}</span>`
+      : '';
     const backRef  = (ns.backRefsByText  || {})[l.text || ''];
     const conflicts = (ns.conflictsByText || {})[l.text || ''] || [];
     let linkHtml = '';
@@ -1274,29 +1283,35 @@ function renderLearnings(ns) {
       linkHtml += `<div class="link-ref">${icon} ${esc(c.decision)} \u2014 <code>${esc(other)}</code></div>`;
     }
     return `
-      <tr data-idx="${lIdx}" data-ltype="${type}"${lidTitle}>
+      <tr data-idx="${lIdx}" data-ltype="${type}" data-stale="${l.retrievalStale ? 'true' : 'false'}"${lidTitle}>
         <td><span class="weight-dot"><span class="wdot ${wCls}"></span><span class="wnum">${w}</span></span></td>
         <td class="learning-text">${esc(l.text || '')}${linkHtml}</td>
         <td><div class="tags-cell">${tags}</div></td>
         <td><span class="type-badge type-${type}">${type}</span>${conf}${staleHtml}</td>
+        <td>${zoneHtml}</td>
         <td style="color:var(--subtle);white-space:nowrap;font-size:.75rem">${date}</td>
       </tr>`;
   }).join('');
 
   const nsId    = (ns.namespace || 'ns').replace(/[^a-z0-9-]/gi, '-');
   const tableId = `ltable-${nsId}`;
-  const hypCount = ns.learnings.filter(l => l.learning_type === 'hypothesis').length;
-  const filterBar = hypCount > 0 ? `
+  const hypCount   = ns.learnings.filter(l => l.learning_type === 'hypothesis').length;
+  const staleCount = ns.retrievalStaleCount || 0;
+  const filterButtons = [
+    `<button id="lfbtn-all-${nsId}" class="dag-btn active" onclick="filterLearningType('${tableId}','${nsId}','all')">All (${ns.learnings.length})</button>`,
+    hypCount > 0   ? `<button id="lfbtn-hyp-${nsId}"   class="dag-btn" onclick="filterLearningType('${tableId}','${nsId}','hypothesis')">Hypotheses (${hypCount})</button>` : '',
+    staleCount > 0 ? `<button id="lfbtn-stale-${nsId}" class="dag-btn" onclick="filterLearningType('${tableId}','${nsId}','stale')">Retrieval-stale (${staleCount})</button>` : '',
+  ].filter(Boolean);
+  const filterBar = (hypCount > 0 || staleCount > 0) ? `
     <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.6rem;flex-wrap:wrap">
-      <button id="lfbtn-all-${nsId}"  class="dag-btn active" onclick="filterLearningType('${tableId}','${nsId}','all')">All (${ns.learnings.length})</button>
-      <button id="lfbtn-hyp-${nsId}"  class="dag-btn" onclick="filterLearningType('${tableId}','${nsId}','hypothesis')">Hypotheses (${hypCount})</button>
+      ${filterButtons.join('')}
     </div>` : '';
 
   const decayHtml = renderDecayTimeline(ns);
   return corpusHealthHtml + supersededNote + filterBar + `
     <table class="learnings-table" id="${tableId}">
       <thead>
-        <tr><th>Wt</th><th>Learning</th><th>Tags</th><th>Type</th><th>Date</th></tr>
+        <tr><th>Wt</th><th>Learning</th><th>Tags</th><th>Type</th><th>Zone</th><th>Date</th></tr>
       </thead>
       <tbody>${rows}</tbody>
     </table>` + decayHtml;
@@ -1306,9 +1321,11 @@ function filterLearningType(tableId, nsId, type) {
   const table = document.getElementById(tableId);
   if (!table) return;
   table.querySelectorAll('tbody tr').forEach(row => {
-    row.style.display = (type === 'all' || row.dataset.ltype === type) ? '' : 'none';
+    const matches = type === 'all'
+      || (type === 'stale' ? row.dataset.stale === 'true' : row.dataset.ltype === type);
+    row.style.display = matches ? '' : 'none';
   });
-  ['all', 'hypothesis'].forEach(t => {
+  ['all', 'hypothesis', 'stale'].forEach(t => {
     const btn = document.getElementById(`lfbtn-${t}-${nsId}`);
     if (btn) btn.classList.toggle('active', t === type);
   });

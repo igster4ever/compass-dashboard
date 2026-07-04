@@ -157,6 +157,26 @@ def _corpus_health(active_learnings, superseded_count):
     }
 
 
+_RETRIEVAL_STALE_SURFACED_THRESHOLD = 10  # P58: local copy of compass's retrieval_stale_surfaced_threshold
+
+
+def _retrieval_stale_texts(active_learnings, surfaced_threshold=_RETRIEVAL_STALE_SURFACED_THRESHOLD):
+    """Active, non-hypothesis learnings surfaced often (times_surfaced) but never reinforced past weight 1.
+
+    Mirrors compass's own _get_retrieval_stale_candidates() (P58) — kept as a local copy since
+    the dashboard reads namespace directories directly rather than shelling out to compass.py.
+    """
+    texts = set()
+    for l in active_learnings:
+        if l.get("learning_type") == "hypothesis":
+            continue
+        if (l.get("weight") or 1) > 1:
+            continue
+        if l.get("times_surfaced", 0) >= surfaced_threshold:
+            texts.add(l.get("text", ""))
+    return texts
+
+
 def _stale_bullet_count(reality_md, state, days=30):
     """Count reality bullets not verified within `days` days (mirrors compass logic)."""
     validation = state.get("reality_validation", {})
@@ -389,6 +409,11 @@ def load_namespace(ns_dir):
     active_learnings = [l for l in all_learnings if not l.get("superseded_by")]
     superseded_count = len(all_learnings) - len(active_learnings)
 
+    retrieval_stale_texts = _retrieval_stale_texts(active_learnings)
+    for l in active_learnings:
+        l["retrievalStale"] = l.get("text", "") in retrieval_stale_texts
+    retrieval_stale_count = len(retrieval_stale_texts)
+
     cycle_history      = state.get("cycle_history", [])
     last_cycle_minutes = state.get("last_cycle_minutes")
 
@@ -541,6 +566,7 @@ def load_namespace(ns_dir):
         "conflicts_by_text":         conflicts_by_text,
         "intent_history":            intent_history,
         "corpus_health":             corpus_health,
+        "retrieval_stale_count":     retrieval_stale_count,
         "external_signals":          external_signals,
         "exploration_ratio":         exploration_ratio,
         "last_reality_score":        last_reality_score,
@@ -963,6 +989,7 @@ def _js_data(namespaces):
             "conflictsByText":         n["conflicts_by_text"],
             "intentHistory":           n["intent_history"],
             "corpusHealth":            n["corpus_health"],
+            "retrievalStaleCount":     n["retrieval_stale_count"],
             "externalSignals":         n["external_signals"],
             "explorationRatio":        n["exploration_ratio"],
             "lastRealityScore":        n["last_reality_score"],

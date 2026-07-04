@@ -18,10 +18,11 @@ _spec = importlib.util.spec_from_file_location("compass_dashboard", _SCRIPT)
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 
-_reality_completeness = _mod._reality_completeness
-_corpus_health        = _mod._corpus_health
-_goal_stats           = _mod._goal_stats
-_stale_bullet_count   = _mod._stale_bullet_count
+_reality_completeness  = _mod._reality_completeness
+_corpus_health         = _mod._corpus_health
+_goal_stats            = _mod._goal_stats
+_stale_bullet_count    = _mod._stale_bullet_count
+_retrieval_stale_texts = _mod._retrieval_stale_texts
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -183,6 +184,45 @@ class TestCorpusHealth(unittest.TestCase):
         self.assertEqual(result["unvalidatedHypotheses"], 1)
         self.assertEqual(result["lowWeightCount"], 1)
         self.assertEqual(result["supersededCount"], 1)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# _retrieval_stale_texts (P58)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestRetrievalStaleTexts(unittest.TestCase):
+
+    def _learning(self, text="t", weight=1, times_surfaced=0, learning_type="fact"):
+        return {"text": text, "weight": weight, "times_surfaced": times_surfaced, "learning_type": learning_type}
+
+    def test_below_threshold_not_flagged(self):
+        learnings = [self._learning(times_surfaced=9)]
+        self.assertEqual(_retrieval_stale_texts(learnings), set())
+
+    def test_at_threshold_flagged(self):
+        learnings = [self._learning(text="a", times_surfaced=10)]
+        self.assertEqual(_retrieval_stale_texts(learnings), {"a"})
+
+    def test_weight_above_one_excluded(self):
+        learnings = [self._learning(text="a", weight=2, times_surfaced=20)]
+        self.assertEqual(_retrieval_stale_texts(learnings), set())
+
+    def test_hypothesis_excluded(self):
+        learnings = [self._learning(text="a", times_surfaced=20, learning_type="hypothesis")]
+        self.assertEqual(_retrieval_stale_texts(learnings), set())
+
+    def test_custom_threshold(self):
+        learnings = [self._learning(text="a", times_surfaced=4)]
+        self.assertEqual(_retrieval_stale_texts(learnings, surfaced_threshold=5), set())
+        self.assertEqual(_retrieval_stale_texts(learnings, surfaced_threshold=4), {"a"})
+
+    def test_mixed_corpus_returns_only_matching(self):
+        learnings = [
+            self._learning(text="stale", times_surfaced=15),
+            self._learning(text="fresh", times_surfaced=2),
+            self._learning(text="heavy", weight=3, times_surfaced=15),
+        ]
+        self.assertEqual(_retrieval_stale_texts(learnings), {"stale"})
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -58,6 +58,7 @@ def _minimal_ns(overrides=None):
         "conflicts_by_text":        {},
         "intent_history":           [],
         "corpus_health":            None,
+        "retrieval_stale_count":    0,
         "external_signals":         [],
         "exploration_ratio":        None,
         "last_reality_score":       None,
@@ -356,6 +357,43 @@ class TestCommunityChips(unittest.TestCase):
     def test_community_inbox_signal_in_template(self):
         template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
         self.assertIn("community learning", template)
+
+
+class TestZoneAndRetrievalStale(unittest.TestCase):
+    """P56 — zone classification + P58 — retrieval-stale signal."""
+
+    def test_zone_field_passed_through_in_ns_json(self):
+        ns = _minimal_ns({
+            "learnings": [{"text": "a", "weight": 1, "zone": "golden", "learning_type": "fact"}],
+        })
+        html = render_html([ns])
+        self.assertIn('"zone"', html)
+        self.assertIn('"golden"', html)
+
+    def test_retrieval_stale_count_embedded_in_ns_json(self):
+        ns = _minimal_ns({"retrieval_stale_count": 4})
+        html = render_html([ns])
+        self.assertIn("retrievalStaleCount", html)
+        self.assertIn('"retrievalStaleCount": 4', html.replace("'", '"'))
+
+    def test_zone_badge_css_present_in_template(self):
+        template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
+        self.assertIn(".zone-golden", template)
+        self.assertIn(".zone-warning", template)
+        self.assertIn(".zone-preference", template)
+
+    def test_zone_column_header_present_in_template(self):
+        template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
+        self.assertIn("<th>Zone</th>", template)
+
+    def test_retrieval_stale_filter_button_present_in_template(self):
+        template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
+        self.assertIn("Retrieval-stale (", template)
+        self.assertIn("lfbtn-stale-", template)
+
+    def test_filter_learning_type_handles_stale(self):
+        template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
+        self.assertIn("row.dataset.stale === 'true'", template)
 
 
 class TestMindMap(unittest.TestCase):

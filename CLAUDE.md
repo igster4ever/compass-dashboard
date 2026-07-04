@@ -18,11 +18,11 @@ python3 scripts/compass-dashboard.py
 
 ```
 scripts/
-├── compass-dashboard.py   — data layer + generate() + main()   (~752 lines)
+├── compass-dashboard.py   — data layer + generate() + main()   (~1,098 lines)
 │   ├── load_namespace()    — reads state.json, *.md, *.jsonl, history/*.md
 │   ├── _js_data()          — serialises NS array as JSON embedded in HTML
 │   └── generate()          — reads template.html, injects [[PLACEHOLDER]] markers
-└── template.html           — HTML + <style> + <script>          (~2,897 lines)
+└── template.html           — HTML + <style> + <script>          (~3,961 lines)
     └── JS                  — all interactivity; operates on const NS = [...]
 ```
 
@@ -181,7 +181,7 @@ count as user-controlled.
 
 ## Module map
 
-**`scripts/compass-dashboard.py`** (~752 lines — Python only):
+**`scripts/compass-dashboard.py`** (~1,098 lines — Python only):
 
 | Lines (approx) | What lives there |
 |----------------|-----------------|
@@ -192,7 +192,7 @@ count as user-controlled.
 | 595–660 | `_extract_blocking_edges()`, `_js_blocking_edges()` (E24a cross-namespace blocking edges) |
 | 661–755 | `_js_data()`, `_js_community()`, `generate()` (reads template.html), `main()`, `__main__` |
 
-**`scripts/template.html`** (~2,897 lines — HTML/CSS/JS):
+**`scripts/template.html`** (~3,961 lines — HTML/CSS/JS):
 
 | Lines (approx) | What lives there |
 |----------------|-----------------|
@@ -212,7 +212,7 @@ count as user-controlled.
 
 | File | What it covers |
 |------|----------------|
-| `test_data_loading.py` | 33 unit tests for `_reality_completeness`, `_corpus_health`, `_goal_stats`, `_stale_bullet_count` — no filesystem deps |
-| `test_generate.py` | 12 smoke tests for `generate()` — structural markers, `const NS = [` embedding, script-tag injection escaping |
+| `test_data_loading.py` | 62 unit tests for `_reality_completeness`, `_corpus_health`, `_goal_stats`, `_stale_bullet_count`, `_retrieval_stale_texts` (P58), and more — no filesystem deps |
+| `test_generate.py` | 55 smoke tests for `generate()` — structural markers, `const NS = [` embedding, script-tag injection escaping, community/mindmap/P51-P53/P56-P58 wiring |
 
 Run: `python3 -m pytest tests/ -q` from the repo root.
