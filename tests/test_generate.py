@@ -52,6 +52,8 @@ def _minimal_ns(overrides=None):
         "suggested_goal_count":     {"count": 4, "basis": "default"},
         "research_due":             False,
         "code_review_due":          False,
+        "watches":                  [],
+        "watch_signals":            {"bootstrapped": False, "signals": [], "total_signals": 0, "empty": True},
         "intent_version":           1,
         "stale_bullet_count":       0,
         "back_refs_by_text":        {},
@@ -357,6 +359,59 @@ class TestCommunityChips(unittest.TestCase):
     def test_community_inbox_signal_in_template(self):
         template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
         self.assertIn("community learning", template)
+
+
+class TestWatchingChip(unittest.TestCase):
+    """P54 — cross-namespace watch feed chip + State sub-tab rendering."""
+
+    _card_html = staticmethod(_mod._card_html)
+
+    def _ns(self, watches=None, watch_signals=None):
+        return _minimal_ns({
+            "watches": watches or [],
+            "watch_signals": watch_signals or {"bootstrapped": False, "signals": [], "total_signals": 0, "empty": True},
+        })
+
+    def test_chip_absent_when_no_watches(self):
+        html = self._card_html(self._ns(), 0)
+        self.assertNotIn("cadence-chip watching", html)
+
+    def test_chip_shows_signal_count_when_present(self):
+        ns = self._ns(
+            watches=["compass"],
+            watch_signals={"bootstrapped": False, "signals": [{"watched_namespace": "compass", "new_since": "", "decisions": [], "learnings": []}], "total_signals": 3, "empty": False},
+        )
+        html = self._card_html(ns, 0)
+        self.assertIn("cadence-chip watching", html)
+        self.assertIn("3 watch signals", html)
+
+    def test_chip_shows_watching_only_when_no_signals_yet(self):
+        ns = self._ns(watches=["compass"])
+        html = self._card_html(ns, 0)
+        self.assertIn("cadence-chip watching", html)
+        self.assertIn("watching</span>", html)
+
+    def test_missing_watches_key_defaults_to_no_chip(self):
+        """Fixtures/older namespace dicts without the P54 fields must not crash _card_html."""
+        ns = _minimal_ns()
+        del ns["watches"]
+        del ns["watch_signals"]
+        html = self._card_html(ns, 0)
+        self.assertNotIn("cadence-chip watching", html)
+
+    def test_watching_chip_css_present_in_template(self):
+        template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
+        self.assertIn(".cadence-chip.watching", template)
+
+    def test_watch_feed_state_section_wired_in_template(self):
+        template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
+        self.assertIn("function renderStateSection_WatchFeed", template)
+        self.assertIn("renderStateSection_WatchFeed(ns)", template)
+
+    def test_watches_and_watch_signals_embedded_in_ns_json(self):
+        html = render_html([self._ns(watches=["compass"])])
+        self.assertIn('"compass"', html)
+        self.assertIn('"watchSignals"', html)
 
 
 class TestZoneAndRetrievalStale(unittest.TestCase):

@@ -6,7 +6,9 @@ Run: python3 -m pytest tests/test_data_loading.py  (or python3 -m unittest)
 """
 import hashlib
 import importlib.util
+import json
 import sys
+import tempfile
 import unittest
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -23,6 +25,7 @@ _corpus_health         = _mod._corpus_health
 _goal_stats            = _mod._goal_stats
 _stale_bullet_count    = _mod._stale_bullet_count
 _retrieval_stale_texts = _mod._retrieval_stale_texts
+_load_watch_signals    = _mod._load_watch_signals
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -557,6 +560,128 @@ class TestMindmapData(unittest.TestCase):
         self.assertIn("goals",     branch_ids)
         self.assertIn("reality",   branch_ids)
         self.assertIn("artefacts", branch_ids)
+
+
+class TestLoadWatchSignals(unittest.TestCase):
+    """P54 — mirrors compass's cmd_watch_signals; must stay behaviourally in sync with it."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.loop_dir = Path(self._tmpdir.name)
+        self._patcher = patch.object(_mod, "LOOP_DIR", self.loop_dir)
+        self._patcher.start()
+
+    def tearDown(self):
+        self._patcher.stop()
+        self._tmpdir.cleanup()
+
+    def _write_jsonl(self, ns, filename, items):
+        d = self.loop_dir / ns
+        d.mkdir(parents=True, exist_ok=True)
+        with open(d / filename, "w", encoding="utf-8") as f:
+            for item in items:
+                f.write(json.dumps(item) + "\n")
+
+    def test_no_watches_returns_empty_without_touching_disk(self):
+        result = _load_watch_signals(self.loop_dir / "me", {}, {})
+        self.assertEqual(result, {"bootstrapped": False, "signals": [], "total_signals": 0, "empty": True})
+
+    def test_watched_namespace_directory_missing_is_skipped(self):
+        me = self.loop_dir / "me"
+        me.mkdir()
+        result = _load_watch_signals(me, {"watches": ["ghost"]}, {"last_close": ""})
+        self.assertEqual(result["signals"], [])
+        self.assertTrue(result["empty"])
+
+    def test_bootstrapped_when_own_tag_freq_empty(self):
+        me = self.loop_dir / "me"
+        me.mkdir()  # no learnings.jsonl at all -> tag_freq empty
+        self._write_jsonl("other", "learnings.jsonl", [
+            {"text": "x", "tags": ["tooling"], "weight": 1, "date": "2026-07-02T00:00:00Z", "status": "active"},
+        ])
+        result = _load_watch_signals(me, {"watches": ["other"]}, {"last_close": "2026-07-01T00:00:00Z"})
+        self.assertTrue(result["bootstrapped"])
+        self.assertEqual(result["total_signals"], 1)
+        self.assertEqual(result["signals"][0]["learnings"][0]["overlap_score"], 1)
+
+    def test_weighted_overlap_scoring_and_sorting(self):
+        me = self.loop_dir / "me"
+        # my own top learnings establish a weighted tag_freq: tooling=3, debugging=1
+        self._write_jsonl("me", "learnings.jsonl", [
+            {"text": "a", "tags": ["tooling"], "weight": 3, "status": "active"},
+            {"text": "b", "tags": ["debugging"], "weight": 1, "status": "active"},
+        ])
+        self._write_jsonl("other", "learnings.jsonl", [
+            {"text": "low overlap",  "tags": ["debugging"], "date": "2026-07-02T00:00:00Z", "status": "active"},
+            {"text": "high overlap", "tags": ["tooling"],   "date": "2026-07-03T00:00:00Z", "status": "active"},
+        ])
+        result = _load_watch_signals(me, {"watches": ["other"]}, {"last_close": "2026-07-01T00:00:00Z"})
+        self.assertFalse(result["bootstrapped"])
+        learnings = result["signals"][0]["learnings"]
+        self.assertEqual(learnings[0]["text"], "high overlap")  # sorted desc by overlap_score
+        self.assertEqual(learnings[0]["overlap_score"], 3)
+        self.assertEqual(learnings[1]["overlap_score"], 1)
+
+    def test_recency_filter_excludes_items_before_last_close(self):
+        me = self.loop_dir / "me"
+        self._write_jsonl("me", "learnings.jsonl", [{"text": "seed", "tags": ["tooling"], "weight": 1, "status": "active"}])
+        self._write_jsonl("other", "learnings.jsonl", [
+            {"text": "old", "tags": ["tooling"], "date": "2026-06-01T00:00:00Z", "status": "active"},
+            {"text": "new", "tags": ["tooling"], "date": "2026-07-05T00:00:00Z", "status": "active"},
+        ])
+        result = _load_watch_signals(me, {"watches": ["other"]}, {"last_close": "2026-07-01T00:00:00Z"})
+        texts = [l["text"] for l in result["signals"][0]["learnings"]]
+        self.assertEqual(texts, ["new"])
+
+    def test_superseded_and_archived_learnings_excluded(self):
+        me = self.loop_dir / "me"
+        self._write_jsonl("me", "learnings.jsonl", [{"text": "seed", "tags": ["tooling"], "weight": 1, "status": "active"}])
+        self._write_jsonl("other", "learnings.jsonl", [
+            {"text": "archived", "tags": ["tooling"], "date": "2026-07-05T00:00:00Z", "status": "archived"},
+            {"text": "superseded", "tags": ["tooling"], "date": "2026-07-05T00:00:00Z", "status": "superseded"},
+            {"text": "active", "tags": ["tooling"], "date": "2026-07-05T00:00:00Z", "status": "active"},
+        ])
+        result = _load_watch_signals(me, {"watches": ["other"]}, {"last_close": "2026-07-01T00:00:00Z"})
+        texts = [l["text"] for l in result["signals"][0]["learnings"]]
+        self.assertEqual(texts, ["active"])
+
+    def test_caps_at_top_3_decisions_and_top_5_learnings_per_namespace(self):
+        me = self.loop_dir / "me"
+        self._write_jsonl("me", "learnings.jsonl", [{"text": "seed", "tags": ["tooling"], "weight": 1, "status": "active"}])
+        self._write_jsonl("other", "decisions.jsonl", [
+            {"decision": f"d{i}", "tags": ["tooling"], "date": "2026-07-05T00:00:00Z"} for i in range(5)
+        ])
+        self._write_jsonl("other", "learnings.jsonl", [
+            {"text": f"l{i}", "tags": ["tooling"], "date": "2026-07-05T00:00:00Z", "status": "active"} for i in range(8)
+        ])
+        result = _load_watch_signals(me, {"watches": ["other"]}, {"last_close": "2026-07-01T00:00:00Z"})
+        self.assertEqual(len(result["signals"][0]["decisions"]), 3)
+        self.assertEqual(len(result["signals"][0]["learnings"]), 5)
+        self.assertEqual(result["total_signals"], 8)
+
+    def test_items_with_zero_tag_overlap_dropped(self):
+        me = self.loop_dir / "me"
+        self._write_jsonl("me", "learnings.jsonl", [{"text": "seed", "tags": ["tooling"], "weight": 1, "status": "active"}])
+        self._write_jsonl("other", "learnings.jsonl", [
+            {"text": "unrelated", "tags": ["unrelated-tag"], "date": "2026-07-05T00:00:00Z", "status": "active"},
+        ])
+        result = _load_watch_signals(me, {"watches": ["other"]}, {"last_close": "2026-07-01T00:00:00Z"})
+        self.assertEqual(result["signals"][0]["learnings"], [])
+        self.assertEqual(result["total_signals"], 0)
+        self.assertTrue(result["empty"])
+
+    def test_multiple_watched_namespaces_capped_independently(self):
+        me = self.loop_dir / "me"
+        self._write_jsonl("me", "learnings.jsonl", [{"text": "seed", "tags": ["tooling"], "weight": 1, "status": "active"}])
+        self._write_jsonl("a", "learnings.jsonl", [
+            {"text": "a1", "tags": ["tooling"], "date": "2026-07-05T00:00:00Z", "status": "active"},
+        ])
+        self._write_jsonl("b", "learnings.jsonl", [
+            {"text": "b1", "tags": ["tooling"], "date": "2026-07-05T00:00:00Z", "status": "active"},
+        ])
+        result = _load_watch_signals(me, {"watches": ["a", "b"]}, {"last_close": "2026-07-01T00:00:00Z"})
+        self.assertEqual(len(result["signals"]), 2)
+        self.assertEqual(result["total_signals"], 2)
 
 
 if __name__ == "__main__":

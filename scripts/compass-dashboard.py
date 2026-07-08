@@ -337,6 +337,81 @@ def _goal_by_month(state):
     return {m: int(sum(rates) / len(rates)) for m, rates in monthly.items()}
 
 
+def _load_watch_signals(ns_dir, config, state):
+    """P54: tag-overlap-scored decisions/learnings from watched namespaces since last_close.
+    Mirrors compass's cmd_watch_signals (scripts/compass/_monolith.py) — the dashboard reads
+    namespace directories directly rather than shelling out to compass.py, so the scoring
+    logic (weighted tag overlap, bootstrap fallback, top-3/top-5 caps) is duplicated here
+    and must be kept in sync if compass's algorithm changes.
+    """
+    watches = config.get("watches", [])
+    if not watches:
+        return {"bootstrapped": False, "signals": [], "total_signals": 0, "empty": True}
+
+    last_close = state.get("last_close") or ""
+
+    my_learnings = _read_jsonl(ns_dir / "learnings.jsonl")
+    active = [l for l in my_learnings if l.get("status") not in ("archived", "superseded")]
+    top = sorted(active, key=lambda l: -l.get("weight", 1))[:15]
+    tag_freq = {}
+    for l in top:
+        for t in l.get("tags", []):
+            tag_freq[t] = tag_freq.get(t, 0) + l.get("weight", 1)
+
+    bootstrapped = not tag_freq
+
+    def _overlap(tags):
+        if bootstrapped:
+            return 1 if tags else 0
+        return sum(tag_freq.get(t, 0) for t in tags)
+
+    signals = []
+    total = 0
+    for watched_ns in watches:
+        wd = LOOP_DIR / watched_ns
+        if not wd.exists():
+            continue
+
+        new_decisions = [
+            dec for dec in _read_jsonl(wd / "decisions.jsonl")
+            if (dec.get("date") or "") > last_close
+        ]
+        scored_decisions = [
+            {**dec, "overlap_score": ov}
+            for dec in new_decisions
+            if (ov := _overlap(dec.get("tags", []))) >= 1
+        ]
+        scored_decisions.sort(key=lambda x: -x["overlap_score"])
+        scored_decisions = scored_decisions[:3]
+
+        new_learnings = [
+            l for l in _read_jsonl(wd / "learnings.jsonl")
+            if (l.get("date") or "") > last_close and l.get("status") not in ("archived", "superseded")
+        ]
+        scored_learnings = [
+            {**l, "overlap_score": ov}
+            for l in new_learnings
+            if (ov := _overlap(l.get("tags", []))) >= 1
+        ]
+        scored_learnings.sort(key=lambda x: -x["overlap_score"])
+        scored_learnings = scored_learnings[:5]
+
+        signals.append({
+            "watched_namespace": watched_ns,
+            "new_since":         last_close,
+            "decisions":         scored_decisions,
+            "learnings":         scored_learnings,
+        })
+        total += len(scored_decisions) + len(scored_learnings)
+
+    return {
+        "bootstrapped":   bootstrapped,
+        "signals":        signals,
+        "total_signals":  total,
+        "empty":          total == 0,
+    }
+
+
 def _compute_exploration_ratio(state):
     """Replicate compass _compute_exploration_ratio logic (stdlib-only, can't import)."""
     completions = state.get("goal_completions", {})
@@ -428,6 +503,9 @@ def load_namespace(ns_dir):
 
     research_interval  = config.get("research_interval_sessions", 10)
     research_due       = state.get("sessions_since_research", 0) >= research_interval
+
+    watches       = config.get("watches", [])
+    watch_signals = _load_watch_signals(ns_dir, config, state)
 
     review_interval    = config.get("review_interval_sessions", 5)
     repo_path          = state.get("repo_path", "")
@@ -560,6 +638,8 @@ def load_namespace(ns_dir):
         "suggested_goal_count":      suggested_goal_count,
         "research_due":              research_due,
         "code_review_due":           code_review_due,
+        "watches":                   watches,
+        "watch_signals":             watch_signals,
         "intent_version":            intent_version,
         "stale_bullet_count":        stale_bullet_count,
         "back_refs_by_text":         back_refs_by_text,
@@ -694,6 +774,15 @@ def _card_html(n, i, community_published=None):
                         f'title="{er.get("sessionsWithTypes", 0)} typed sessions">'
                         f'{er["ratio"]:.0f}% explore</span>')
 
+    watching_html = ""
+    if n.get("watches"):
+        ws = n["watch_signals"]
+        title = f'watching: {", ".join(n["watches"])}'
+        if ws["total_signals"] > 0:
+            watching_html = f'<span class="cadence-chip watching" title="{_e(title)}">📡 {ws["total_signals"]} watch signal{"s" if ws["total_signals"] != 1 else ""}</span>'
+        else:
+            watching_html = f'<span class="cadence-chip watching" style="color:var(--muted)" title="{_e(title)}">👁 watching</span>'
+
     community_html = ""
     if community_published:
         published = community_published.get(n["namespace"], 0)
@@ -718,6 +807,7 @@ def _card_html(n, i, community_published=None):
         {research_html}
         {review_html}
         {explore_html}
+        {watching_html}
         {community_html}
       </div>
       <div class="card-tags">{tags_html}</div>
@@ -878,26 +968,26 @@ def _mindmap_data(n: dict) -> dict:
     # ── Reality branch: top-level ## sections ────────────────────────────────
     reality_sections: list[dict] = []
     current_title = None
-    bullet_count  = 0
+    current_bullets: list = []
     for line in (n.get("reality") or "").splitlines():
         if line.startswith("## "):
             if current_title is not None:
                 reality_sections.append(
-                    {"title": current_title, "bullets": bullet_count}
+                    {"title": current_title, "bullets": current_bullets}
                 )
-            current_title = line[3:].strip()
-            bullet_count  = 0
+            current_title   = line[3:].strip()
+            current_bullets = []
         elif current_title and line.strip().startswith(("- ", "* ")):
-            bullet_count += 1
+            current_bullets.append(line.strip()[2:].strip())
     if current_title is not None:
-        reality_sections.append({"title": current_title, "bullets": bullet_count})
+        reality_sections.append({"title": current_title, "bullets": current_bullets})
 
     reality_leaves = [
         {
             "id":    f"r-{i}",
             "label": sec["title"][:50] + ("…" if len(sec["title"]) > 50 else ""),
             "type":  "leaf",
-            "meta":  {"bullet_count": sec["bullets"]},
+            "meta":  {"bullet_count": len(sec["bullets"]), "bullets": sec["bullets"]},
         }
         for i, sec in enumerate(reality_sections)
     ]
@@ -983,6 +1073,8 @@ def _js_data(namespaces):
             "suggestedGoalCount":       n["suggested_goal_count"],
             "researchDue":             n["research_due"],
             "codeReviewDue":           n["code_review_due"],
+            "watches":                 n.get("watches", []),
+            "watchSignals":            n.get("watch_signals", {"bootstrapped": False, "signals": [], "total_signals": 0, "empty": True}),
             "intentVersion":           n["intent_version"],
             "staleBulletCount":        n["stale_bullet_count"],
             "backRefsByText":          n["back_refs_by_text"],
