@@ -100,28 +100,42 @@ _BACKLOG_HEADERS = frozenset({
     "backlog", "planned", "missing", "next", "todo", "debt", "pending", "phase",
 })
 
+# Dashboard-local divergence from reality.py's canonical classifier (P22): sections
+# like "External signals — directional" hold research findings, not shippable work —
+# they're neither achieved nor backlog, so they shouldn't enter the completeness
+# denominator at all. reality.py has the same gap; see decision log (2026-07-11)
+# for why this was fixed here first rather than upstream.
+_NON_ACHIEVEMENT_HEADERS = frozenset({
+    "external signals",
+})
+
 
 def _iter_reality_bullets(reality_md):
-    """Yield (text, in_backlog) for every non-empty, non-underscore bullet in reality_md."""
-    in_backlog = False
+    """Yield (text, excluded) for every non-empty, non-underscore bullet in reality_md.
+
+    `excluded` bullets (backlog sections or non-achievement sections like directional
+    research signals) are skipped from the P22 completeness denominator entirely.
+    """
+    excluded = False
     for line in reality_md.splitlines():
         s = line.strip()
         if s.startswith("#"):
             level = len(s) - len(s.lstrip("#"))
             if level == 2:
-                in_backlog = any(k in s.lstrip("#").strip().lower() for k in _BACKLOG_HEADERS)
+                header = s.lstrip("#").strip().lower()
+                excluded = any(k in header for k in _BACKLOG_HEADERS | _NON_ACHIEVEMENT_HEADERS)
         elif s.startswith("- ") or s.startswith("* "):
             text = s[2:].strip()
             if not text or text.startswith("_"):
                 continue
-            yield text, in_backlog
+            yield text, excluded
 
 
 def _reality_completeness(reality_md):
     total = 0
     achieved = 0
-    for text, in_backlog in _iter_reality_bullets(reality_md):
-        if in_backlog:
+    for text, excluded in _iter_reality_bullets(reality_md):
+        if excluded:
             continue
         total += 1
         if any(marker in text.lower() for marker in _COMPLETION_MARKERS):

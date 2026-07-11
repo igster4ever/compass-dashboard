@@ -74,6 +74,23 @@ python3 -c "lines = open('scripts/template.html').readlines(); [print(repr(l)) f
 Fix: use a Python script (`str.replace()`) to do the replacement, passing the `\xa0`
 character explicitly in the old string.
 
+**Fourth trap — the `<script>` block is wrapped in an IIFE:**
+
+The whole script is `(function() { ... })();` — this keeps the ~60+ top-level functions
+out of global scope so they can't silently shadow each other. But HTML strings built with
+inline `onclick`/`oninput`/`onkeydown` attributes (e.g. `onclick="switchView('overview')"`)
+are invoked by the browser as global lookups, bypassing the IIFE's closure entirely.
+
+Any function called this way **must** be added to the `Object.assign(window, {...})` list
+near the end of the script (just before `})();`), or clicking it throws
+`ReferenceError: switchView is not defined` — the same symptom as the single-quote trap
+above, but a different cause. Check both when that error shows up.
+
+`decSort`/`decExpand` are the one exception: they self-assign to `window` at their own
+definition site inside `renderDecisionsView()` (closures over local render state), so they
+are deliberately *not* in the `Object.assign` list — don't add them there, it would
+reference an out-of-scope identifier and throw.
+
 ---
 
 ## Template substitution
@@ -214,5 +231,6 @@ count as user-controlled.
 |------|----------------|
 | `test_data_loading.py` | 62 unit tests for `_reality_completeness`, `_corpus_health`, `_goal_stats`, `_stale_bullet_count`, `_retrieval_stale_texts` (P58), and more — no filesystem deps |
 | `test_generate.py` | 55 smoke tests for `generate()` — structural markers, `const NS = [` embedding, script-tag injection escaping, community/mindmap/P51-P53/P56-P58 wiring |
+| `js/dashboard_helpers.test.mjs` | Node-native (`node --test`, no deps) smoke tests for pure JS helpers in `template.html` — `esc`, `fmtYM`, `_daysSince`, `urgencyScore`, `scoreItem`, `scaleLinear`, `renderYAxisGridlines`. Extracts function source directly from the file text (brace-matched) since the script is wrapped in an IIFE with no module exports — see `extractFunction()` for the brace-matching approach and its default-parameter gotcha. Run: `node --test tests/js/dashboard_helpers.test.mjs` |
 
 Run: `python3 -m pytest tests/ -q` from the repo root.

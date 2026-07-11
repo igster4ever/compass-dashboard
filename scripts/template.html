@@ -835,6 +835,7 @@
 </div>
 
 <script>
+(function() {
 const NS = [[NS_DATA]];
 const COMMUNITY = [[COMMUNITY_DATA]];
 const BLOCKING_EDGES = [[BLOCKING_EDGES]];
@@ -2533,6 +2534,31 @@ function renderSessionHeatmapPanel() {
   wireHeatmapTooltip(container, '.heatmap-cell');
 }
 
+// ── Shared SVG chart helpers ──────────────────────────────────────────────────
+// Linear scale: maps a value in [0, domainMax] to [0, rangeMax]. invert=true
+// flips the output (rangeMax..0) — the common case for SVG y-axes where value
+// 0 sits at the bottom of the chart (largest y) and domainMax at the top.
+function scaleLinear(value, domainMax, rangeMax, invert) {
+  const t = domainMax === 0 ? 0 : value / domainMax;
+  return invert ? rangeMax * (1 - t) : rangeMax * t;
+}
+
+// Horizontal y-axis gridlines + left-aligned value labels for a chart area
+// spanning [chartX0, chartX1] horizontally and chartH tall starting at chartTop.
+// `ticks` is an array of { value, label?, dash? } in the same domain as domainMax.
+function renderYAxisGridlines(chartX0, chartX1, chartTop, chartH, domainMax, ticks, opts = {}) {
+  const fontSize = opts.fontSize || 9;
+  const labelOffset = opts.labelOffset != null ? opts.labelOffset : 6;
+  const textFill = opts.textFill || 'var(--muted)';
+  return ticks.map(t => {
+    const y = chartTop + scaleLinear(t.value, domainMax, chartH, true);
+    const dashAttr = t.dash ? ' stroke-dasharray="3,3"' : '';
+    const label = t.label !== undefined ? t.label : Math.round(t.value);
+    return `<line x1="${chartX0}" y1="${y.toFixed(1)}" x2="${chartX1}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-width="1"${dashAttr}/>` +
+           `<text x="${chartX0 - labelOffset}" y="${(y + 4).toFixed(1)}" text-anchor="end" fill="${textFill}" font-size="${fontSize}" font-family="monospace">${esc(String(label))}</text>`;
+  }).join('');
+}
+
 // ── Learning timeline ─────────────────────────────────────────────────────────
 
 function renderLearningTimeline() {
@@ -2591,29 +2617,26 @@ function renderLearningTimeline() {
 
   let svg = `<svg class="timeline-svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="overflow:visible">`;
 
-  for (let i = 0; i <= 4; i++) {
-    const y = PAD_T + chartH - (i / 4) * chartH;
-    svg += `<line x1="${PAD_L}" y1="${y.toFixed(1)}" x2="${W - PAD_R}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-width="1"/>`;
-    svg += `<text x="${PAD_L - 4}" y="${(y + 4).toFixed(1)}" text-anchor="end" fill="var(--muted)" font-size="9" font-family="monospace">${Math.round(maxVal * i / 4)}</text>`;
-  }
+  const timelineTicks = [0, 1, 2, 3, 4].map(i => ({ value: maxVal * i / 4 }));
+  svg += renderYAxisGridlines(PAD_L, W - PAD_R, PAD_T, chartH, maxVal, timelineTicks, { labelOffset: 4 });
 
   months.forEach((m, i) => {
     const x = PAD_L + (i + 0.5) * (chartW / months.length);
     svg += `<text x="${x.toFixed(1)}" y="${H - 6}" text-anchor="middle" fill="var(--muted)" font-size="9" font-family="monospace">${fmtYM(m)}</text>`;
   });
 
+  function timelineY(val) { return PAD_T + scaleLinear(val, maxVal, chartH, true); }
+
   topTags.forEach((tag, ti) => {
     const color = COLORS[ti % COLORS.length];
     const pts = cumulative[tag].map((val, i) => {
       const x = PAD_L + (i + 0.5) * (chartW / months.length);
-      const y = PAD_T + chartH - (val / maxVal) * chartH;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
+      return `${x.toFixed(1)},${timelineY(val).toFixed(1)}`;
     }).join(' ');
     if (pts) svg += `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
     cumulative[tag].forEach((val, i) => {
       const x = PAD_L + (i + 0.5) * (chartW / months.length);
-      const y = PAD_T + chartH - (val / maxVal) * chartH;
-      svg += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" fill="${color}" stroke="var(--bg)" stroke-width="1.5"><title>${esc(tag)}: ${val} total by ${months[i]}</title></circle>`;
+      svg += `<circle cx="${x.toFixed(1)}" cy="${timelineY(val).toFixed(1)}" r="3.5" fill="${color}" stroke="var(--bg)" stroke-width="1.5"><title>${esc(tag)}: ${val} total by ${months[i]}</title></circle>`;
     });
   });
 
@@ -2680,17 +2703,13 @@ function renderScorecard() {
   const chartW = W - PAD_L - PAD_R, chartH = H - PAD_T - PAD_B;
   const axisX  = AXES.map((_, i) => PAD_L + i * chartW / (AXES.length - 1));
 
-  function yFor(val) { return PAD_T + (1 - val / 100) * chartH; }
+  function yFor(val) { return PAD_T + scaleLinear(val, 100, chartH, true); }
 
   let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="display:block;overflow:visible">`;
 
   // Horizontal guides at 0, 50, 100
-  [0, 50, 100].forEach(v => {
-    const y = yFor(v);
-    const dash = v === 50 ? ' stroke-dasharray="3,3"' : '';
-    svg += `<line x1="${PAD_L}" y1="${y.toFixed(1)}" x2="${W - PAD_R}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-width="1"${dash}/>`;
-    svg += `<text x="${PAD_L - 6}" y="${(y + 4).toFixed(1)}" text-anchor="end" fill="var(--subtle)" font-size="9" font-family="monospace">${v}</text>`;
-  });
+  const scoreTicks = [0, 50, 100].map(v => ({ value: v, dash: v === 50 }));
+  svg += renderYAxisGridlines(PAD_L, W - PAD_R, PAD_T, chartH, 100, scoreTicks, { textFill: 'var(--subtle)' });
 
   // Vertical axis lines + labels
   AXES.forEach((ax, i) => {
@@ -2807,8 +2826,8 @@ function renderGoalTypesPanel() {
 
     sessions.forEach((s, i) => {
       const total  = s.exploit + s.explore;
-      const exH    = Math.round(s.exploit / maxTotal * BAR_MAX_H);
-      const xpH    = Math.round(s.explore  / maxTotal * BAR_MAX_H);
+      const exH    = Math.round(scaleLinear(s.exploit, maxTotal, BAR_MAX_H));
+      const xpH    = Math.round(scaleLinear(s.explore, maxTotal, BAR_MAX_H));
       const x      = PAD_LEFT + i * (BAR_W + BAR_GAP);
       const exY    = y + (BAR_MAX_H - exH - xpH);
       const xpY    = y + (BAR_MAX_H - xpH);
@@ -2873,8 +2892,8 @@ function renderPlanningPanel() {
     svgParts.push(`<text x="${PAD_LEFT - 8}" y="${y + BAR_MAX_H / 2 + 4}" text-anchor="end" font-size="11" fill="var(--muted)">${esc(ns.namespace)}</text>`);
 
     sessions.forEach((s, i) => {
-      const cfH  = Math.round(s.carryForward   / maxVal * BAR_MAX_H);
-      const gcH  = Math.round(s.goalsCompleted / maxVal * BAR_MAX_H);
+      const cfH  = Math.round(scaleLinear(s.carryForward, maxVal, BAR_MAX_H));
+      const gcH  = Math.round(scaleLinear(s.goalsCompleted, maxVal, BAR_MAX_H));
       const x    = PAD_LEFT + i * (BAR_W + BAR_GAP);
       const tip  = `${esc(s.date)}: ${s.goalsCompleted} completed, ${s.carryForward} carried forward`;
 
@@ -4043,6 +4062,20 @@ function resetDAGLayout() {
 
 // Auto-open first card when only one namespace is shown
 if (NS.length === 1) selectCard(0);
+
+// ── Global exposure — functions invoked from inline HTML attributes
+// (onclick/oninput/onkeydown) must be reachable from window; everything else
+// stays module-private inside this IIFE to prevent silent name collisions.
+// decSort/decExpand are NOT listed here — they self-assign to window at their
+// definition site inside renderDecisionsView() (closures over local render state).
+Object.assign(window, {
+  switchView, switchTab, switchHeatmap, selectCard, setFilter,
+  toggleSession, filterLearningType,
+  openSearch, closeSearch, closeSearchIfBackdrop, handleSearch, handleSearchKey, handleResultClick,
+  toggleDAGSystem, resetDAGLayout, clearDAGFocus,
+  mmNodeClick, mmResetView, mmSelectNs,
+});
+})();
 </script>
 </body>
 </html>
