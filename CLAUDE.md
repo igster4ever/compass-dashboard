@@ -158,7 +158,7 @@ full set and must be used for any time-based visualisation.
 
 **`active_learnings` filter — P33 forward compat:** `load_namespace()` currently filters superseded via `not l.get("superseded_by")`. When P33 (learning lifecycle status field) ships, extend this filter to also exclude `status in ["superseded", "archived"]`.
 
-**Constants sync:** `_COMPLETION_MARKERS` and `_BACKLOG_HEADERS` in this script are local copies of the same constants in `scripts/compass/reality.py`. They cannot be imported (stdlib-only constraint). If reality.py's constants change, update this script's copies to match.
+**Constants sync:** `_COMPLETION_MARKERS`, `_BACKLOG_HEADERS`, and `_NON_ACHIEVEMENT_HEADERS` in this script are local copies of the same constants in `scripts/compass/reality.py`. They cannot be imported (stdlib-only constraint). If reality.py's constants change, update this script's copies to match. (`_NON_ACHIEVEMENT_HEADERS` was dashboard-local-only until 2026-07-18, when the same fix was ported upstream to `reality.py` — both copies are now in sync, not diverging.)
 
 ---
 
@@ -234,3 +234,5 @@ count as user-controlled.
 | `js/dashboard_helpers.test.mjs` | Node-native (`node --test`, no deps) smoke tests for pure JS helpers in `template.html` — `esc`, `fmtYM`, `_daysSince`, `urgencyScore`, `scoreItem`, `scaleLinear`, `renderYAxisGridlines`. Extracts function source directly from the file text (brace-matched) since the script is wrapped in an IIFE with no module exports — see `extractFunction()` for the brace-matching approach and its default-parameter gotcha. Run: `node --test tests/js/dashboard_helpers.test.mjs` |
 
 Run: `python3 -m pytest tests/ -q` from the repo root.
+
+**`docs/backlog/`:** scoped, unshipped feature/fix write-ups produced by data-model audits or similar review passes — each entry has implementation breadcrumbs and an effort estimate so a future session can pick one up without re-deriving context. Not auto-discovered by any script; linked from reality.md's "Skill enhancement backlog" section when added.

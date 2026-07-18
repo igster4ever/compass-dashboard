@@ -651,6 +651,7 @@
     .mm-detail.mm-detail-list li { line-height: 1.5; }
     .mm-list-title { font-weight: 600; color: var(--text); }
     .mm-list-more { color: var(--text-muted); font-style: italic; list-style: none; margin-left: -1.1rem; }
+    .mm-list-bridge { color: var(--blue); font-size: .72rem; margin-top: .2rem; }
     .mm-svg { flex: 1; width: 100%; cursor: grab; }
     .mm-link { fill: none; stroke-width: 1.2px; }
 
@@ -2328,7 +2329,7 @@ const EDGE_META = {
 
 const _dag = { nodes: [], edges: [], nodeMap: new Map(), raf: null, tick: 0, maxTick: 280, svgW: 900, svgH: 530, rendered: false, drag: null, showSystem: false, focusedNs: null };
 
-const _mm = { rendered: false, nsIdx: 0, pan: { x: 0, y: 0, scale: 1 }, drag: { active: false, sx: 0, sy: 0 }, cx: 0, cy: 0, _onMouseMove: null, _onMouseUp: null, nodeIndex: [] };
+const _mm = { rendered: false, nsIdx: 0, pan: { x: 0, y: 0, scale: 1 }, drag: { active: false, sx: 0, sy: 0 }, cx: 0, cy: 0, _onMouseMove: null, _onMouseUp: null, nodeIndex: [], bridgesOn: false };
 
 function _addEdge(map, s, t, type, detail) {
   const key = type === 'dep' ? `${s}->${t}:dep` : `${Math.min(s,t)}-${Math.max(s,t)}:${type}`;
@@ -3382,10 +3383,16 @@ function renderCommunityView() {
     }).join('') + '</div>';
   }
 
+  const sankeyHtml = renderCommunitySankey(adopted);
+
   container.innerHTML = `<div class="community-wrap">
     <div class="community-section">
       <div class="community-section-title">Federation health</div>
       <div class="community-health-bar">${healthHtml}</div>
+    </div>
+    <div class="community-section">
+      <div class="community-section-title">Learning flow (adoptions)</div>
+      ${sankeyHtml}
     </div>
     <div class="community-section">
       <div class="community-section-title">Trust registry</div>
@@ -3396,6 +3403,88 @@ function renderCommunityView() {
       ${feedHtml}
     </div>
   </div>`;
+}
+
+// P40-D Phase 4 — learning-flow Sankey: source_loop_id (publisher) -> namespace (adopter),
+// aggregated from COMMUNITY.adoptions. Hand-rolled two-column flow diagram (no D3 dependency
+// needed for a two-tier Sankey — stacking + straight bezier links is enough).
+function renderCommunitySankey(adopted) {
+  if (!adopted.length) {
+    return `<div style="font-size:.78rem;color:var(--text-muted);font-style:italic">No adoption activity yet — this fills in as namespaces adopt shared learnings via <code>adopt-learning</code>.</div>`;
+  }
+
+  const flows = new Map(); // "source target" -> count
+  adopted.forEach(a => {
+    const src = a.source_loop_id || '?';
+    const tgt = a.namespace || '?';
+    const key = src + ' ' + tgt;
+    flows.set(key, (flows.get(key) || 0) + 1);
+  });
+
+  const srcTotals = new Map(), tgtTotals = new Map();
+  flows.forEach((count, key) => {
+    const [s, t] = key.split(' ');
+    srcTotals.set(s, (srcTotals.get(s) || 0) + count);
+    tgtTotals.set(t, (tgtTotals.get(t) || 0) + count);
+  });
+
+  const srcList = Array.from(srcTotals.keys());
+  const tgtList = Array.from(tgtTotals.keys());
+  const totalFlow = Array.from(flows.values()).reduce((a, b) => a + b, 0);
+
+  const nodeW = 14, gap = 10;
+  const rows = Math.max(srcList.length, tgtList.length);
+  const H = Math.max(140, rows * 34);
+  const usableH = H - gap * (rows - 1);
+  const unitH = usableH / totalFlow;
+
+  const W = 720, leftX = 10, rightX = W - 10 - nodeW;
+
+  function layout(list, totals) {
+    let y = 0;
+    const pos = new Map();
+    list.forEach(name => {
+      const h = totals.get(name) * unitH;
+      pos.set(name, { y0: y, y1: y + h, h });
+      y += h + gap;
+    });
+    return pos;
+  }
+  const srcPos = layout(srcList, srcTotals);
+  const tgtPos = layout(tgtList, tgtTotals);
+  const srcCursor = new Map(srcList.map(s => [s, srcPos.get(s).y0]));
+  const tgtCursor = new Map(tgtList.map(t => [t, tgtPos.get(t).y0]));
+
+  const palette = ['var(--blue)', 'var(--green)', 'var(--amber)', 'var(--red)'];
+  const srcColor = new Map(srcList.map((s, i) => [s, palette[i % palette.length]]));
+
+  let linksSvg = '';
+  flows.forEach((count, key) => {
+    const [s, t] = key.split(' ');
+    const h = count * unitH;
+    const sy0 = srcCursor.get(s), sy1 = sy0 + h;
+    const ty0 = tgtCursor.get(t), ty1 = ty0 + h;
+    srcCursor.set(s, sy1);
+    tgtCursor.set(t, ty1);
+    const x0 = leftX + nodeW, x1 = rightX;
+    const xm = (x0 + x1) / 2;
+    const path = `M${x0},${sy0} C${xm},${sy0} ${xm},${ty0} ${x1},${ty0} L${x1},${ty1} C${xm},${ty1} ${xm},${sy1} ${x0},${sy1} Z`;
+    linksSvg += `<path d="${path}" fill="${srcColor.get(s)}" opacity="0.35"><title>${esc(s)} → ${esc(t)}: ${count}</title></path>`;
+  });
+
+  let nodesSvg = '';
+  srcList.forEach(s => {
+    const p = srcPos.get(s);
+    nodesSvg += `<rect x="${leftX}" y="${p.y0}" width="${nodeW}" height="${p.h}" fill="${srcColor.get(s)}"><title>${esc(s)}: ${srcTotals.get(s)} adopted from here</title></rect>`;
+    nodesSvg += `<text x="${leftX - 6}" y="${(p.y0 + p.y1) / 2}" text-anchor="end" dominant-baseline="middle" font-size="11" fill="var(--text)">${esc(s)}</text>`;
+  });
+  tgtList.forEach(t => {
+    const p = tgtPos.get(t);
+    nodesSvg += `<rect x="${rightX}" y="${p.y0}" width="${nodeW}" height="${p.h}" fill="var(--muted)"><title>${esc(t)}: ${tgtTotals.get(t)} adopted here</title></rect>`;
+    nodesSvg += `<text x="${rightX + nodeW + 6}" y="${(p.y0 + p.y1) / 2}" text-anchor="start" dominant-baseline="middle" font-size="11" fill="var(--text)">${esc(t)}</text>`;
+  });
+
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" style="overflow:visible">${linksSvg}${nodesSvg}</svg>`;
 }
 
 // ── Mind Map (E25b) ──────────────────────────────────────────────────────────
@@ -3411,9 +3500,19 @@ function renderMindMap() {
              onclick="mmSelectNs(${i})">${esc(ns.namespace)}</button>`
   ).join('');
 
+  // E25e — cross-namespace bridge toggle: only offered when the current namespace's
+  // tree actually has at least one tag cluster with a bridge_namespaces annotation
+  // (computed in Python by _add_mindmap_bridges, gated at corpus >= 50 for bridge targets).
+  const hasBridges = mmHasBridges(NS[_mm.nsIdx].mindmap);
+  const bridgeBtnHtml = hasBridges
+    ? `<button id="mm-bridge-btn" class="mm-ns-btn${_mm.bridgesOn ? ' active' : ''}"
+               onclick="mmToggleBridges()" title="Highlight tag clusters shared with other large namespaces">🔗 Bridges</button>`
+    : '';
+
   container.innerHTML = `
     <div class="mm-toolbar" style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
       <div class="mm-ns-picker">${pickerHtml}</div>
+      ${bridgeBtnHtml}
       <button class="mm-ns-btn" onclick="mmResetView()" title="Reset zoom and pan" style="margin-left:auto;flex-shrink:0">⊙ Reset</button>
     </div>
     <div id="mm-detail" class="mm-detail"></div>
@@ -3427,9 +3526,26 @@ function mmSelectNs(idx) {
   _mm.nsIdx = idx;
   _mm.rendered = false;
   _mm.pan = { x: 0, y: 0, scale: 1 };
+  _mm.bridgesOn = false;
   const container = document.getElementById('view-mindmap');
   container.innerHTML = '';
   renderMindMap();
+}
+
+// E25e — does this namespace's learnings branch have any tag cluster annotated with
+// bridge_namespaces (i.e. shared with at least one other namespace above the corpus gate)?
+function mmHasBridges(data) {
+  if (!data) return false;
+  const learningsBranch = (data.children || []).find(c => c.id === 'learnings');
+  const clusters = (learningsBranch && learningsBranch.children) || [];
+  return clusters.some(c => c.bridge_namespaces && c.bridge_namespaces.length);
+}
+
+function mmToggleBridges() {
+  _mm.bridgesOn = !_mm.bridgesOn;
+  const btn = document.getElementById('mm-bridge-btn');
+  if (btn) btn.classList.toggle('active', _mm.bridgesOn);
+  mmDraw(_mm.nsIdx);
 }
 
 // Vanilla radial tree layout — no D3 needed.
@@ -3538,12 +3654,16 @@ function mmDraw(nsIdx) {
     const x = rx(node), y = ry(node);
     const col = nodeColour(node);
     const r   = node._depth === 0 ? 7 : node._depth === 1 ? 5 : 3;
-    const lbl = esc(node.label || '');
+    const isBridge = _mm.bridgesOn && node.bridge_namespaces && node.bridge_namespaces.length;
+    const lbl = esc(node.label || '') + (isBridge ? ` 🔗${node.bridge_namespaces.length}` : '');
     const isGroup = !!(node.children && node.children.length);
     const tipText = isGroup ? '' : ((node.meta && (node.meta.full_text || node.label)) || node.label || '');
     const dataAttr = tipText ? `data-tip="${esc(tipText)}"` : '';
     const branch = esc(mmBranch(node));
     const clickable = node._depth >= 1;
+    if (isBridge) {
+      svgHtml += `<circle cx="${x}" cy="${y}" r="${r + 4}" fill="none" stroke="var(--blue)" stroke-width="1.5" stroke-dasharray="2,2" style="pointer-events:none"/>`;
+    }
     svgHtml += `<circle cx="${x}" cy="${y}" r="${r}" fill="${col}" stroke="var(--surface)" stroke-width="1.5"
       ${dataAttr} data-idx="${idx}" data-branch="${branch}" data-depth="${node._depth}" style="cursor:${clickable ? 'pointer' : 'default'}"
       onclick="mmNodeClick(${idx})"/>`;
@@ -3639,6 +3759,12 @@ function mmShowNodeDetail(idx) {
   // bullet list) — treat any node carrying a non-empty items array the same as a group.
   const metaItems = Array.isArray(meta.bullets) ? meta.bullets : null;
 
+  // E25e — bridge info: shown whenever the toggle is on and this cluster has bridge_namespaces,
+  // regardless of which detail branch below ends up rendering the rest of the panel.
+  const bridgeHtml = (_mm.bridgesOn && node.bridge_namespaces && node.bridge_namespaces.length)
+    ? `<div class="mm-list-bridge">🔗 Also tagged in: ${node.bridge_namespaces.map(b => `${esc(b.namespace)} (${b.count})`).join(', ')}</div>`
+    : '';
+
   if (!isGroup && !(metaItems && metaItems.length)) {
     detail.classList.remove('mm-detail-list');
     const lines = [node.label || ''];
@@ -3657,7 +3783,7 @@ function mmShowNodeDetail(idx) {
     const more  = metaItems.length > MM_LIST_CAP
       ? `<li class="mm-list-more">+${metaItems.length - MM_LIST_CAP} more</li>` : '';
     detail.classList.add('mm-detail-list');
-    detail.innerHTML = `<div class="mm-list-title">${esc(node.label || '')} — ${metaItems.length} bullet${metaItems.length !== 1 ? 's' : ''}</div><ul>${items}${more}</ul>`;
+    detail.innerHTML = `<div class="mm-list-title">${esc(node.label || '')} — ${metaItems.length} bullet${metaItems.length !== 1 ? 's' : ''}</div>${bridgeHtml}<ul>${items}${more}</ul>`;
     return;
   }
 
@@ -3667,7 +3793,7 @@ function mmShowNodeDetail(idx) {
   const more   = leaves.length > MM_LIST_CAP
     ? `<li class="mm-list-more">+${leaves.length - MM_LIST_CAP} more</li>` : '';
   detail.classList.add('mm-detail-list');
-  detail.innerHTML = `<div class="mm-list-title">${esc(node.label || '')} — ${leaves.length} item${leaves.length !== 1 ? 's' : ''}</div><ul>${items}${more}</ul>`;
+  detail.innerHTML = `<div class="mm-list-title">${esc(node.label || '')} — ${leaves.length} item${leaves.length !== 1 ? 's' : ''}</div>${bridgeHtml}<ul>${items}${more}</ul>`;
 }
 
 function mmClearDetail() {
@@ -4073,7 +4199,7 @@ Object.assign(window, {
   toggleSession, filterLearningType,
   openSearch, closeSearch, closeSearchIfBackdrop, handleSearch, handleSearchKey, handleResultClick,
   toggleDAGSystem, resetDAGLayout, clearDAGFocus,
-  mmNodeClick, mmResetView, mmSelectNs,
+  mmNodeClick, mmResetView, mmSelectNs, mmToggleBridges,
 });
 })();
 </script>

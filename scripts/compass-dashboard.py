@@ -100,11 +100,12 @@ _BACKLOG_HEADERS = frozenset({
     "backlog", "planned", "missing", "next", "todo", "debt", "pending", "phase",
 })
 
-# Dashboard-local divergence from reality.py's canonical classifier (P22): sections
-# like "External signals — directional" hold research findings, not shippable work —
-# they're neither achieved nor backlog, so they shouldn't enter the completeness
-# denominator at all. reality.py has the same gap; see decision log (2026-07-11)
-# for why this was fixed here first rather than upstream.
+# Local copy of compass/reality.py's _NON_ACHIEVEMENT_HEADERS (stdlib-only constraint
+# means this can't be imported — see CLAUDE.md "Constants sync"). Sections like
+# "External signals — directional" hold research findings, not shippable work — they're
+# neither achieved nor backlog, so they shouldn't enter the completeness denominator at
+# all. Originally a dashboard-local-only fix (2026-07-11); ported upstream to
+# compass/reality.py 2026-07-18 — this copy must now be kept in sync with that one.
 _NON_ACHIEVEMENT_HEADERS = frozenset({
     "external signals",
 })
@@ -172,6 +173,7 @@ def _corpus_health(active_learnings, superseded_count):
 
 
 _RETRIEVAL_STALE_SURFACED_THRESHOLD = 10  # P58: local copy of compass's retrieval_stale_surfaced_threshold
+_MINDMAP_CROSS_NS_GATE = 50  # E25e: min active-learning corpus size for a namespace to qualify as a bridge target
 
 
 def _retrieval_stale_texts(active_learnings, surfaced_threshold=_RETRIEVAL_STALE_SURFACED_THRESHOLD):
@@ -918,6 +920,7 @@ def _mindmap_data(n: dict) -> dict:
             "id":       f"cluster-{tag}",
             "label":    f"{tag} ({len(leaves)})",
             "type":     "cluster",
+            "tag":      tag,
             "children": leaves,
         }
         for tag, leaves in sorted(tag_clusters.items(), key=lambda kv: -len(kv[1]))
@@ -1048,6 +1051,49 @@ def _mindmap_data(n: dict) -> dict:
     }
 
 
+def _add_mindmap_bridges(data: list) -> None:
+    """E25e: annotate each namespace's mind-map tag clusters with cross-namespace
+    'bridge' info — other namespaces (above the corpus gate) that also have active
+    learnings tagged with the same tag. Mutates `data` (the JS-serialisation list
+    built in `_js_data()`, each entry already carrying its own `mindmap` tree) in place.
+    Must run after each entry's `mindmap` key is populated — `_mindmap_data(n)` builds
+    a fresh tree per call rather than caching it on the namespace dict itself.
+
+    Bridge targets are gated at _MINDMAP_CROSS_NS_GATE active learnings: a namespace
+    needs enough corpus for its tag clusters to be a meaningful comparison point, not
+    a single stray learning matching by coincidence.
+    """
+    qualifying = [n for n in data if len(n["learnings"]) >= _MINDMAP_CROSS_NS_GATE]
+    if not qualifying:
+        return
+
+    # tag -> {namespace: count}, built only from qualifying namespaces
+    tag_owners: dict[str, dict[str, int]] = {}
+    for n in qualifying:
+        counts: dict[str, int] = {}
+        for l in n["learnings"]:
+            for tag in (l.get("tags") or ["untagged"])[:1]:  # primary tag only, matches cluster grouping
+                counts[tag] = counts.get(tag, 0) + 1
+        for tag, count in counts.items():
+            tag_owners.setdefault(tag, {})[n["namespace"]] = count
+
+    for n in data:
+        learning_clusters = n["mindmap"]["children"][0]["children"]
+        for cluster in learning_clusters:
+            tag = cluster.get("tag")
+            if not tag:
+                continue
+            others = {
+                ns: count for ns, count in tag_owners.get(tag, {}).items()
+                if ns != n["namespace"]
+            }
+            if others:
+                cluster["bridge_namespaces"] = sorted(
+                    ({"namespace": ns, "count": c} for ns, c in others.items()),
+                    key=lambda b: -b["count"],
+                )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # JS data serialisation
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1116,6 +1162,8 @@ def _js_data(namespaces):
             "skilloptRwi":             n["skillopt_rwi"],
             "mindmap":                 _mindmap_data(n),
         })
+    _add_mindmap_bridges(data)  # E25e: cross-namespace tag-cluster bridges — needs the
+                                # already-built mindmap trees, so this runs here, not in generate()
     raw = json.dumps(data, ensure_ascii=False, default=str)
     # Prevent </script> from breaking the embedding
     return raw.replace("</script>", r"<\/script>").replace("<!--", r"<\!--")
