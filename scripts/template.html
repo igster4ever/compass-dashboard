@@ -3666,7 +3666,7 @@ function mmDraw(nsIdx) {
     }
     svgHtml += `<circle cx="${x}" cy="${y}" r="${r}" fill="${col}" stroke="var(--surface)" stroke-width="1.5"
       ${dataAttr} data-idx="${idx}" data-branch="${branch}" data-depth="${node._depth}" style="cursor:${clickable ? 'pointer' : 'default'}"
-      onclick="mmNodeClick(${idx})"/>`;
+      onclick="mmNodeClick(${idx}, event)"/>`;
     if (node._depth <= 2) {
       const fs = node._depth === 0 ? 13 : node._depth === 1 ? 11 : 9;
       const fw = node._depth <= 1 ? '600' : 'normal';
@@ -3691,7 +3691,11 @@ function mmDraw(nsIdx) {
   svg.innerHTML = svgHtml;
 
   // hover: leaves show their single-item tooltip; group nodes (branch/cluster/session)
-  // show the same grouped-item list as a click would (E25d — "hover reveals the full list")
+  // show the same grouped-item list as a click would (E25d — "hover reveals the full list").
+  // The detail panel is NOT cleared on mouseleave — moving the pointer off the node (e.g. to
+  // reach the panel's own scrollbar, or off the SVG entirely) must not collapse it. It only
+  // updates (on hovering a different node) or is dismissed explicitly (background click /
+  // namespace switch) — see mmClearDetail() callers.
   svg.querySelectorAll('[data-idx]').forEach(el => {
     el.addEventListener('mouseenter', () => {
       mmShowNodeDetail(parseInt(el.getAttribute('data-idx'), 10));
@@ -3704,9 +3708,13 @@ function mmDraw(nsIdx) {
       }
     });
     el.addEventListener('mouseleave', () => {
-      mmClearDetail();
       svg.querySelectorAll('[data-branch]').forEach(bel => { bel.style.opacity = ''; });
     });
+  });
+
+  // background click (not on a node) dismisses the detail panel
+  svg.addEventListener('click', e => {
+    if (e.target === svg) mmClearDetail();
   });
 
   // zoom via mouse wheel
@@ -3803,7 +3811,8 @@ function mmClearDetail() {
   detail.textContent = '';
 }
 
-function mmNodeClick(idx) {
+function mmNodeClick(idx, ev) {
+  if (ev) ev.stopPropagation();
   mmShowNodeDetail(idx);
 }
 
