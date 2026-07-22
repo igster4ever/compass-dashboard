@@ -113,6 +113,7 @@
     .cadence-chip.research { background: rgba(56,189,248,.12); color: #38bdf8; }
     .cadence-chip.review   { background: rgba(52,211,153,.12); color: #34d399; }
     .cadence-chip.watching { background: rgba(240,171,252,.12); color: #f0abfc; }
+    .cadence-chip.assumption { background: rgba(251,146,60,.12); color: #fb923c; }
     .community-chip {
       font-size: .62rem; padding: .15em .5em; border-radius: 999px;
       background: rgba(99,102,241,.12); color: #818cf8; font-weight: 600;
@@ -1194,6 +1195,13 @@ function renderStateSection_SkillOptStatus(ns) {
     ? `due — ${n} session${n !== 1 ? 's' : ''} since last optimisation pass`
     : `${n} session${n !== 1 ? 's' : ''} since last optimisation pass`;
 
+  const fg = ns.skillOptFrictionGate;
+  const frictionHtml = (due && fg && !fg.sufficient_signal)
+    ? `<div style="font-size:.72rem;color:var(--amber);margin-top:.2rem">
+        ⚠ thin signal — ${fg.open_feedback_count}/${fg.threshold} open skill-feedback entries
+      </div>`
+    : '';
+
   let holdoutHtml = '';
   if (frozen) {
     const mean   = ns.skilloptHoldoutMean != null ? (ns.skilloptHoldoutMean * 100).toFixed(1) + '%' : '—';
@@ -1208,6 +1216,7 @@ function renderStateSection_SkillOptStatus(ns) {
 
   return `<div class="md-section"><h3>Skill optimisation (P53)</h3>
     <div style="font-size:.82rem;color:${col}">${icon} ${esc(msg)}</div>
+    ${frictionHtml}
     ${holdoutHtml}
   </div>`;
 }
@@ -3040,6 +3049,11 @@ function _renderQualityScoreSparklines() {
       : '';
     const trendCol = trendIcon === '↑' ? 'var(--green)' : trendIcon === '↓' ? 'var(--red)' : 'var(--muted)';
 
+    const plateau = ns.qualityPlateau;
+    const plateauBadge = plateau && plateau.plateaued
+      ? `<span style="font-size:.66rem;color:var(--amber);white-space:nowrap" title="${plateau.sessions_checked} sessions checked, trend: ${plateau.trend}, delta: ${plateau.delta}">⚠ plateaued</span>`
+      : '';
+
     return `<div style="display:flex;align-items:center;gap:.8rem;padding:.3rem 0;border-bottom:1px solid var(--border)">
       <div style="width:7rem;font-size:.72rem;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(ns.namespace)}</div>
       <svg width="${W}" height="${H}" style="flex-shrink:0">
@@ -3053,6 +3067,7 @@ function _renderQualityScoreSparklines() {
       <div style="width:2.8rem;font-size:.78rem;color:var(--text);text-align:right">${Math.round(latest * 100)}%</div>
       <div style="font-size:.72rem;color:${trendCol};width:1rem">${trendIcon}</div>
       ${weakest ? `<div style="font-size:.68rem;color:var(--muted)">↓ ${esc(weakest.replace(/_/g, ' '))}</div>` : ''}
+      ${plateauBadge}
     </div>`;
   }).join('');
 

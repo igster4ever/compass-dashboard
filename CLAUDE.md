@@ -156,7 +156,7 @@ full set and must be used for any time-based visualisation.
 - `superseded_by` — text of the anchor learning if this entry was merged via dream pass; excluded from `learnings[]` by `load_namespace()`
 - `superseded_by_id` — `learning_id` of the anchor (parallel to `superseded_by`; present only when anchor had a `learning_id`)
 
-**`active_learnings` filter — P33 forward compat:** `load_namespace()` currently filters superseded via `not l.get("superseded_by")`. When P33 (learning lifecycle status field) ships, extend this filter to also exclude `status in ["superseded", "archived"]`.
+**`active_learnings` filter — P33/P44 status exclusion (fixed 2026-07-22):** `load_namespace()` now filters via `not l.get("superseded_by") and l.get("status") not in ("archived", "superseded")` — the P33 forward-compat gap noted here previously was live: P44 (episodic learning auto-decay) ships in compass's `_monolith.py` and sets `status: "archived"` on stale episodic learnings, and the old filter only excluded `superseded_by`. Lines 370 and 405 in this file already handled both statuses correctly — only the `load_namespace()` filter (formerly ~line 500) was behind.
 
 **Constants sync:** `_COMPLETION_MARKERS`, `_BACKLOG_HEADERS`, and `_NON_ACHIEVEMENT_HEADERS` in this script are local copies of the same constants in `scripts/compass/reality.py`. They cannot be imported (stdlib-only constraint). If reality.py's constants change, update this script's copies to match. (`_NON_ACHIEVEMENT_HEADERS` was dashboard-local-only until 2026-07-18, when the same fix was ported upstream to `reality.py` — both copies are now in sync, not diverging.)
 
@@ -234,5 +234,7 @@ count as user-controlled.
 | `js/dashboard_helpers.test.mjs` | Node-native (`node --test`, no deps) smoke tests for pure JS helpers in `template.html` — `esc`, `fmtYM`, `_daysSince`, `urgencyScore`, `scoreItem`, `scaleLinear`, `renderYAxisGridlines`. Extracts function source directly from the file text (brace-matched) since the script is wrapped in an IIFE with no module exports — see `extractFunction()` for the brace-matching approach and its default-parameter gotcha. Run: `node --test tests/js/dashboard_helpers.test.mjs` |
 
 Run: `python3 -m pytest tests/ -q` from the repo root.
+
+**New `_js_data()` fields must use `n.get("field")`, never `n["field"]`:** `test_generate.py` builds fixture NS dicts directly (not via `load_namespace()`), so a fixture won't have every key the real Python data layer populates. Bracket-indexing a new field in `_js_data()` throws `KeyError` against every fixture-based test the moment the field is added, even though `load_namespace()` itself always sets it. Confirmed 2026-07-22 adding `outcomeRate`/`qualityPlateau`/`cadencePullForward`/`skillOptFrictionGate` — all four needed `.get()` to pass the existing suite.
 
 **`docs/backlog/`:** scoped, unshipped feature/fix write-ups produced by data-model audits or similar review passes — each entry has implementation breadcrumbs and an effort estimate so a future session can pick one up without re-deriving context. Not auto-discovered by any script; linked from reality.md's "Skill enhancement backlog" section when added.

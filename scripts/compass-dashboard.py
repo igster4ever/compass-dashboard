@@ -497,7 +497,10 @@ def load_namespace(ns_dir):
     goal_by_month = _goal_by_month(state)
 
     all_learnings    = sorted(learnings, key=lambda x: -x.get("weight", 1))
-    active_learnings = [l for l in all_learnings if not l.get("superseded_by")]
+    active_learnings = [
+        l for l in all_learnings
+        if not l.get("superseded_by") and l.get("status") not in ("archived", "superseded")
+    ]
     superseded_count = len(all_learnings) - len(active_learnings)
 
     retrieval_stale_texts = _retrieval_stale_texts(active_learnings)
@@ -527,12 +530,43 @@ def load_namespace(ns_dir):
     repo_path          = state.get("repo_path", "")
     code_review_due    = bool(repo_path) and state.get("sessions_since_review", 0) >= review_interval
 
+    # P47 — Strategic Assumption Audit due chip; mirrors compass/_monolith.py's
+    # _check_assumption_audit_due() + _get_assumption_audit_candidates()
+    assumption_audit_interval = config.get("assumption_audit_interval_sessions", 10)
+    assumption_audit_due      = state.get("sessions_since_assumption_audit", 0) >= assumption_audit_interval
+    assumption_audit_candidates = []
+    if assumption_audit_due:
+        _now = _now_utc()
+        for l in learnings:
+            if l.get("learning_type") != "hypothesis":
+                continue
+            if l.get("validation_result"):
+                continue
+            if l.get("status") in ("superseded", "archived"):
+                continue
+            _weight = l.get("weight", 1)
+            if _weight < 2:
+                continue
+            _dt = _parse_iso(l.get("date"))
+            if _dt is None:
+                continue
+            _age_days = (_now - _dt).days
+            if _age_days <= 30:
+                continue
+            assumption_audit_candidates.append({
+                "text": l.get("text", ""), "weight": _weight,
+                "confidence": l.get("confidence", "medium"), "age_days": _age_days,
+                "tags": l.get("tags", []),
+            })
+        assumption_audit_candidates.sort(key=lambda c: (-c["weight"], -c["age_days"]))
+
     intent_version     = state.get("intent_versions", 1)
     stale_bullet_count = _stale_bullet_count(reality, state)
     corpus_health      = _corpus_health(active_learnings, superseded_count)
 
     exploration_ratio    = _compute_exploration_ratio(state)
     last_reality_score   = state.get("last_reality_score")
+    outcome_rate         = state.get("outcome_rate")
     goal_type_by_session = _goal_type_by_session(state)
     # Carry-forward trend + quality distribution: all history files (uncapped) — sorted chronologically
     carry_forward_trend = []
@@ -581,6 +615,16 @@ def load_namespace(ns_dir):
     skill_feedback           = _read_jsonl(ns_dir / "skill_feedback.jsonl")
     sessions_since_skill_opt = state.get("sessions_since_skill_opt", 0)
     skill_opt_due            = sessions_since_skill_opt >= 10
+
+    # P61c: friction-count gate — mirrors compass/skillopt.py's
+    # _check_skill_opt_friction_gate(). Advisory only; never suppresses skill_opt_due.
+    _friction_threshold  = int(config.get("skill_opt_friction_threshold", 3))
+    _friction_open_count = sum(1 for e in skill_feedback if e.get("status", "open") == "open")
+    skill_opt_friction_gate = {
+        "open_feedback_count": _friction_open_count,
+        "threshold":           _friction_threshold,
+        "sufficient_signal":   _friction_open_count >= _friction_threshold,
+    }
     quality_history          = state.get("quality_history", [])
     holdout_session_ids      = state.get("holdout_session_ids", [])
     skillopt_rounds          = state.get("skillopt_rounds", [])
@@ -588,6 +632,45 @@ def load_namespace(ns_dir):
     holdout_score_map        = {e["session_id"]: e["score"] for e in quality_history}
     holdout_scores           = [holdout_score_map[s] for s in holdout_session_ids if s in holdout_score_map]
     holdout_mean             = round(sum(holdout_scores) / len(holdout_scores), 3) if holdout_scores else None
+
+    # P61b: quality-plateau signal + cadence pull-forward advisory — mirrors
+    # compass/state.py's _get_quality_plateau_signal() (window=3, ±0.03 threshold)
+    # and _monolith.py's cadence_pull_forward gating (~line 1200-1215). Advisory
+    # only — never mutates sessions_since_review/sessions_since_skill_opt.
+    _QP_WINDOW = 3
+    if len(quality_history) < _QP_WINDOW:
+        quality_plateau = {"plateaued": False, "insufficient_sample": True, "sessions_checked": len(quality_history)}
+    else:
+        _qp_recent = quality_history[-_QP_WINDOW:]
+        _qp_scores = [e.get("score", 0) for e in _qp_recent]
+        _qp_delta  = _qp_scores[-1] - _qp_scores[0]
+        if _qp_delta < -0.03:
+            _qp_trend = "declining"
+        elif _qp_delta <= 0.03:
+            _qp_trend = "flat"
+        else:
+            _qp_trend = "improving"
+        quality_plateau = {
+            "plateaued":           _qp_trend in ("flat", "declining"),
+            "insufficient_sample": False,
+            "sessions_checked":    _QP_WINDOW,
+            "trend":               _qp_trend,
+            "delta":               round(_qp_delta, 3),
+        }
+
+    cadence_pull_forward = {"review": False, "skill_opt": False}
+    if quality_plateau["plateaued"]:
+        if (
+            bool(repo_path)
+            and not code_review_due
+            and state.get("sessions_since_review", 0) >= max(review_interval - 2, 1)
+        ):
+            cadence_pull_forward["review"] = True
+        if (
+            not skill_opt_due
+            and sessions_since_skill_opt >= max(10 - 2, 1)
+        ):
+            cadence_pull_forward["skill_opt"] = True
 
     # Session artefacts (P41) — resolve abs_file so JS can open/preview via file://
     artefacts = []
@@ -666,6 +749,7 @@ def load_namespace(ns_dir):
         "external_signals":          external_signals,
         "exploration_ratio":         exploration_ratio,
         "last_reality_score":        last_reality_score,
+        "outcome_rate":              outcome_rate,
         "goal_type_by_session":      goal_type_by_session,
         "carry_forward_trend":       carry_forward_trend,
         "quality_dist":              quality_dist,
@@ -682,6 +766,11 @@ def load_namespace(ns_dir):
         "skillopt_holdout_mean":      holdout_mean,
         "skillopt_rounds_completed":  len(skillopt_rounds),
         "skillopt_rwi":               skillopt_rwi,
+        "quality_plateau":            quality_plateau,
+        "cadence_pull_forward":       cadence_pull_forward,
+        "skill_opt_friction_gate":    skill_opt_friction_gate,
+        "assumption_audit_due":         assumption_audit_due,
+        "assumption_audit_candidates": assumption_audit_candidates,
     }
 
 
@@ -766,6 +855,8 @@ def _card_html(n, i, community_published=None):
     dream_html     = '<span class="dream-chip">🌙 dream due</span>' if n["dream_due"] else ""
     research_html  = '<span class="cadence-chip research">🔬 research due</span>' if n["research_due"] else ""
     review_html    = '<span class="cadence-chip review">🔍 review due</span>' if n["code_review_due"] else ""
+    assumption_html = ('<span class="cadence-chip assumption">🧪 assumption audit due</span>'
+                        if n.get("assumption_audit_due") else "")
 
     completeness_html = ""
     rcs = n["reality_completeness_score"]
@@ -780,6 +871,14 @@ def _card_html(n, i, community_published=None):
                 delta_col  = "green" if delta > 0 else "red"
                 delta_html = f' <span style="font-size:.7rem;color:var(--{delta_col})">{delta_sign}{delta:.0f}</span>'
         completeness_html = f'<span class="rate-pill {rc_cls}" title="Reality completeness">{rcs:.0f}% done{delta_html}</span>'
+
+    outcome_html = ""
+    orate = n.get("outcome_rate")
+    if orate is not None:
+        oc_cls = "high" if orate >= 0.5 else "mid" if orate >= 0.3 else "low"
+        outcome_html = (f'<span class="rate-pill {oc_cls}" '
+                         f'title="Outcome rate — completed goals linked to reality changes">'
+                         f'{orate * 100:.0f}% linked</span>')
 
     # E14 — Exploration ratio badge
     explore_html = ""
@@ -818,10 +917,12 @@ def _card_html(n, i, community_published=None):
         <span>{len(n["learnings"])} learnings</span>
         {rate_html}
         {completeness_html}
+        {outcome_html}
         {deferred_html}
         {dream_html}
         {research_html}
         {review_html}
+        {assumption_html}
         {explore_html}
         {watching_html}
         {community_html}
@@ -1145,6 +1246,7 @@ def _js_data(namespaces):
             "externalSignals":         n["external_signals"],
             "explorationRatio":        n["exploration_ratio"],
             "lastRealityScore":        n["last_reality_score"],
+            "outcomeRate":             n.get("outcome_rate"),
             "goalTypeBySession":       n["goal_type_by_session"],
             "carryForwardTrend":       n["carry_forward_trend"],
             "qualityDist":             n["quality_dist"],
@@ -1160,6 +1262,11 @@ def _js_data(namespaces):
             "skilloptHoldoutMean":     n["skillopt_holdout_mean"],
             "skilloptRoundsCompleted": n["skillopt_rounds_completed"],
             "skilloptRwi":             n["skillopt_rwi"],
+            "qualityPlateau":          n.get("quality_plateau"),
+            "cadencePullForward":      n.get("cadence_pull_forward"),
+            "skillOptFrictionGate":    n.get("skill_opt_friction_gate"),
+            "assumptionAuditDue":        n.get("assumption_audit_due", False),
+            "assumptionAuditCandidates": n.get("assumption_audit_candidates", []),
             "mindmap":                 _mindmap_data(n),
         })
     _add_mindmap_bridges(data)  # E25e: cross-namespace tag-cluster bridges — needs the
