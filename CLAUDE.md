@@ -198,33 +198,6 @@ count as user-controlled.
 
 ## Module map
 
-**`scripts/compass-dashboard.py`** (~1,098 lines — Python only):
-
-| Lines (approx) | What lives there |
-|----------------|-----------------|
-| 1–95 | Python helpers: file reading, time formatting, history parsing |
-| 96–302 | `_corpus_health()`, `_stale_bullet_count()`, `_goal_stats()`, `_goal_by_month()` |
-| 303–342 | `_compute_exploration_ratio()`, `_goal_type_by_session()` |
-| 343–594 | `load_namespace()`, `discover_namespaces()`, `_card_html()` |
-| 595–660 | `_extract_blocking_edges()`, `_js_blocking_edges()` (E24a cross-namespace blocking edges) |
-| 661–755 | `_js_data()`, `_js_community()`, `generate()` (reads template.html), `main()`, `__main__` |
-
-**`scripts/template.html`** (~3,961 lines — HTML/CSS/JS):
-
-| Lines (approx) | What lives there |
-|----------------|-----------------|
-| 1–81 | HTML structure + `[[PLACEHOLDER]]` markers |
-| 82–746 | CSS `<style>` block |
-| 747–1186 | JS: constants, `esc()`, card rendering, detail panel, tab switching |
-| 1187–1242 | JS: `deriveTasks()`, `renderTasks()` |
-| 1243–1636 | JS: detail panel sub-tabs — `renderState()` (slim dispatcher) + 10 `renderStateSection_*` helpers, learnings, decisions, history, `renderExternalSignals()` |
-| 1637–1831 | JS: `switchView()`, priority scoring helpers, `renderPriorities()` |
-| 1832–2282 | JS: search / command palette |
-| 2283–2630 | JS: `renderHeatmap()`, `renderSessionHeatmapPanel()`, `renderGoalHeatmapPanel()` |
-| 2631–2762 | JS: `renderGoalTypesPanel()` (E18), `renderPlanningPanel()` (E15) |
-| 2763–2953 | JS: `renderVelocityPanel()`, `renderLearningTimeline()`, `renderScorecard()` |
-| 2954–end | JS: `renderDAG()`, force simulation, DAG tooltip |
-
 **Tests (`tests/`):**
 
 | File | What it covers |
