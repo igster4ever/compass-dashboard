@@ -114,6 +114,9 @@
     .cadence-chip.review   { background: rgba(52,211,153,.12); color: #34d399; }
     .cadence-chip.watching { background: rgba(240,171,252,.12); color: #f0abfc; }
     .cadence-chip.assumption { background: rgba(251,146,60,.12); color: #fb923c; }
+    .cadence-chip.claude     { background: rgba(244,114,182,.12); color: #f472b6; }
+    .cadence-chip.dreamdefer { background: rgba(139,93,199,.15); color: #b48ef0; }
+    .cadence-chip.dreamdefer.escalated { background: var(--red-bg); color: var(--red); font-weight: 600; }
     .community-chip {
       font-size: .62rem; padding: .15em .5em; border-radius: 999px;
       background: rgba(99,102,241,.12); color: #818cf8; font-weight: 600;
@@ -518,6 +521,7 @@
     .sec-decisions { background: var(--amber-bg); color: var(--amber); }
     .sec-history   { background: var(--surface2); color: var(--muted); }
     .snippet { color: var(--muted); line-height: 1.5; flex: 1; }
+    .search-provenance { flex-shrink: 0; font-size: .8rem; }
     mark { background: var(--amber-bg); color: var(--amber); border-radius: 2px; padding: 0 .1em; font-style: normal; }
     .search-more { font-size: .72rem; color: var(--subtle); font-style: italic; padding: .2rem 1rem; }
     .search-empty { padding: 2rem; text-align: center; color: var(--subtle); font-size: .85rem; }
@@ -1322,6 +1326,17 @@ function renderLearnings(ns) {
       const icon  = c.decision === 'link' ? '\u2194' : c.decision === 'merge' ? '\u21d2' : '\u2260';
       linkHtml += `<div class="link-ref">${icon} ${esc(c.decision)} \u2014 <code>${esc(other)}</code></div>`;
     }
+    // P40-D Phase 5 \u2014 community federation provenance (distinct mechanism from the
+    // backRef/conflicts reconciliation links above: keyed by learning_id against the
+    // community feed/adoptions, not by text against back_references.jsonl)
+    if (l.communityShared) {
+      const adoptedSuffix = l.communityAdoptedByCount > 0
+        ? ` \u00b7 adopted by ${l.communityAdoptedByCount}` : '';
+      linkHtml += `<div class="link-ref">\ud83d\udce1 shared${adoptedSuffix}</div>`;
+    }
+    if (l.adopted_from && l.adopted_from.source_loop_id) {
+      linkHtml += `<div class="link-ref">\u2b07 adopted from <code>${esc(l.adopted_from.source_loop_id)}</code></div>`;
+    }
     return `
       <tr data-idx="${lIdx}" data-ltype="${type}" data-stale="${l.retrievalStale ? 'true' : 'false'}"${lidTitle}>
         <td><span class="weight-dot"><span class="wdot ${wCls}"></span><span class="wnum">${w}</span></span></td>
@@ -1881,11 +1896,18 @@ function buildSearchIndex() {
     if (ns.codeContext)
       idx.push({nsIdx, section:'state', field:'context',
                 text: ns.codeContext, displayText: ns.codeContext.slice(0, 200), bonus: 2});
-    (ns.learnings || []).forEach((l, i) =>
+    (ns.learnings || []).forEach((l, i) => {
+      // P40-D Phase 5 — fold community provenance into the searchable text so
+      // "shared"/"adopted"/a source namespace name surfaces the learning
+      const provenanceTokens = [];
+      if (l.communityShared) provenanceTokens.push('shared', 'community');
+      if (l.adopted_from && l.adopted_from.source_loop_id) {
+        provenanceTokens.push('adopted', 'community', l.adopted_from.source_loop_id);
+      }
       idx.push({nsIdx, section:'learnings', subIdx: i,
-                text: l.text || '', displayText: l.text || '',
+                text: [l.text || '', ...provenanceTokens].join(' '), displayText: l.text || '',
                 bonus: Math.min((l.weight || 1) * 2, 8)})
-    );
+    });
     [...(ns.decisions || [])].reverse().forEach((d, i) => {
       const combined = [d.decision||d.text||'', d.rationale||'', d.alternatives||''].join(' ');
       idx.push({nsIdx, section:'decisions', subIdx: i,
@@ -2017,8 +2039,16 @@ function doSearch(query, filter) {
         Search.flatResults.push(item);
         const subI = item.subIdx !== undefined ? item.subIdx : -1;
         const fld  = item.field || '';
+        // P40-D Phase 5 — provenance badge for learnings shared to or adopted from community
+        let provenanceBadge = '';
+        if (sec === 'learnings' && subI >= 0) {
+          const l = (ns.learnings || [])[subI];
+          if (l && l.communityShared) provenanceBadge = '<span class="search-provenance" title="Shared to community">📡</span>';
+          else if (l && l.adopted_from && l.adopted_from.source_loop_id) provenanceBadge = '<span class="search-provenance" title="Adopted from ' + esc(l.adopted_from.source_loop_id) + '">⬇</span>';
+        }
         html += `<div class="search-result-item" onclick="handleResultClick(${item.nsIdx},'${sec}',${subI},'${fld}')">` +
                 `<span class="search-result-section sec-${SECT_CLS[sec]}">${SECT_LABEL[sec]}</span>` +
+                provenanceBadge +
                 makeSnippet(item.displayText || item.text, query) + '</div>';
       });
       if (items.length > 6)
@@ -2107,15 +2137,30 @@ function renderDecisionsView() {
     (ns.decisions || []).map(d => ({ ...d, namespace: ns.namespace }))
   ).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
+  // P50 — complexity clustering signals, aggregated across namespaces for the cluster filter
+  const clusterSignals = NS.flatMap(ns =>
+    (ns.complexityClusteringSignals || []).map(s => ({ ...s, namespace: ns.namespace }))
+  );
+
   let sortKey = 'date';
   let sortDir = -1;
   let filterNs = '';
+  let filterCluster = '';
   let expandedIdx = null;
 
   function render() {
-    const filtered = filterNs
+    let filtered = filterNs
       ? allDecisions.filter(d => d.namespace === filterNs)
       : allDecisions;
+
+    if (filterCluster !== '') {
+      const signal = clusterSignals[Number(filterCluster)];
+      filtered = filtered.filter(d =>
+        d.namespace === signal.namespace &&
+        (d.tags || []).includes(signal.tag) &&
+        ['complex', 'chaotic'].includes(d.complexity_domain)
+      );
+    }
 
     const sorted = filtered.slice().sort((a, b) => {
       const av = (a[sortKey] || '').toLowerCase();
@@ -2132,6 +2177,12 @@ function renderDecisionsView() {
 
     const nsOptions = [...new Set(allDecisions.map(d => d.namespace))].sort();
 
+    const clusterFilterHtml = clusterSignals.length === 0 ? '' : `
+        <select id="dec-cluster-filter" title="P50 — tag domains where ≥2 complex/chaotic decisions cluster" style="padding:.25rem .5rem;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:.8rem">
+          <option value="">All complexity clusters</option>
+          ${clusterSignals.map((s, idx) => `<option value="${idx}" ${filterCluster === String(idx) ? 'selected' : ''}>${esc(s.namespace)}: ${esc(s.tag)} (${s.count})</option>`).join('')}
+        </select>`;
+
     const header = `
       <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem;flex-wrap:wrap">
         <h2 style="margin:0;font-size:1.1rem">All Decisions</h2>
@@ -2140,6 +2191,7 @@ function renderDecisionsView() {
           <option value="">All namespaces</option>
           ${nsOptions.map(ns => `<option value="${esc(ns)}" ${filterNs === ns ? 'selected' : ''}>${esc(ns)}</option>`).join('')}
         </select>
+        ${clusterFilterHtml}
       </div>`;
 
     const thStyle = 'padding:.5rem .75rem;text-align:left;font-size:.75rem;color:var(--muted);font-weight:600;cursor:pointer;white-space:nowrap;border-bottom:1px solid var(--border)';
@@ -2149,9 +2201,13 @@ function renderDecisionsView() {
       const bg = nsBadgeColour[d.namespace] || '#888';
       const dateStr = d.date ? d.date.slice(0, 10) : '—';
       const isExpanded = expandedIdx === i;
+      const domainColour = { complex: 'var(--amber)', chaotic: 'var(--red)' }[d.complexity_domain] || '';
+      const domainHtml = domainColour
+        ? `<span style="background:${domainColour}22;color:${domainColour};padding:.1rem .4rem;border-radius:3px;font-size:.68rem;white-space:nowrap">${esc(d.complexity_domain)}</span>`
+        : '';
       const expandRow = isExpanded ? `
         <tr id="dec-expand-${i}" style="background:var(--card-bg)">
-          <td colspan="4" style="padding:.5rem 1rem .75rem 1rem;font-size:.82rem;line-height:1.5;border-bottom:1px solid var(--border)">
+          <td colspan="5" style="padding:.5rem 1rem .75rem 1rem;font-size:.82rem;line-height:1.5;border-bottom:1px solid var(--border)">
             ${d.rationale ? `<div style="margin-bottom:.4rem"><strong>Rationale:</strong> ${esc(d.rationale)}</div>` : ''}
             ${d.alternatives ? `<div style="color:var(--muted)"><strong>Alternatives:</strong> ${esc(d.alternatives)}</div>` : ''}
           </td>
@@ -2163,6 +2219,7 @@ function renderDecisionsView() {
             <span style="background:${bg};color:#fff;padding:.15rem .4rem;border-radius:3px;font-size:.7rem;white-space:nowrap">${esc(d.namespace)}</span>
           </td>
           <td style="padding:.45rem .75rem;font-size:.82rem;max-width:400px">${esc(d.decision || '')}</td>
+          <td style="padding:.45rem .75rem;text-align:center">${domainHtml}</td>
           <td style="padding:.45rem .75rem;font-size:.75rem;color:var(--muted);text-align:center">${d.rationale || d.alternatives ? (isExpanded ? '▲' : '▼') : ''}</td>
         </tr>${expandRow}`;
     }).join('');
@@ -2174,6 +2231,7 @@ function renderDecisionsView() {
             <th id="dec-th-date"      style="${thStyle}" onclick="decSort('date')">Date${colDir('date')}</th>
             <th id="dec-th-namespace" style="${thStyle}" onclick="decSort('namespace')">Namespace${colDir('namespace')}</th>
             <th id="dec-th-decision"  style="${thStyle}" onclick="decSort('decision')">Decision${colDir('decision')}</th>
+            <th style="${thStyle};cursor:default;text-align:center">Complexity</th>
             <th style="${thStyle}"></th>
           </tr></thead>
           <tbody>${rows}</tbody>
@@ -2186,6 +2244,15 @@ function renderDecisionsView() {
       expandedIdx = null;
       render();
     });
+
+    const clusterFilterEl = document.getElementById('dec-cluster-filter');
+    if (clusterFilterEl) {
+      clusterFilterEl.addEventListener('change', e => {
+        filterCluster = e.target.value;
+        expandedIdx = null;
+        render();
+      });
+    }
   }
 
   window.decSort = function(key) {
@@ -2985,6 +3052,10 @@ function renderSwimlane() {
             <text x="${x}" y="${svgH - 2}" font-size="9" fill="var(--muted)" text-anchor="middle">${esc(lbl)}</text>`;
   }).join('');
 
+  // P40-D Phase 5 — community provenance markers (published-to / adopted-into this namespace)
+  const feed      = COMMUNITY.feed      || [];
+  const adoptions = COMMUNITY.adoptions || [];
+
   const rows = nsList.map((ns, i) => {
     const y = PAD + i * (ROW_H + ROW_GAP) + ROW_H / 2;
     const colour = palette[i % palette.length];
@@ -3000,16 +3071,35 @@ function renderSwimlane() {
     const baseline = ns.sessionDates.length > 1
       ? `<line x1="${x0}" y1="${y}" x2="${x1}" y2="${y}" stroke="${colour}" stroke-width="1.5" opacity=".25"/>`
       : '';
+    const publishMarks = feed
+      .filter(f => f.source_loop_id === ns.namespace && f.published_at)
+      .map(f => {
+        const x = xPos(f.published_at.slice(0, 10));
+        const my = y - ROW_H / 2 + 3;
+        return `<rect x="${x - 3}" y="${my - 3}" width="6" height="6" transform="rotate(45 ${x} ${my})" fill="#818cf8">
+                  <title>${esc(ns.namespace)} — shared: ${esc((f.text || '').slice(0, 80))}</title>
+                </rect>`;
+      }).join('');
+    const adoptMarks = adoptions
+      .filter(a => a.namespace === ns.namespace && a.adopted_at)
+      .map(a => {
+        const x = xPos(a.adopted_at.slice(0, 10));
+        const my = y + ROW_H / 2 - 3;
+        return `<rect x="${x - 3}" y="${my - 3}" width="6" height="6" transform="rotate(45 ${x} ${my})" fill="#34d399">
+                  <title>${esc(ns.namespace)} — adopted from ${esc(a.source_loop_id || '?')}</title>
+                </rect>`;
+      }).join('');
     const label = `<text x="${LABEL_W - 6}" y="${y + 4}" font-size="11" fill="var(--text)" text-anchor="end"
                      style="cursor:pointer" onclick="switchView('overview');selectCard(${NS.indexOf(ns)},{force:true})"
                    >${esc(ns.namespace)}</text>`;
-    return baseline + dots + label;
+    return baseline + dots + publishMarks + adoptMarks + label;
   }).join('');
 
   container.innerHTML = `
     <div style="padding:1rem">
       <div style="font-size:.8rem;color:var(--muted);margin-bottom:.75rem">
         Session dates across all namespaces · ${allDates.length} total · dot = one session
+        ${(feed.length || adoptions.length) ? ' · <span style="color:#818cf8">◆</span> shared to community · <span style="color:#34d399">◆</span> adopted from community' : ''}
       </div>
       <div style="overflow-x:auto">
         <svg width="${svgW}" height="${svgH}" style="display:block">

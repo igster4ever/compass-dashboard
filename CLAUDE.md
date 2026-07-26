@@ -162,6 +162,8 @@ full set and must be used for any time-based visualisation.
 
 **Computed-at-read-time vs persisted fields:** before wiring a new compass field into `load_namespace()`, check whether `compass.py`/`_monolith.py` actually *persists* it in `state.json` or only *computes it fresh when compass's own `read()` runs*. Several fields have turned out to be the latter — `dream_due`, `exploration_ratio` (always stored as `None`), `quality_plateau`/`cadence_pull_forward`, and the `skill_opt` friction-gate annotation. For these, this script must replicate compass's own derivation logic rather than reading a value that "should" be there — grep the compass source for how the field is produced before assuming a plain `state.get("field")` will work.
 
+**The inverse trap — a backlog doc's implementation guess can also be wrong.** The 2026-07-18 data-model-gaps backlog assumed `dream_defer_count` would mirror `code_review_defer_count`/`research_defer_count` as a `*_deferrals.jsonl` file count. It doesn't — `compass/dream.py`'s `cmd_defer_dream` stores it as a plain `state.json` scalar (confirmed 2026-07-26). Backlog write-ups are a starting hypothesis, not a verified spec — grep the actual compass source before implementing an item, even when the doc says "confirm exact filename before wiring."
+
 ---
 
 ## Stateful view tabs

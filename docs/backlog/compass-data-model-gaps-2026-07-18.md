@@ -72,31 +72,32 @@ Each item below is independently shippable — pick off one at a time, doesn't n
   simple age/weight filter over the learnings list the dashboard already has in memory.
 - **Effort:** XS-S.
 
-## 6. CLAUDE.md review due chip
+## 6. CLAUDE.md review due chip — ✓ shipped 2026-07-26
 
 - **Source:** `state.json["sessions_since_claude_review"]`.
-- **Where to add:** same `repo_path`-gated pattern as `codeReviewDue` (dashboard already computes
-  this gate for the code-review chip — reuse the same conditional).
-- **Effort:** XS.
+- **Shipped as:** `claude_review_due` in `load_namespace()`, gated on `repo_path` configured AND
+  a `CLAUDE.md` actually existing there (falls back to `~/.claude/skills/<namespace>/CLAUDE.md`) —
+  mirrors compass's own `_check_claude_review_due()` (default interval 15 sessions). Rendered as
+  a pink `📋 CLAUDE.md review due` Overview card chip.
 
-## 7. `dream_defer_count`
+## 7. `dream_defer_count` — ✓ shipped 2026-07-26
 
-- **Source:** not a scalar in state.json — mirror the existing pattern for
-  `code_review_deferrals.jsonl` / `research_deferrals.jsonl` (`compass-dashboard.py` lines 572-573)
-  but for a `dream_deferrals.jsonl` file (confirm exact filename in `compass/_monolith.py`'s
-  `defer-dream` command before wiring).
-- **Where to add:** same red-at-≥2 escalation chip treatment as code-review/research defer counts
-  (E21, already shipped).
-- **Effort:** XS — copy-paste of an existing pattern.
+- **Correction:** this item's premise was wrong. `dream_defer_count` is **not** a
+  `*_deferrals.jsonl` file — confirmed against `compass/dream.py`'s `cmd_defer_dream`, it's a
+  plain `state.json` scalar, unlike `code_review_defer_count`/`research_defer_count` which
+  genuinely are jsonl-file counts. See the CLAUDE.md gotcha added this session ("The inverse
+  trap") for the general lesson.
+- **Shipped as:** `dream_defer_count = state.get("dream_defer_count", 0)`, rendered as a
+  `🌙 dream deferred Nx` chip with the same red-at-≥2 escalation styling as the deferred-opportunity
+  chip.
 
-## 8. `complexity_clustering_signals` (P50) — nice-to-have
+## 8. `complexity_clustering_signals` (P50) — ✓ shipped 2026-07-26
 
 - **Source:** computed from `decisions.jsonl` tag + `complexity_domain` fields (dashboard already
   loads decisions for the Decisions tab).
-- **What it enables:** group/filter complex-or-chaotic decisions by tag in the existing Decisions
-  tab (E22) — not a new tab, just a filter dimension.
-- **Effort:** M. Lowest priority in this list — nice-to-have, not a gap in core "what needs
-  attention" answering.
+- **Shipped as:** `_complexity_clustering_signals()` mirrors `_get_complexity_clustering_signals()`
+  verbatim. Wired into the Decisions tab as a "Complexity cluster" filter dropdown (aggregated
+  across namespaces) plus a new Complexity badge column (amber=complex, red=chaotic) on every row.
 
 ## 9. `skill_opt_status.friction_gate` (P61c)
 

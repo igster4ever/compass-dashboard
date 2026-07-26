@@ -319,6 +319,30 @@ def _top_tags(learnings, n=5):
     return [t for t, _ in sorted(counts.items(), key=lambda x: -x[1])[:n]]
 
 
+def _complexity_clustering_signals(decisions):
+    """P50: tag domains where ≥2 complex/chaotic decisions cluster.
+
+    Mirrors compass/_monolith.py's _get_complexity_clustering_signals() exactly —
+    same grouping-by-tag, same ≥2 threshold, same count-descending sort.
+    """
+    by_tag = {}
+    for dec in decisions:
+        if dec.get("complexity_domain") not in ("complex", "chaotic"):
+            continue
+        for tag in dec.get("tags", []):
+            by_tag.setdefault(tag, []).append(dec)
+    signals = []
+    for tag, decs in by_tag.items():
+        if len(decs) >= 2:
+            signals.append({
+                "tag":            tag,
+                "count":          len(decs),
+                "domains":        [d.get("complexity_domain") for d in decs],
+                "decision_texts": [d.get("decision", "")[:80] for d in decs],
+            })
+    return sorted(signals, key=lambda s: -s["count"])
+
+
 def _goal_stats(state):
     completions = state.get("goal_completions", {})
     if not completions:
@@ -529,6 +553,30 @@ def load_namespace(ns_dir):
     review_interval    = config.get("review_interval_sessions", 5)
     repo_path          = state.get("repo_path", "")
     code_review_due    = bool(repo_path) and state.get("sessions_since_review", 0) >= review_interval
+
+    # CLAUDE.md hygiene review due chip — mirrors compass/_monolith.py's
+    # _check_claude_review_due() (sessions-only gate, default interval 15), gated the same
+    # way the skill itself gates Step 2b.3b: repo_path configured AND a CLAUDE.md actually
+    # exists there (falls back to ~/.claude/skills/<namespace>/CLAUDE.md).
+    claude_review_interval = config.get("claude_review_interval_sessions", 15)
+    _claude_md_path = (Path(repo_path) / "CLAUDE.md") if repo_path else None
+    _claude_md_exists = bool(_claude_md_path and _claude_md_path.is_file())
+    if not _claude_md_exists:
+        _fallback_claude_md = Path.home() / ".claude" / "skills" / ns_dir.name / "CLAUDE.md"
+        _claude_md_exists = _fallback_claude_md.is_file()
+    claude_review_due = (
+        _claude_md_exists
+        and state.get("sessions_since_claude_review", 0) >= claude_review_interval
+    )
+
+    # dream_defer_count — a scalar in state.json (set by compass/dream.py's cmd_defer_dream),
+    # NOT a *_deferrals.jsonl file like code_review_defer_count/research_defer_count above.
+    dream_defer_count = state.get("dream_defer_count", 0)
+
+    # P50 — complexity clustering signals: tag domains where ≥2 complex/chaotic decisions
+    # cluster. Mirrors compass/_monolith.py's _get_complexity_clustering_signals(), but reads
+    # from the `decisions` list already loaded above rather than re-reading decisions.jsonl.
+    complexity_clustering_signals = _complexity_clustering_signals(decisions)
 
     # P47 — Strategic Assumption Audit due chip; mirrors compass/_monolith.py's
     # _check_assumption_audit_due() + _get_assumption_audit_candidates()
@@ -771,6 +819,9 @@ def load_namespace(ns_dir):
         "skill_opt_friction_gate":    skill_opt_friction_gate,
         "assumption_audit_due":         assumption_audit_due,
         "assumption_audit_candidates": assumption_audit_candidates,
+        "claude_review_due":          claude_review_due,
+        "dream_defer_count":          dream_defer_count,
+        "complexity_clustering_signals": complexity_clustering_signals,
     }
 
 
@@ -857,6 +908,14 @@ def _card_html(n, i, community_published=None):
     review_html    = '<span class="cadence-chip review">🔍 review due</span>' if n["code_review_due"] else ""
     assumption_html = ('<span class="cadence-chip assumption">🧪 assumption audit due</span>'
                         if n.get("assumption_audit_due") else "")
+    claude_review_html = ('<span class="cadence-chip claude">📋 CLAUDE.md review due</span>'
+                           if n.get("claude_review_due") else "")
+
+    dream_defer_html = ""
+    ddc = n.get("dream_defer_count", 0)
+    if ddc > 0:
+        ddc_cls = "escalated" if ddc >= 2 else ""
+        dream_defer_html = f'<span class="cadence-chip dreamdefer {ddc_cls}">🌙 dream deferred {ddc}x</span>'
 
     completeness_html = ""
     rcs = n["reality_completeness_score"]
@@ -923,6 +982,8 @@ def _card_html(n, i, community_published=None):
         {research_html}
         {review_html}
         {assumption_html}
+        {claude_review_html}
+        {dream_defer_html}
         {explore_html}
         {watching_html}
         {community_html}
@@ -1267,6 +1328,9 @@ def _js_data(namespaces):
             "skillOptFrictionGate":    n.get("skill_opt_friction_gate"),
             "assumptionAuditDue":        n.get("assumption_audit_due", False),
             "assumptionAuditCandidates": n.get("assumption_audit_candidates", []),
+            "claudeReviewDue":         n.get("claude_review_due", False),
+            "dreamDeferCount":         n.get("dream_defer_count", 0),
+            "complexityClusteringSignals": n.get("complexity_clustering_signals", []),
             "mindmap":                 _mindmap_data(n),
         })
     _add_mindmap_bridges(data)  # E25e: cross-namespace tag-cluster bridges — needs the
@@ -1300,6 +1364,29 @@ def generate(namespaces):
             ns_id = entry.get("source_loop_id", "")
             if ns_id:
                 community_published[ns_id] = community_published.get(ns_id, 0) + 1
+
+    # P40-D Phase 5 — per-learning community provenance (outbound share + adoption fan-out).
+    # Distinct from back_refs_by_text/conflicts_by_text (P2.1 reconciliation) already rendered
+    # in the Learnings tab — this is the community federation (P40) path, keyed by learning_id
+    # against feed.jsonl/adoptions.jsonl, not by learning text against back_references.jsonl.
+    adoption_counts_by_community_id: dict[str, int] = {}
+    for adoption in community.get("adoptions", []):
+        cid = adoption.get("community_id")
+        if cid:
+            adoption_counts_by_community_id[cid] = adoption_counts_by_community_id.get(cid, 0) + 1
+    published_ids_by_ns: dict[str, set] = {}
+    for entry in community.get("feed", []):
+        ns_id = entry.get("source_loop_id", "")
+        lid = entry.get("learning_id")
+        if ns_id and lid:
+            published_ids_by_ns.setdefault(ns_id, set()).add(lid)
+    for n in namespaces:
+        published_ids = published_ids_by_ns.get(n["namespace"], set())
+        for l in n["learnings"]:
+            lid = l.get("learning_id")
+            l["communityShared"] = bool(lid and lid in published_ids)
+            l["communityAdoptedByCount"] = adoption_counts_by_community_id.get(lid, 0) if lid else 0
+
     cards = "".join(_card_html(n, i, community_published) for i, n in enumerate(namespaces))
 
     html = (Path(__file__).parent / "template.html").read_text(encoding="utf-8")
