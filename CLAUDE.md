@@ -160,6 +160,8 @@ full set and must be used for any time-based visualisation.
 
 **Constants sync:** `_COMPLETION_MARKERS`, `_BACKLOG_HEADERS`, and `_NON_ACHIEVEMENT_HEADERS` in this script are local copies of the same constants in `scripts/compass/reality.py`. They cannot be imported (stdlib-only constraint). If reality.py's constants change, update this script's copies to match. (`_NON_ACHIEVEMENT_HEADERS` was dashboard-local-only until 2026-07-18, when the same fix was ported upstream to `reality.py` — both copies are now in sync, not diverging.)
 
+**Computed-at-read-time vs persisted fields:** before wiring a new compass field into `load_namespace()`, check whether `compass.py`/`_monolith.py` actually *persists* it in `state.json` or only *computes it fresh when compass's own `read()` runs*. Several fields have turned out to be the latter — `dream_due`, `exploration_ratio` (always stored as `None`), `quality_plateau`/`cadence_pull_forward`, and the `skill_opt` friction-gate annotation. For these, this script must replicate compass's own derivation logic rather than reading a value that "should" be there — grep the compass source for how the field is produced before assuming a plain `state.get("field")` will work.
+
 ---
 
 ## Stateful view tabs
@@ -209,5 +211,7 @@ count as user-controlled.
 Run: `python3 -m pytest tests/ -q` from the repo root.
 
 **New `_js_data()` fields must use `n.get("field")`, never `n["field"]`:** `test_generate.py` builds fixture NS dicts directly (not via `load_namespace()`), so a fixture won't have every key the real Python data layer populates. Bracket-indexing a new field in `_js_data()` throws `KeyError` against every fixture-based test the moment the field is added, even though `load_namespace()` itself always sets it. Confirmed 2026-07-22 adding `outcomeRate`/`qualityPlateau`/`cadencePullForward`/`skillOptFrictionGate` — all four needed `.get()` to pass the existing suite.
+
+**Testing rendered HTML: assert on content, not CSS class names.** A test asserting on a CSS class name (e.g. `"shared-badge"`) will pass even if that class is only ever declared in the `<style>` block and never actually applied to an element — the class name string appears in the generated HTML either way. Assert on the rendered element content instead (e.g. `"1 shared</span>"`), which only appears if the element actually renders.
 
 **`docs/backlog/`:** scoped, unshipped feature/fix write-ups produced by data-model audits or similar review passes — each entry has implementation breadcrumbs and an effort estimate so a future session can pick one up without re-deriving context. Not auto-discovered by any script; linked from reality.md's "Skill enhancement backlog" section when added.
