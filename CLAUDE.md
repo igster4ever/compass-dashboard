@@ -216,6 +216,40 @@ still collapse when `showSystem` roughly doubles node count.
 
 ---
 
+## Mind Map view (2026-07-27 — rotation + overlay detail panel)
+
+The radial layout (`mmLayout`/`mmDraw`) seeds every top-level branch starting at angle 0
+(12 o'clock) and lays siblings out clockwise. Branches that land near the bottom of the
+circle (SW/SE) get their radial labels rotated to near-vertical — readable only by tilting
+your head. `_mm.rotation` (degrees, in the `_mm` state object) is a global offset added to
+every node's angle in `rx()`/`ry()` and to the label's `rotate()` transform, so the whole
+compass can be spun until the awkward branch lands somewhere closer to horizontal (E/W).
+Wired to `⟲`/`⟳` toolbar buttons (`mmRotate(deg)`, ±30° per click) and reset by
+`mmResetView()` alongside pan/zoom. Unlike `_mm.pan`, rotation is **not** reset by
+`mmSelectNs()` (namespace switch) — it's a viewing preference, not per-namespace state.
+
+**`mm-detail` is an absolutely-positioned overlay on top of `mm-svg`, not a flex sibling.**
+It used to be a normal document-flow element above the SVG in a flex column; its content
+grows from a one-line tooltip (`min-height: 1.8rem`) to a scrollable 220px list the moment
+a group node (e.g. "Decisions (13)") is clicked. Because `mm-svg` was `flex: 1` in the same
+column, that growth shrank the SVG's own box on every click — a visible resize/jump — even
+though `mmShowNodeDetail()` never touches the SVG or its baked-in pan/zoom `transform`. Fixed
+by wrapping both in a `.mm-canvas-wrap` (`position: relative; flex: 1`) with `mm-detail`
+absolutely positioned inside it (`top/left/right: 0`, `z-index: 2`, `:empty { display: none }`)
+and `mm-svg` at a fixed `width/height: 100%`. The SVG's box is now constant regardless of
+detail-panel content — verified via `getBoundingClientRect()` before/during/after opening the
+list (564.6px high throughout). Trade-off: the panel now floats over the top rows of the
+graph when open, intercepting clicks there — acceptable since it already reads as a readout
+docked to the SVG, not a separate panel.
+
+**Don't forget the IIFE export list when adding a new inline-`onclick` handler here** — see
+the fourth trap above. `mmRotate` shipped once already forgetting this: clicking the button
+did nothing (no console error visible via screenshot, silently swallowed) until
+`javascript_tool` was used to call it directly and surface `mmRotate is not defined`. If a
+new Mind Map control silently no-ops, check `Object.assign(window, {...})` first.
+
+---
+
 ## Security
 
 Use `esc(str)` (already defined in the JS) for any user-controlled string going into

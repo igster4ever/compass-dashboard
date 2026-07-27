@@ -648,16 +648,27 @@
                  background: transparent; color: var(--text-muted); cursor: pointer; }
     .mm-ns-btn:hover { color: var(--text); border-color: var(--blue); }
     .mm-ns-btn.active { color: var(--blue); border-color: var(--blue); background: var(--blue-bg); font-weight: 600; }
-    .mm-detail { font-size: .75rem; color: var(--text-muted); padding: .4rem 1rem;
-                 min-height: 1.8rem; border-bottom: 1px solid var(--border); flex-shrink: 0;
+    /* mm-canvas-wrap hosts the SVG at a fixed size (flex:1 of the column) and floats
+       mm-detail on top of it as an absolutely-positioned overlay. This is deliberate:
+       mm-detail's content grows from a one-line tooltip to a scrollable 220px list when a
+       group node is clicked, and if it were a normal flex sibling that growth would shrink
+       the SVG's flex-basis, resizing/reflowing the SVG element out from under its own
+       transform (baked in from the last mmDraw() call) — the whole graph visibly jumps.
+       Overlaying it keeps the SVG's box constant regardless of detail-panel content. */
+    .mm-canvas-wrap { position: relative; flex: 1; min-height: 0; }
+    .mm-detail { position: absolute; top: 0; left: 0; right: 0; z-index: 2;
+                 font-size: .75rem; color: var(--text-muted); padding: .4rem 1rem;
+                 min-height: 1.8rem; border-bottom: 1px solid var(--border);
+                 background: var(--surface); box-shadow: 0 2px 6px rgba(0,0,0,.25);
                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mm-detail:empty { display: none; }
     .mm-detail.mm-detail-list { white-space: normal; max-height: 220px; overflow-y: auto; }
     .mm-detail.mm-detail-list ul { margin: .2rem 0 0; padding-left: 1.1rem; }
     .mm-detail.mm-detail-list li { line-height: 1.5; }
     .mm-list-title { font-weight: 600; color: var(--text); }
     .mm-list-more { color: var(--text-muted); font-style: italic; list-style: none; margin-left: -1.1rem; }
     .mm-list-bridge { color: var(--blue); font-size: .72rem; margin-top: .2rem; }
-    .mm-svg { flex: 1; width: 100%; cursor: grab; }
+    .mm-svg { display: block; width: 100%; height: 100%; cursor: grab; }
     .mm-link { fill: none; stroke-width: 1.2px; }
 
     /* ── Heatmap view ── */
@@ -2405,7 +2416,7 @@ const EDGE_META = {
 
 const _dag = { nodes: [], edges: [], nodeMap: new Map(), raf: null, tick: 0, maxTick: 280, svgW: 900, svgH: 530, rendered: false, drag: null, showSystem: false, focusedNs: null };
 
-const _mm = { rendered: false, nsIdx: 0, pan: { x: 0, y: 0, scale: 1 }, drag: { active: false, sx: 0, sy: 0 }, cx: 0, cy: 0, _onMouseMove: null, _onMouseUp: null, nodeIndex: [], bridgesOn: false };
+const _mm = { rendered: false, nsIdx: 0, pan: { x: 0, y: 0, scale: 1 }, drag: { active: false, sx: 0, sy: 0 }, cx: 0, cy: 0, _onMouseMove: null, _onMouseUp: null, nodeIndex: [], bridgesOn: false, rotation: 0 };
 
 function _addEdge(map, s, t, type, detail) {
   const key = type === 'dep' ? `${s}->${t}:dep` : `${Math.min(s,t)}-${Math.max(s,t)}:${type}`;
@@ -3620,10 +3631,14 @@ function renderMindMap() {
     <div class="mm-toolbar" style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
       <div class="mm-ns-picker">${pickerHtml}</div>
       ${bridgeBtnHtml}
-      <button class="mm-ns-btn" onclick="mmResetView()" title="Reset zoom and pan" style="margin-left:auto;flex-shrink:0">⊙ Reset</button>
+      <button class="mm-ns-btn" onclick="mmRotate(-30)" title="Rotate compass anticlockwise — use to bring long spines out of the SW/SE readout dead-zone" style="margin-left:auto;flex-shrink:0">⟲</button>
+      <button class="mm-ns-btn" onclick="mmRotate(30)" title="Rotate compass clockwise">⟳</button>
+      <button class="mm-ns-btn" onclick="mmResetView()" title="Reset zoom, pan and rotation" style="flex-shrink:0">⊙ Reset</button>
     </div>
-    <div id="mm-detail" class="mm-detail"></div>
-    <svg id="mm-svg" class="mm-svg"></svg>`;
+    <div class="mm-canvas-wrap">
+      <div id="mm-detail" class="mm-detail"></div>
+      <svg id="mm-svg" class="mm-svg"></svg>
+    </div>`;
 
   _mm.rendered = true;
   requestAnimationFrame(() => mmDraw(_mm.nsIdx));
@@ -3692,7 +3707,17 @@ function mmApplyTransform() {
 }
 function mmResetView() {
   _mm.pan = { x: 0, y: 0, scale: 1 };
-  mmApplyTransform();
+  _mm.rotation = 0;
+  mmDraw(_mm.nsIdx);
+}
+
+// Spin the whole radial layout so long spines can be steered out of the SW/SE
+// "neck-ache" zone (near-vertical text at the bottom of the circle) into the E/W
+// zone where radial labels stay close to horizontal. Redraws rather than just
+// re-transforming because label angles are baked into each <text> at draw time.
+function mmRotate(deg) {
+  _mm.rotation = (_mm.rotation + deg) % 360;
+  mmDraw(_mm.nsIdx);
 }
 function mmLinks(node) {
   const out = [];
@@ -3714,8 +3739,9 @@ function mmDraw(nsIdx) {
   const RADII = [0, maxR * 0.28, maxR * 0.55, maxR * 0.82, maxR];
   mmLayout(data, 0, 2 * Math.PI, 0);
 
-  function rx(node) { return (RADII[Math.min(node._depth, RADII.length - 1)] || 0) * Math.cos(node._angle - Math.PI / 2); }
-  function ry(node) { return (RADII[Math.min(node._depth, RADII.length - 1)] || 0) * Math.sin(node._angle - Math.PI / 2); }
+  const rotOffset = _mm.rotation * Math.PI / 180;
+  function rx(node) { return (RADII[Math.min(node._depth, RADII.length - 1)] || 0) * Math.cos(node._angle + rotOffset - Math.PI / 2); }
+  function ry(node) { return (RADII[Math.min(node._depth, RADII.length - 1)] || 0) * Math.sin(node._angle + rotOffset - Math.PI / 2); }
 
   const branchColours = { learnings: '#58a6ff', decisions: '#f0883e', goals: '#3fb950', reality: '#bc8cff', artefacts: '#e3b341' };
   function nodeColour(node) {
@@ -3780,7 +3806,7 @@ function mmDraw(nsIdx) {
       // Radiate the label along its own spoke rather than drawing it flat-horizontal —
       // siblings near the top/bottom of the circle sit at very similar (x,y) but distinct
       // angles, so flat text collides while radial text fans out and stays readable.
-      let angleDeg = node._depth === 0 ? 0 : (node._angle - Math.PI / 2) * 180 / Math.PI;
+      let angleDeg = node._depth === 0 ? 0 : (node._angle + rotOffset - Math.PI / 2) * 180 / Math.PI;
       angleDeg = ((angleDeg + 180) % 360 + 360) % 360 - 180; // normalize to [-180,180]
       let rotate = angleDeg, anchor = 'start', dx = r + 4;
       if (angleDeg > 90 || angleDeg < -90) {
@@ -4368,7 +4394,7 @@ Object.assign(window, {
   toggleSession, filterLearningType,
   openSearch, closeSearch, closeSearchIfBackdrop, handleSearch, handleSearchKey, handleResultClick,
   toggleDAGSystem, resetDAGLayout, clearDAGFocus,
-  mmNodeClick, mmResetView, mmSelectNs, mmToggleBridges,
+  mmNodeClick, mmResetView, mmSelectNs, mmToggleBridges, mmRotate,
 });
 })();
 </script>
