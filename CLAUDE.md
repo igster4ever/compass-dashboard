@@ -183,6 +183,39 @@ force a rebuild. Calling `innerHTML = ...` on re-activation resets all user adju
 
 ---
 
+## DAG force-simulation tuning (2026-07-27)
+
+`dagInitPositions()`/`dagSimStep()` (template.html, `_dag` state object) previously keyed
+spring lengths/strengths off an edge type `'depends'` that never occurred — the real type
+emitted by `computeAllEdges()`/`EDGE_META` is `'dep'`. This meant the topological layer
+seeding and tight dependency springs silently never fired; only the rare `'conflict'` type
+got that treatment, which is most of why the graph used to render as one undifferentiated
+mesh. Fixed by matching `'dep'` — check both places (init and sim) if retuning again.
+
+Node radius (`n.r`, 18-40px) and opacity (`n.fade`, 1/0.55/0.3) are now computed once per
+render in `dagComputeVisualEncoding()` — radius from a min-max-normalised importance score
+(weighted degree + capped session count + open bonus), fade from days-since-last-session.
+Anything that touches node geometry must read `n.r`, not a hardcoded `28`: the goal-rate dot
+offset, session-count text `y`, edge start/end trim in `dagUpdatePositions()`, and the drag
+clamp margins in both `dagSimStep()` and `startDagDrag()`'s `onMove` all derive from it now.
+
+**Trap — strengthening `'shared'` (tag-overlap) springs without scaling repulsion collapses
+the whole graph into one blob.** In this dataset most namespaces share a "gps" tag, so
+`'shared'` edges are near-complete — tightening that spring's `SPRING_K`/`SPRING_LEN` pulls
+essentially every node toward every other node. Verified by screenshot: an initial attempt
+(`shared` at `k=0.026, len=130`) collapsed ~12 nodes into a ~200x300px clump inside a
+900-1800px canvas. Because `REPEL` (repulsion) falls off as `1/d²` while an unclamped spring
+force grows linearly with distance, long-distance spring pairs dominate once the canvas is
+larger than the constant was tuned for. Fixed with three changes, all needed together:
+`shared` de-tuned to a milder `k=0.020, len=150`; spring force clamped to `±MAX_SPRING_F`
+(40) so no single edge can pull harder than repulsion can resist at any distance; and
+`REPEL` scaled by `(svgW*svgH)/(900*530)` so it keeps pace with the now-dynamic canvas size
+(`900+n*40` wide, `530+n*28` tall, clamped `[900,1800]x[530,1200]`). If you change canvas
+scaling again, re-verify visually — a graph that looks fine at the default node count can
+still collapse when `showSystem` roughly doubles node count.
+
+---
+
 ## Security
 
 Use `esc(str)` (already defined in the JS) for any user-controlled string going into

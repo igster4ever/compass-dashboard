@@ -2475,7 +2475,9 @@ function buildDAGLegend(edges) {
   const nodeRows = ''
     + '<div class="dag-legend-item"><svg width="16" height="16" style="flex-shrink:0"><circle cx="8" cy="8" r="7" fill="rgba(63,185,80,.18)" stroke="#3fb950" stroke-width="2"/></svg><span>Open session</span></div>'
     + '<div class="dag-legend-item"><svg width="16" height="16" style="flex-shrink:0"><circle cx="8" cy="8" r="7" fill="rgba(33,38,45,.9)" stroke="#484f58" stroke-width="1"/></svg><span>Closed</span></div>'
-    + '<div class="dag-legend-item"><svg width="16" height="16" style="flex-shrink:0"><circle cx="8" cy="8" r="5" fill="#3fb950"/></svg><span>Goal rate</span></div>';
+    + '<div class="dag-legend-item"><svg width="16" height="16" style="flex-shrink:0"><circle cx="8" cy="8" r="5" fill="#3fb950"/></svg><span>Goal rate</span></div>'
+    + '<div class="dag-legend-item"><svg width="20" height="16" style="flex-shrink:0"><circle cx="6" cy="8" r="3" fill="none" stroke="#8b949e" stroke-width="1.5"/><circle cx="15" cy="8" r="6.5" fill="none" stroke="#8b949e" stroke-width="1.5"/></svg><span>Size = connections + activity</span></div>'
+    + '<div class="dag-legend-item"><svg width="16" height="16" style="flex-shrink:0"><circle cx="8" cy="8" r="7" fill="rgba(33,38,45,.9)" stroke="#484f58" stroke-width="1" opacity=".35"/></svg><span>Faded = stale (no recent sessions)</span></div>';
   return '<div class="dag-legend-title">Relationships</div>'
     + (edgeRows || '<div style="font-size:.72rem;color:var(--subtle);font-style:italic">None detected</div>')
     + '<div style="margin-top:.6rem;border-top:1px solid var(--border);padding-top:.5rem">'
@@ -3941,7 +3943,11 @@ function renderDAG() {
   const allEdges = computeAllEdges(_dag.showSystem)
     .filter(e => nodeData.some(n => n.nsIdx === e.source) && nodeData.some(n => n.nsIdx === e.target));
   const nodeMap = new Map(nodeData.map((n, i) => [n.nsIdx, i]));
+  // Canvas grows with node count so dense graphs get breathing room instead of a fixed 900x530.
+  _dag.svgW = Math.max(900, Math.min(1800, 700 + nodeData.length * 40));
+  _dag.svgH = Math.max(530, Math.min(1200, 420 + nodeData.length * 28));
   const W = _dag.svgW, H = _dag.svgH;
+  dagComputeVisualEncoding(nodeData, allEdges, nodeMap);
   Object.assign(_dag, { nodes: nodeData, edges: allEdges, nodeMap, tick: 0 });
   dagInitPositions();
 
@@ -4017,19 +4023,22 @@ function renderDAG() {
     const isSys = SYSTEM_NS.has(n.ns.namespace.toLowerCase());
     const g = document.createElementNS(SVG, 'g');
     g.setAttribute('id', 'dag-node-' + ni); g.style.cursor = 'pointer';
+    g.setAttribute('opacity', String(n.fade != null ? n.fade : 1));
+    const r = n.r || 28;
 
     const circ = document.createElementNS(SVG, 'circle');
-    circ.setAttribute('r', '28');
+    circ.setAttribute('r', r.toFixed(1));
     circ.setAttribute('fill', n.ns.open ? 'rgba(63,185,80,.18)' : isSys ? 'rgba(22,27,34,.95)' : 'rgba(33,38,45,.9)');
     circ.setAttribute('stroke', n.ns.open ? '#3fb950' : isSys ? '#58a6ff' : '#484f58');
     circ.setAttribute('stroke-width', n.ns.open ? '2' : isSys ? '1.5' : '1');
     if (isSys) circ.setAttribute('stroke-dasharray', '3,2');
     g.appendChild(circ);
 
-    // Goal-rate dot (top-right)
+    // Goal-rate dot (top-right) — offset scales with node radius
     if (n.ns.goalRate !== null && n.ns.goalRate !== undefined) {
       const dot = document.createElementNS(SVG, 'circle');
-      dot.setAttribute('r', '5'); dot.setAttribute('cx', '20'); dot.setAttribute('cy', '-20');
+      const off = (r * 0.71).toFixed(1);
+      dot.setAttribute('r', '5'); dot.setAttribute('cx', off); dot.setAttribute('cy', '-' + off);
       dot.setAttribute('fill', n.ns.goalRate >= 80 ? '#3fb950' : n.ns.goalRate >= 50 ? '#d29922' : '#f85149');
       dot.setAttribute('stroke', '#0d1117'); dot.setAttribute('stroke-width', '1.5');
       g.appendChild(dot);
@@ -4056,7 +4065,7 @@ function renderDAG() {
     // Session count below circle
     if (n.ns.sessionCount > 0) {
       const sc = document.createElementNS(SVG, 'text');
-      sc.setAttribute('text-anchor', 'middle'); sc.setAttribute('y', '42');
+      sc.setAttribute('text-anchor', 'middle'); sc.setAttribute('y', (r + 14).toFixed(1));
       sc.setAttribute('font-size', '9'); sc.setAttribute('fill', '#484f58');
       sc.setAttribute('pointer-events', 'none');
       sc.textContent = n.ns.sessionCount + '×';
@@ -4164,7 +4173,31 @@ function clearDAGFocus() {
   });
 }
 
-// Seed positions using topological layers (depends/conflict edges determine depth).
+// Node radius encodes importance (weighted degree + session activity + open bonus),
+// min-max normalised across the current node set into an 18-40px range.
+// Fill opacity encodes staleness (days since the namespace's most recent session).
+function dagComputeVisualEncoding(nodeData, edges, nodeMap) {
+  const DEGREE_WEIGHT = { dep: 3, blocking: 3, conflict: 2, shared: 1, concurrent: 1 };
+  const degree = new Array(nodeData.length).fill(0);
+  edges.forEach(e => {
+    const ai = nodeMap.get(e.source), bi = nodeMap.get(e.target);
+    const w = DEGREE_WEIGHT[e.type] || 1;
+    if (ai != null) degree[ai] += w;
+    if (bi != null) degree[bi] += w;
+  });
+  const scores = nodeData.map((n, i) => degree[i] + Math.min(n.ns.sessionCount || 0, 20) + (n.ns.open ? 15 : 0));
+  const minS = Math.min(...scores), maxS = Math.max(...scores), range = maxS - minS || 1;
+  const now = Date.now();
+  nodeData.forEach((n, i) => {
+    n.r = scores.length > 1 ? 18 + (scores[i] - minS) / range * 22 : 28;
+    const dates = n.ns.sessionDates || [];
+    if (!dates.length) { n.fade = 0.3; return; }
+    const staleDays = (now - Math.max(...dates.map(d => new Date(d).getTime()))) / 86400000;
+    n.fade = staleDays <= 30 ? 1 : staleDays <= 90 ? 0.55 : 0.3;
+  });
+}
+
+// Seed positions using topological layers (dep/conflict edges determine depth).
 // All nodes with no incoming directed edges become roots (top); leaves sink to bottom.
 // Nodes sharing a layer are spread evenly across the full canvas width.
 function dagInitPositions() {
@@ -4173,7 +4206,7 @@ function dagInitPositions() {
   const inDeg = new Array(N).fill(0);
   const adj   = Array.from({length: N}, () => []);
   edges.forEach(e => {
-    if (e.type !== 'depends' && e.type !== 'conflict') return;
+    if (e.type !== 'dep' && e.type !== 'conflict') return;
     const ai = nodeMap.get(e.source), bi = nodeMap.get(e.target);
     if (ai == null || bi == null) return;
     inDeg[bi]++; adj[ai].push(bi);
@@ -4189,25 +4222,43 @@ function dagInitPositions() {
     });
   }
   const maxLayer = Math.max(...layer, 0);
-  const layerCount = new Array(maxLayer + 1).fill(0);
-  layer.forEach(l => layerCount[l]++);
-  const layerIdx = new Array(maxLayer + 1).fill(0);
+  // Group node indices by layer, then sort within a layer by dominant tag so
+  // tag-related namespaces seed in adjacent slots — the shared-tag springs in
+  // dagSimStep then only need a small pull to cluster them, instead of dragging
+  // them across the whole canvas from a random starting slot.
+  const byLayer = Array.from({length: maxLayer + 1}, () => []);
+  nodes.forEach((n, i) => byLayer[layer[i]].push(i));
+  byLayer.forEach(group => group.sort((a, b) => {
+    const ta = (nodes[a].ns.topTags || [])[0] || '', tb = (nodes[b].ns.topTags || [])[0] || '';
+    return ta.localeCompare(tb);
+  }));
   const PAD = 72;
-  nodes.forEach((n, i) => {
-    const l = layer[i], cnt = layerCount[l], idx = layerIdx[l]++;
-    n.x = PAD + (W - PAD*2) * (idx + 0.5) / cnt + (Math.random() - 0.5) * 18;
-    n.y = PAD + (H - PAD*2) * (maxLayer > 0 ? l / maxLayer : 0.5) + (Math.random() - 0.5) * 18;
-    n.vx = 0; n.vy = 0;
+  byLayer.forEach((group, l) => {
+    const cnt = group.length;
+    group.forEach((i, idx) => {
+      const n = nodes[i];
+      n.x = PAD + (W - PAD*2) * (idx + 0.5) / cnt + (Math.random() - 0.5) * 18;
+      n.y = PAD + (H - PAD*2) * (maxLayer > 0 ? l / maxLayer : 0.5) + (Math.random() - 0.5) * 18;
+      n.vx = 0; n.vy = 0;
+    });
   });
 }
 
 function dagSimStep() {
   const { nodes, edges, nodeMap, svgW, svgH } = _dag;
   const cx = svgW/2, cy = svgH/2;
-  // Edge-type-aware spring lengths: tighter for hard dependencies, looser for concurrent/shared.
-  const SPRING_LEN = { depends: 110, shared: 165, conflict: 90, concurrent: 195 };
-  const SPRING_K   = { depends: 0.03, shared: 0.018, conflict: 0.038, concurrent: 0.012 };
-  const REPEL = 14000, DAMP = 0.80, CENT = 0.002;
+  // Edge-type-aware spring lengths: tighter for hard dependencies, looser for concurrent.
+  // 'shared' (tag-overlap) is nudged tighter than the original tuning so tag-related
+  // namespaces drift closer, but only slightly — this graph's namespaces mostly share
+  // a common tag pool, so over-tightening 'shared' collapses everything into one blob
+  // instead of producing readable clusters.
+  const SPRING_LEN = { dep: 110, shared: 150, conflict: 90, concurrent: 195 };
+  const SPRING_K   = { dep: 0.03, shared: 0.020, conflict: 0.038, concurrent: 0.012 };
+  // Repulsion scales with canvas area — a canvas 4x the baseline size needs ~4x the
+  // repulsion to fill it; otherwise the (linearly-growing-with-distance) spring forces
+  // dominate over long distances and pull every node into a single tight clump.
+  const REPEL = 14000 * (svgW * svgH) / (900 * 530), DAMP = 0.80, CENT = 0.002;
+  const MAX_SPRING_F = 40;
 
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i+1; j < nodes.length; j++) {
@@ -4225,7 +4276,8 @@ function dagSimStep() {
     const slen = SPRING_LEN[e.type] || 150;
     const sk   = SPRING_K[e.type]   || 0.02;
     const dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx*dx + dy*dy) || 1;
-    const f = sk * (d - slen), fx = dx/d*f, fy = dy/d*f;
+    const f = Math.max(-MAX_SPRING_F, Math.min(MAX_SPRING_F, sk * (d - slen)));
+    const fx = dx/d*f, fy = dy/d*f;
     if (!a.fixed) { a.vx += fx; a.vy += fy; }
     if (!b.fixed) { b.vx -= fx; b.vy -= fy; }
   });
@@ -4234,8 +4286,9 @@ function dagSimStep() {
     if (!n.fixed) { n.vx += (cx - n.x) * CENT; n.vy += (cy - n.y) * CENT; }
     n.vx *= DAMP; n.vy *= DAMP;
     if (!n.fixed) {
-      n.x = Math.max(40, Math.min(svgW - 40, n.x + n.vx));
-      n.y = Math.max(35, Math.min(svgH - 35, n.y + n.vy));
+      const mx = (n.r || 28) + 12, my = (n.r || 28) + 7;
+      n.x = Math.max(mx, Math.min(svgW - mx, n.x + n.vx));
+      n.y = Math.max(my, Math.min(svgH - my, n.y + n.vy));
     }
     ke += n.vx*n.vx + n.vy*n.vy;
   });
@@ -4252,7 +4305,7 @@ function dagUpdatePositions() {
     if (ai == null || bi == null) return;
     const a = nodes[ai], b = nodes[bi];
     const dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx*dx + dy*dy) || 1;
-    const startR = 30, endR = EDGE_META[e.type]?.arrow ? 32 : 0;
+    const startR = (a.r || 28) + 2, endR = EDGE_META[e.type]?.arrow ? (b.r || 28) + 4 : 0;
     const x1 = a.x + dx/d*startR, y1 = a.y + dy/d*startR;
     const x2 = b.x - dx/d*endR,   y2 = b.y - dy/d*endR;
     const ln  = document.getElementById('dag-edge-' + ei);
@@ -4279,8 +4332,10 @@ function startDagDrag(ev, ni) {
   if (_dag.raf) { cancelAnimationFrame(_dag.raf); _dag.raf = null; }
   const onMove = e => {
     if (!_dag.drag) return;
-    _dag.nodes[_dag.drag.ni].x = Math.max(40, Math.min(_dag.svgW-40, _dag.drag.nx + (e.clientX-_dag.drag.ox)*_dag.drag.sx));
-    _dag.nodes[_dag.drag.ni].y = Math.max(35, Math.min(_dag.svgH-35, _dag.drag.ny + (e.clientY-_dag.drag.oy)*_dag.drag.sy));
+    const dn = _dag.nodes[_dag.drag.ni];
+    const mx = (dn.r || 28) + 12, my = (dn.r || 28) + 7;
+    dn.x = Math.max(mx, Math.min(_dag.svgW - mx, _dag.drag.nx + (e.clientX-_dag.drag.ox)*_dag.drag.sx));
+    dn.y = Math.max(my, Math.min(_dag.svgH - my, _dag.drag.ny + (e.clientY-_dag.drag.oy)*_dag.drag.sy));
     dagUpdatePositions();
   };
   const onUp = () => {
