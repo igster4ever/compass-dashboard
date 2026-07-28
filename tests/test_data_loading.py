@@ -330,6 +330,25 @@ class TestStaleBulletCount(unittest.TestCase):
         with patch.object(_mod, "_now_utc", return_value=_NOW):
             self.assertEqual(_stale_bullet_count(md, state, days=30), 1)
 
+    def test_p66_dict_shape_freshly_verified_not_stale(self):
+        # compass P66 (2026-07-28) writes {"verified_at", "confidence"} instead of a bare
+        # ISO string; this must not silently read as "not stale" forever via a swallowed
+        # AttributeError in _parse_iso.
+        md = self._make_md(["Some feature"])
+        state = {"reality_validation": {
+            _hash("Some feature"): {"verified_at": _FRESH_TS, "confidence": 1.0},
+        }}
+        with patch.object(_mod, "_now_utc", return_value=_NOW):
+            self.assertEqual(_stale_bullet_count(md, state, days=30), 0)
+
+    def test_p66_dict_shape_old_verified_bullet_is_stale(self):
+        md = self._make_md(["Some feature"])
+        state = {"reality_validation": {
+            _hash("Some feature"): {"verified_at": _STALE_TS, "confidence": 0.6},
+        }}
+        with patch.object(_mod, "_now_utc", return_value=_NOW):
+            self.assertEqual(_stale_bullet_count(md, state, days=30), 1)
+
     def test_mixed_bullets(self):
         bullets = ["Fresh feature", "Stale feature", "Never verified"]
         state = self._make_state([

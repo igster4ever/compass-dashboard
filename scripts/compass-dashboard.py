@@ -194,16 +194,22 @@ def _retrieval_stale_texts(active_learnings, surfaced_threshold=_RETRIEVAL_STALE
 
 
 def _stale_bullet_count(reality_md, state, days=30):
-    """Count reality bullets not verified within `days` days (mirrors compass logic)."""
+    """Count reality bullets not verified within `days` days (mirrors compass logic).
+
+    compass's P66 (2026-07-28) changed reality_validation values from a bare ISO
+    string to a {"verified_at", "confidence"} dict; existing namespaces still have
+    bare-string entries live, so accept both shapes rather than assuming one.
+    """
     validation = state.get("reality_validation", {})
     now = _now_utc()
     stale = 0
     for text, _ in _iter_reality_bullets(reality_md):
         h = hashlib.sha256(text.encode()).hexdigest()[:8]
-        ts = validation.get(h)
-        if not ts:
+        entry = validation.get(h)
+        if not entry:
             stale += 1
         else:
+            ts = entry.get("verified_at") if isinstance(entry, dict) else entry
             dt = _parse_iso(ts)
             if dt and (now - dt) > timedelta(days=days):
                 stale += 1
