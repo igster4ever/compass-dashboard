@@ -248,6 +248,21 @@ did nothing (no console error visible via screenshot, silently swallowed) until
 `javascript_tool` was used to call it directly and surface `mmRotate is not defined`. If a
 new Mind Map control silently no-ops, check `Object.assign(window, {...})` first.
 
+**Label rotation, per-node (distinct from `_mm.rotation` above).** Drawing radial-tree
+labels flat-horizontal at a fixed `(x,y)` causes collisions for depth-2+ siblings clustered
+near the top/bottom of the layout, since their `x,y` positions converge even though their
+angles differ. `mmDraw()` (`template.html:~3833`) rotates each label by its own node angle
+(`angleDeg`), flips it `+180°` and swaps the text anchor in the left hemisphere to keep it
+upright, fanning every label along its own radial spoke with no spacing/layout changes
+needed. `_mm.rotation` above spins the *whole compass*; this rotates each *label*
+independently — the two compose (`angleDeg` already includes `rotOffset`).
+
+**`_mindmap_data(n)` is computed fresh inside `_js_data()`, not cached on the namespace
+dict from `load_namespace()`.** Any Python-side annotation of the mind-map tree (e.g.
+cross-namespace bridge info, a new node type) must hook into the JS-serialisation step in
+`_js_data()`, not the `namespaces` list built earlier in `generate()` — annotating the
+latter is silently discarded when `_js_data()` rebuilds the tree from scratch.
+
 ---
 
 ## Security

@@ -1139,6 +1139,29 @@ function renderStateSection_Deferred(ns) {
   return `<div class="md-section"><h3>Deferred opportunities</h3><ul class="deferred-list">${items}</ul></div>`;
 }
 
+function renderStateSection_GoalOutcomes(ns) {
+  const items = ns.goalOutcomes || [];
+  if (!items.length) return '';
+  const rows = items.slice(0, 10).map(g => {
+    const bullets = g.linked_bullets.length
+      ? `<ul style="margin:.2rem 0 0 .9rem">${g.linked_bullets.map(b =>
+          `<li style="font-size:.72rem;color:var(--muted)">${esc(b.text.length > 90 ? b.text.slice(0, 90) + '…' : b.text)}</li>`
+        ).join('')}</ul>`
+      : `<div style="font-size:.72rem;color:var(--subtle);font-style:italic;margin-top:.2rem">no reality bullets linked</div>`;
+    return `<li style="margin-bottom:.5rem">
+      <span style="font-size:.68rem;color:var(--subtle)">${esc(g.date)}</span>
+      <span style="margin-left:.4rem">${esc(g.goal_text.length > 100 ? g.goal_text.slice(0, 100) + '…' : g.goal_text)}</span>
+      ${bullets}
+    </li>`;
+  }).join('');
+  const rateNote = ns.outcomeRate != null
+    ? `<span style="color:var(--muted);font-size:.72rem"> — ${Math.round(ns.outcomeRate * 100)}% of recent completed goals linked</span>`
+    : '';
+  return `<div class="md-section"><h3>Goal → reality outcomes (P49)${rateNote}</h3>
+    <ul style="list-style:none;padding:0">${rows}</ul>
+  </div>`;
+}
+
 function renderStateSection_WatchFeed(ns) {
   if (!ns.watches || ns.watches.length === 0) return '';
   const ws = ns.watchSignals || {signals: [], empty: true, bootstrapped: false};
@@ -1270,6 +1293,7 @@ function renderState(ns) {
     renderStateSection_Reality(ns),
     renderStateSection_Decisions(ns),
     renderStateSection_Deferred(ns),
+    renderStateSection_GoalOutcomes(ns),
     renderStateSection_WatchFeed(ns),
     renderStateSection_CycleSparkline(ns),
     renderStateSection_DreamStatus(ns),

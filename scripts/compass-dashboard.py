@@ -325,6 +325,140 @@ def _top_tags(learnings, n=5):
     return [t for t, _ in sorted(counts.items(), key=lambda x: -x[1])[:n]]
 
 
+def _review_complexity_signal(ns_dir, state, config):
+    """Measure code-change complexity since the last review, independent of elapsed
+    session count. Mirrors compass/_monolith.py's _get_review_complexity_signal() — same
+    four proxies (lines changed, new files, new design docs, clustered complex/chaotic
+    decisions), same score = max(ratio) with high = score >= 1.0. Degrades to a zero/False
+    signal rather than raising when repo_path is unset, git is unavailable, or the window
+    has no history.
+    """
+    empty = {
+        "lines_changed": 0, "new_files": 0, "new_design_docs": 0,
+        "complex_decisions": 0, "score": 0.0, "high": False,
+    }
+    repo_path = state.get("repo_path")
+    if not repo_path:
+        return empty
+
+    last_review_at = state.get("last_review_at")
+    since_arg = f"--since={last_review_at}" if last_review_at else \
+        f"--since={config.get('review_interval_days', 7)} days ago"
+
+    try:
+        numstat = subprocess.run(
+            ["git", "log", since_arg, "--numstat", "--format="],
+            cwd=repo_path, capture_output=True, text=True, timeout=10,
+        )
+        added = subprocess.run(
+            ["git", "log", since_arg, "--diff-filter=A", "--name-only", "--format="],
+            cwd=repo_path, capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return empty
+
+    if numstat.returncode != 0 or added.returncode != 0:
+        return empty
+
+    lines_changed = 0
+    for line in numstat.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        for n in parts[:2]:
+            if n.isdigit():
+                lines_changed += int(n)
+
+    new_paths = [p for p in added.stdout.splitlines() if p.strip()]
+    new_files = len(new_paths)
+    new_design_docs = sum(1 for p in new_paths if p.startswith("docs/"))
+
+    complex_decisions = 0
+    for dec in _read_jsonl(ns_dir / "decisions.jsonl"):
+        if dec.get("complexity_domain") not in ("complex", "chaotic"):
+            continue
+        if last_review_at and dec.get("date", "") < last_review_at:
+            continue
+        complex_decisions += 1
+
+    loc_threshold   = int(config.get("review_complexity_loc_threshold", 400))
+    files_threshold = int(config.get("review_complexity_new_files_threshold", 3))
+    score = max(
+        lines_changed / loc_threshold if loc_threshold else 0.0,
+        new_files / files_threshold if files_threshold else 0.0,
+        1.0 if new_design_docs > 0 else 0.0,
+        complex_decisions / 2.0,
+    )
+
+    return {
+        "lines_changed":     lines_changed,
+        "new_files":         new_files,
+        "new_design_docs":   new_design_docs,
+        "complex_decisions": complex_decisions,
+        "score":             round(score, 2),
+        "high":              score >= 1.0,
+    }
+
+
+def _check_code_review_due(ns_dir, state, config):
+    """Whether a periodic code quality review is due. Mirrors compass/_monolith.py's
+    _check_review_due(): base gate is sessions_since_review >= review_interval_sessions
+    AND days-since-last-review >= review_interval_days (or never reviewed), pulled forward
+    ahead of the base gate when _review_complexity_signal(...)["high"] is true — but never
+    before review_complexity_min_sessions (default 2) sessions have elapsed, so a single
+    large commit moments after opening doesn't demand a review every session.
+    """
+    repo_path = state.get("repo_path", "")
+    empty_signal = {
+        "lines_changed": 0, "new_files": 0, "new_design_docs": 0,
+        "complex_decisions": 0, "score": 0.0, "high": False,
+    }
+    if not repo_path:
+        return False, {
+            "due": False, "sessions_since_review": state.get("sessions_since_review", 0),
+            "interval_sessions": config.get("review_interval_sessions", 5),
+            "last_review_at": state.get("last_review_at"), "days_since_review": None,
+            "interval_days": config.get("review_interval_days", 7),
+            "pulled_forward_by_complexity": False, "complexity_signal": empty_signal,
+        }
+
+    complexity_signal = _review_complexity_signal(ns_dir, state, config)
+
+    interval_sessions     = config.get("review_interval_sessions", 5)
+    sessions_since_review = state.get("sessions_since_review", 0)
+    last_review_at        = state.get("last_review_at")
+    interval_days         = config.get("review_interval_days", 7)
+
+    if not last_review_at:
+        days_since = None
+        days_gate  = True
+    else:
+        age        = _now_utc() - _parse_iso(last_review_at)
+        days_since = age.days
+        days_gate  = age >= timedelta(days=interval_days)
+
+    base_due = sessions_since_review >= interval_sessions and days_gate
+
+    min_sessions   = int(config.get("review_complexity_min_sessions", 2))
+    pulled_forward = bool(
+        complexity_signal.get("high")
+        and not base_due
+        and sessions_since_review >= min_sessions
+    )
+    due = base_due or pulled_forward
+
+    return due, {
+        "due":                          due,
+        "sessions_since_review":        sessions_since_review,
+        "interval_sessions":            interval_sessions,
+        "last_review_at":               last_review_at,
+        "days_since_review":            days_since,
+        "interval_days":                interval_days,
+        "pulled_forward_by_complexity": pulled_forward,
+        "complexity_signal":            complexity_signal,
+    }
+
+
 def _complexity_clustering_signals(decisions):
     """P50: tag domains where ≥2 complex/chaotic decisions cluster.
 
@@ -347,6 +481,54 @@ def _complexity_clustering_signals(decisions):
                 "decision_texts": [d.get("decision", "")[:80] for d in decs],
             })
     return sorted(signals, key=lambda s: -s["count"])
+
+
+def _goal_outcomes_breakdown(ns_dir, state, reality_md, limit=20):
+    """P49: per-goal reality-outcome links, newest first.
+
+    state["goal_outcomes"] is {goal_hash: [bullet_hash, ...]} (compass/_monolith.py's
+    cmd_link_goal_outcome), keyed by _goal_hash(goal_text) = sha256(text)[:8] — mirrored
+    here rather than imported (dashboard reads namespace dirs directly, no shared module).
+    Goal text isn't stored in state.json, only its hash, so it's recovered by re-hashing
+    every "## Planned" bullet from history/*.md and matching against the stored keys.
+    Bullet hashes are resolved to text via the *current* reality.md — a linked bullet that
+    has since been edited or removed renders with a placeholder rather than stale text.
+    """
+    goal_outcomes = state.get("goal_outcomes", {})
+    if not goal_outcomes:
+        return []
+
+    bullet_hash_to_text = {
+        hashlib.sha256(text.encode()).hexdigest()[:8]: text
+        for text, _ in _iter_reality_bullets(reality_md)
+    }
+
+    history_dir = ns_dir / "history"
+    if not history_dir.exists():
+        return []
+
+    breakdown = []
+    seen_hashes = set()
+    for f in sorted(history_dir.glob("*.md"), reverse=True):
+        parsed = _parse_history_file(f)
+        if not parsed:
+            continue
+        for goal_text in parsed.get("planned", []):
+            gh = hashlib.sha256(goal_text.encode()).hexdigest()[:8]
+            if gh not in goal_outcomes or gh in seen_hashes:
+                continue
+            seen_hashes.add(gh)
+            breakdown.append({
+                "goal_text": goal_text,
+                "date":      f.stem[:10],
+                "linked_bullets": [
+                    {"hash": h, "text": bullet_hash_to_text.get(h, "(bullet no longer in reality.md)")}
+                    for h in goal_outcomes[gh]
+                ],
+            })
+            if len(breakdown) >= limit:
+                return breakdown
+    return breakdown
 
 
 def _goal_stats(state):
@@ -558,7 +740,7 @@ def load_namespace(ns_dir):
 
     review_interval    = config.get("review_interval_sessions", 5)
     repo_path          = state.get("repo_path", "")
-    code_review_due    = bool(repo_path) and state.get("sessions_since_review", 0) >= review_interval
+    code_review_due, code_review_status = _check_code_review_due(ns_dir, state, config)
 
     # CLAUDE.md hygiene review due chip — mirrors compass/_monolith.py's
     # _check_claude_review_due() (sessions-only gate, default interval 15), gated the same
@@ -621,6 +803,7 @@ def load_namespace(ns_dir):
     exploration_ratio    = _compute_exploration_ratio(state)
     last_reality_score   = state.get("last_reality_score")
     outcome_rate         = state.get("outcome_rate")
+    goal_outcomes        = _goal_outcomes_breakdown(ns_dir, state, reality)
     goal_type_by_session = _goal_type_by_session(state)
     # Carry-forward trend + quality distribution: all history files (uncapped) — sorted chronologically
     carry_forward_trend = []
@@ -791,6 +974,7 @@ def load_namespace(ns_dir):
         "suggested_goal_count":      suggested_goal_count,
         "research_due":              research_due,
         "code_review_due":           code_review_due,
+        "code_review_status":        code_review_status,
         "watches":                   watches,
         "watch_signals":             watch_signals,
         "intent_version":            intent_version,
@@ -804,6 +988,7 @@ def load_namespace(ns_dir):
         "exploration_ratio":         exploration_ratio,
         "last_reality_score":        last_reality_score,
         "outcome_rate":              outcome_rate,
+        "goal_outcomes":             goal_outcomes,
         "goal_type_by_session":      goal_type_by_session,
         "carry_forward_trend":       carry_forward_trend,
         "quality_dist":              quality_dist,
@@ -911,7 +1096,14 @@ def _card_html(n, i, community_published=None):
 
     dream_html     = '<span class="dream-chip">🌙 dream due</span>' if n["dream_due"] else ""
     research_html  = '<span class="cadence-chip research">🔬 research due</span>' if n["research_due"] else ""
-    review_html    = '<span class="cadence-chip review">🔍 review due</span>' if n["code_review_due"] else ""
+    if n["code_review_due"]:
+        if n.get("code_review_status", {}).get("pulled_forward_by_complexity"):
+            review_html = ('<span class="cadence-chip review" title="Pulled forward by '
+                            'code-change complexity, not session cadence">🔍 review due ⚡</span>')
+        else:
+            review_html = '<span class="cadence-chip review">🔍 review due</span>'
+    else:
+        review_html = ""
     assumption_html = ('<span class="cadence-chip assumption">🧪 assumption audit due</span>'
                         if n.get("assumption_audit_due") else "")
     claude_review_html = ('<span class="cadence-chip claude">📋 CLAUDE.md review due</span>'
@@ -1301,6 +1493,12 @@ def _js_data(namespaces):
             "suggestedGoalCount":       n["suggested_goal_count"],
             "researchDue":             n["research_due"],
             "codeReviewDue":           n["code_review_due"],
+            "codeReviewStatus":        n.get("code_review_status", {
+                "due": n["code_review_due"], "pulled_forward_by_complexity": False,
+                "complexity_signal": {"lines_changed": 0, "new_files": 0,
+                                      "new_design_docs": 0, "complex_decisions": 0,
+                                      "score": 0.0, "high": False},
+            }),
             "watches":                 n.get("watches", []),
             "watchSignals":            n.get("watch_signals", {"bootstrapped": False, "signals": [], "total_signals": 0, "empty": True}),
             "intentVersion":           n["intent_version"],
@@ -1314,6 +1512,7 @@ def _js_data(namespaces):
             "explorationRatio":        n["exploration_ratio"],
             "lastRealityScore":        n["last_reality_score"],
             "outcomeRate":             n.get("outcome_rate"),
+            "goalOutcomes":            n.get("goal_outcomes", []),
             "goalTypeBySession":       n["goal_type_by_session"],
             "carryForwardTrend":       n["carry_forward_trend"],
             "qualityDist":             n["quality_dist"],
