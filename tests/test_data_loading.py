@@ -703,5 +703,53 @@ class TestLoadWatchSignals(unittest.TestCase):
         self.assertEqual(result["total_signals"], 2)
 
 
+class TestLoadCommunity(unittest.TestCase):
+    """P40 Phase 2 (compass core, 2026-07-29) — feed.jsonl now dedupes on
+    (learning_id, event_type) so a retraction tombstone survives as its own row
+    alongside the original publish record. load_community() must filter those
+    tombstones out of "feed" — every dashboard consumer treats a feed row as
+    "currently shared"."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.loop_dir = Path(self._tmpdir.name)
+        self._patcher = patch.object(_mod, "LOOP_DIR", self.loop_dir)
+        self._patcher.start()
+
+    def tearDown(self):
+        self._patcher.stop()
+        self._tmpdir.cleanup()
+
+    def _write_jsonl(self, filename, items):
+        d = self.loop_dir / "_community"
+        d.mkdir(parents=True, exist_ok=True)
+        with open(d / filename, "w", encoding="utf-8") as f:
+            for item in items:
+                f.write(json.dumps(item) + "\n")
+
+    def test_disabled_when_no_community_dir(self):
+        result = _mod.load_community()
+        self.assertFalse(result["enabled"])
+        self.assertEqual(result["feed"], [])
+
+    def test_retraction_tombstone_excluded_from_feed(self):
+        self._write_jsonl("feed.jsonl", [
+            {"learning_id": "l1", "source_loop_id": "ns-a", "event_type": "community.learning_published", "text": "a"},
+            {"learning_id": "l1", "source_loop_id": "ns-a", "event_type": "community.learning_retracted", "text": "a"},
+            {"learning_id": "l2", "source_loop_id": "ns-b", "event_type": "community.learning_published", "text": "b"},
+        ])
+        result = _mod.load_community()
+        self.assertTrue(result["enabled"])
+        self.assertEqual(len(result["feed"]), 2)
+        self.assertEqual({e["learning_id"] for e in result["feed"]}, {"l1", "l2"})
+
+    def test_legacy_entries_without_event_type_are_kept(self):
+        self._write_jsonl("feed.jsonl", [
+            {"learning_id": "l1", "source_loop_id": "ns-a", "text": "pre-P40-Phase-2 entry"},
+        ])
+        result = _mod.load_community()
+        self.assertEqual(len(result["feed"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

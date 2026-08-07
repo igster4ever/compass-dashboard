@@ -680,6 +680,132 @@ def _goal_type_by_session(state):
     return result
 
 
+def _check_dream_due(state, corpus_size):
+    """Whether an inter-loop dream consolidation pass is due (P12.1). Mirrors
+    compass/dream.py's _check_dream_due(): OR gate across session cadence, absolute
+    corpus size, and corpus growth since the last pass.
+    """
+    sessions_since_dream = state.get("sessions_since_dream", 0)
+    corpus_delta = state.get("corpus_delta", 0) or 0
+    due = sessions_since_dream >= 5 or corpus_size >= 15 or corpus_delta >= 10
+    return due, {"sessions_since_dream": sessions_since_dream, "corpus_delta": corpus_delta}
+
+
+def _check_research_due(state, config):
+    """Whether a periodic external research cycle is due (P11). Cadence-only gate —
+    sessions_since_research >= research_interval_sessions.
+
+    compass core's P68 added a complexity pull-forward here (mirroring
+    _check_code_review_due's pulled_forward_by_complexity), gated on P50 complexity-
+    clustering signals rather than a git-diff signal. Not yet mirrored in this
+    script — see reality.md Backlog / Tactical.
+    """
+    research_interval = config.get("research_interval_sessions", 10)
+    sessions_since_research = state.get("sessions_since_research", 0)
+    return sessions_since_research >= research_interval
+
+
+def _check_claude_review_due(ns_dir, state, config, repo_path):
+    """Whether a periodic CLAUDE.md hygiene review is due. Mirrors compass/_monolith.py's
+    _check_claude_review_due(): sessions-only gate (default interval 15), gated on
+    repo_path configured AND a CLAUDE.md actually existing there (falls back to
+    ~/.claude/skills/<namespace>/CLAUDE.md).
+    """
+    claude_review_interval = config.get("claude_review_interval_sessions", 15)
+    claude_md_path = (Path(repo_path) / "CLAUDE.md") if repo_path else None
+    claude_md_exists = bool(claude_md_path and claude_md_path.is_file())
+    if not claude_md_exists:
+        fallback_claude_md = Path.home() / ".claude" / "skills" / ns_dir.name / "CLAUDE.md"
+        claude_md_exists = fallback_claude_md.is_file()
+    return (
+        claude_md_exists
+        and state.get("sessions_since_claude_review", 0) >= claude_review_interval
+    )
+
+
+def _check_assumption_audit_due(state, config, learnings):
+    """Whether a Strategic Assumption Audit is due (P47), and if so, the unvalidated
+    high-weight hypotheses that qualify. Mirrors compass/_monolith.py's
+    _check_assumption_audit_due() + _get_assumption_audit_candidates().
+    """
+    assumption_audit_interval = config.get("assumption_audit_interval_sessions", 10)
+    due = state.get("sessions_since_assumption_audit", 0) >= assumption_audit_interval
+    candidates = []
+    if due:
+        now = _now_utc()
+        for l in learnings:
+            if l.get("learning_type") != "hypothesis":
+                continue
+            if l.get("validation_result"):
+                continue
+            if l.get("status") in ("superseded", "archived"):
+                continue
+            weight = l.get("weight", 1)
+            if weight < 2:
+                continue
+            dt = _parse_iso(l.get("date"))
+            if dt is None:
+                continue
+            age_days = (now - dt).days
+            if age_days <= 30:
+                continue
+            candidates.append({
+                "text": l.get("text", ""), "weight": weight,
+                "confidence": l.get("confidence", "medium"), "age_days": age_days,
+                "tags": l.get("tags", []),
+            })
+        candidates.sort(key=lambda c: (-c["weight"], -c["age_days"]))
+    return due, candidates
+
+
+def _check_quality_plateau(quality_history):
+    """P61b: quality-plateau signal — mirrors compass/state.py's
+    _get_quality_plateau_signal() (window=3, ±0.03 threshold).
+    """
+    window = 3
+    if len(quality_history) < window:
+        return {"plateaued": False, "insufficient_sample": True, "sessions_checked": len(quality_history)}
+    recent = quality_history[-window:]
+    scores = [e.get("score", 0) for e in recent]
+    delta = scores[-1] - scores[0]
+    if delta < -0.03:
+        trend = "declining"
+    elif delta <= 0.03:
+        trend = "flat"
+    else:
+        trend = "improving"
+    return {
+        "plateaued":           trend in ("flat", "declining"),
+        "insufficient_sample": False,
+        "sessions_checked":    window,
+        "trend":               trend,
+        "delta":               round(delta, 3),
+    }
+
+
+def _check_cadence_pull_forward(quality_plateau, repo_path, code_review_due, state,
+                                 review_interval, skill_opt_due, sessions_since_skill_opt):
+    """P61b cadence pull-forward advisory — mirrors compass/_monolith.py's
+    cadence_pull_forward gating (~line 1200-1215). Advisory only — never mutates
+    sessions_since_review/sessions_since_skill_opt.
+    """
+    pull_forward = {"review": False, "skill_opt": False}
+    if not quality_plateau["plateaued"]:
+        return pull_forward
+    if (
+        bool(repo_path)
+        and not code_review_due
+        and state.get("sessions_since_review", 0) >= max(review_interval - 2, 1)
+    ):
+        pull_forward["review"] = True
+    if (
+        not skill_opt_due
+        and sessions_since_skill_opt >= max(10 - 2, 1)
+    ):
+        pull_forward["skill_opt"] = True
+    return pull_forward
+
+
 def load_namespace(ns_dir):
     state        = _read_json(ns_dir / "state.json")
     intent       = _read_file(ns_dir / "intent.md")
@@ -725,15 +851,13 @@ def load_namespace(ns_dir):
 
     config = _read_json(ns_dir / "config.json")
 
-    sessions_since_dream      = state.get("sessions_since_dream", 0)
     corpus_size               = len(active_learnings)
-    corpus_delta              = state.get("corpus_delta", 0) or 0
-    dream_due                 = sessions_since_dream >= 5 or corpus_size >= 15 or corpus_delta >= 10
+    dream_due, _dream_status  = _check_dream_due(state, corpus_size)
+    sessions_since_dream      = _dream_status["sessions_since_dream"]
     reality_completeness_score = _reality_completeness(reality)
     suggested_goal_count      = _suggested_goal_count(state)
 
-    research_interval  = config.get("research_interval_sessions", 10)
-    research_due       = state.get("sessions_since_research", 0) >= research_interval
+    research_due       = _check_research_due(state, config)
 
     watches       = config.get("watches", [])
     watch_signals = _load_watch_signals(ns_dir, config, state)
@@ -742,20 +866,9 @@ def load_namespace(ns_dir):
     repo_path          = state.get("repo_path", "")
     code_review_due, code_review_status = _check_code_review_due(ns_dir, state, config)
 
-    # CLAUDE.md hygiene review due chip — mirrors compass/_monolith.py's
-    # _check_claude_review_due() (sessions-only gate, default interval 15), gated the same
-    # way the skill itself gates Step 2b.3b: repo_path configured AND a CLAUDE.md actually
-    # exists there (falls back to ~/.claude/skills/<namespace>/CLAUDE.md).
-    claude_review_interval = config.get("claude_review_interval_sessions", 15)
-    _claude_md_path = (Path(repo_path) / "CLAUDE.md") if repo_path else None
-    _claude_md_exists = bool(_claude_md_path and _claude_md_path.is_file())
-    if not _claude_md_exists:
-        _fallback_claude_md = Path.home() / ".claude" / "skills" / ns_dir.name / "CLAUDE.md"
-        _claude_md_exists = _fallback_claude_md.is_file()
-    claude_review_due = (
-        _claude_md_exists
-        and state.get("sessions_since_claude_review", 0) >= claude_review_interval
-    )
+    # CLAUDE.md hygiene review due chip — gated the same way the skill itself gates
+    # Step 2b.3b: repo_path configured AND a CLAUDE.md actually exists there.
+    claude_review_due = _check_claude_review_due(ns_dir, state, config, repo_path)
 
     # dream_defer_count — a scalar in state.json (set by compass/dream.py's cmd_defer_dream),
     # NOT a *_deferrals.jsonl file like code_review_defer_count/research_defer_count above.
@@ -766,35 +879,10 @@ def load_namespace(ns_dir):
     # from the `decisions` list already loaded above rather than re-reading decisions.jsonl.
     complexity_clustering_signals = _complexity_clustering_signals(decisions)
 
-    # P47 — Strategic Assumption Audit due chip; mirrors compass/_monolith.py's
-    # _check_assumption_audit_due() + _get_assumption_audit_candidates()
-    assumption_audit_interval = config.get("assumption_audit_interval_sessions", 10)
-    assumption_audit_due      = state.get("sessions_since_assumption_audit", 0) >= assumption_audit_interval
-    assumption_audit_candidates = []
-    if assumption_audit_due:
-        _now = _now_utc()
-        for l in learnings:
-            if l.get("learning_type") != "hypothesis":
-                continue
-            if l.get("validation_result"):
-                continue
-            if l.get("status") in ("superseded", "archived"):
-                continue
-            _weight = l.get("weight", 1)
-            if _weight < 2:
-                continue
-            _dt = _parse_iso(l.get("date"))
-            if _dt is None:
-                continue
-            _age_days = (_now - _dt).days
-            if _age_days <= 30:
-                continue
-            assumption_audit_candidates.append({
-                "text": l.get("text", ""), "weight": _weight,
-                "confidence": l.get("confidence", "medium"), "age_days": _age_days,
-                "tags": l.get("tags", []),
-            })
-        assumption_audit_candidates.sort(key=lambda c: (-c["weight"], -c["age_days"]))
+    # P47 — Strategic Assumption Audit due chip
+    assumption_audit_due, assumption_audit_candidates = _check_assumption_audit_due(
+        state, config, learnings
+    )
 
     intent_version     = state.get("intent_versions", 1)
     stale_bullet_count = _stale_bullet_count(reality, state)
@@ -870,44 +958,12 @@ def load_namespace(ns_dir):
     holdout_scores           = [holdout_score_map[s] for s in holdout_session_ids if s in holdout_score_map]
     holdout_mean             = round(sum(holdout_scores) / len(holdout_scores), 3) if holdout_scores else None
 
-    # P61b: quality-plateau signal + cadence pull-forward advisory — mirrors
-    # compass/state.py's _get_quality_plateau_signal() (window=3, ±0.03 threshold)
-    # and _monolith.py's cadence_pull_forward gating (~line 1200-1215). Advisory
-    # only — never mutates sessions_since_review/sessions_since_skill_opt.
-    _QP_WINDOW = 3
-    if len(quality_history) < _QP_WINDOW:
-        quality_plateau = {"plateaued": False, "insufficient_sample": True, "sessions_checked": len(quality_history)}
-    else:
-        _qp_recent = quality_history[-_QP_WINDOW:]
-        _qp_scores = [e.get("score", 0) for e in _qp_recent]
-        _qp_delta  = _qp_scores[-1] - _qp_scores[0]
-        if _qp_delta < -0.03:
-            _qp_trend = "declining"
-        elif _qp_delta <= 0.03:
-            _qp_trend = "flat"
-        else:
-            _qp_trend = "improving"
-        quality_plateau = {
-            "plateaued":           _qp_trend in ("flat", "declining"),
-            "insufficient_sample": False,
-            "sessions_checked":    _QP_WINDOW,
-            "trend":               _qp_trend,
-            "delta":               round(_qp_delta, 3),
-        }
-
-    cadence_pull_forward = {"review": False, "skill_opt": False}
-    if quality_plateau["plateaued"]:
-        if (
-            bool(repo_path)
-            and not code_review_due
-            and state.get("sessions_since_review", 0) >= max(review_interval - 2, 1)
-        ):
-            cadence_pull_forward["review"] = True
-        if (
-            not skill_opt_due
-            and sessions_since_skill_opt >= max(10 - 2, 1)
-        ):
-            cadence_pull_forward["skill_opt"] = True
+    # P61b: quality-plateau signal + cadence pull-forward advisory
+    quality_plateau = _check_quality_plateau(quality_history)
+    cadence_pull_forward = _check_cadence_pull_forward(
+        quality_plateau, repo_path, code_review_due, state,
+        review_interval, skill_opt_due, sessions_since_skill_opt,
+    )
 
     # Session artefacts (P41) — resolve abs_file so JS can open/preview via file://
     artefacts = []
@@ -1016,8 +1072,19 @@ def load_namespace(ns_dir):
     }
 
 
+_COMMUNITY_LEARNING_RETRACTED = "community.learning_retracted"
+
+
 def load_community():
-    """Parse _community/*.jsonl files and return COMMUNITY data object (P40-Dashboard Phase 1)."""
+    """Parse _community/*.jsonl files and return COMMUNITY data object (P40-Dashboard Phase 1).
+
+    P40 Phase 2 (compass core, 2026-07-29): feed.jsonl now dedupes on
+    (learning_id, event_type) instead of learning_id alone, so a
+    community.learning_retracted tombstone survives as its own row alongside the
+    original publish record (previously dropped as a "duplicate"). "feed" here is
+    filtered to published-only — every dashboard consumer treats a feed row as "this
+    is currently shared", and a retracted learning is no longer that.
+    """
     community_dir = LOOP_DIR / "_community"
     enabled = community_dir.is_dir() and any(community_dir.glob("*.jsonl"))
     if not enabled:
@@ -1029,9 +1096,11 @@ def load_community():
             "subscriptions": [],
             "trust_registry": [],
         }
+    feed = _read_jsonl(community_dir / "feed.jsonl")
+    feed = [e for e in feed if e.get("event_type") != _COMMUNITY_LEARNING_RETRACTED]
     return {
         "enabled":        True,
-        "feed":           _read_jsonl(community_dir / "feed.jsonl"),
+        "feed":           feed,
         "inbox":          _read_jsonl(community_dir / "inbox.jsonl"),
         "adoptions":      _read_jsonl(community_dir / "adoptions.jsonl"),
         "subscriptions":  _read_jsonl(community_dir / "subscriptions.jsonl"),

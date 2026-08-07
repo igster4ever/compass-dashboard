@@ -164,6 +164,8 @@ full set and must be used for any time-based visualisation.
 
 **The inverse trap — a backlog doc's implementation guess can also be wrong.** The 2026-07-18 data-model-gaps backlog assumed `dream_defer_count` would mirror `code_review_defer_count`/`research_defer_count` as a `*_deferrals.jsonl` file count. It doesn't — `compass/dream.py`'s `cmd_defer_dream` stores it as a plain `state.json` scalar (confirmed 2026-07-26). Backlog write-ups are a starting hypothesis, not a verified spec — grep the actual compass source before implementing an item, even when the doc says "confirm exact filename before wiring."
 
+**Cross-namespace jsonl files drift too, not just per-namespace `state.json`.** `_community/feed.jsonl` changed shape upstream on 2026-07-29 (P40 Phase 2): dedup key moved from `learning_id` alone to `(learning_id, event_type)`, so a `community.learning_retracted` tombstone now survives as its own row alongside the original publish record instead of being dropped as a duplicate. `load_community()` filters retracted rows out of `feed` for exactly this reason — every consumer (Overview "N shared" chips, Learnings tab badges, Community tab health bar/feed list, search index, heatmap diamonds) treats a feed row as "currently shared," and an un-filtered feed would double-count a retracted learning and keep it showing as shared. The lesson generalises: this script watches per-namespace `state.json` shape drift closely (see above) but a shared cross-namespace file like `_community/*.jsonl` can drift the same way and is easy to miss since no single namespace's `read()` output flags it.
+
 ---
 
 ## Stateful view tabs
@@ -275,10 +277,13 @@ count as user-controlled.
 
 ## Libraries
 
-- **D3** — loaded for the DAG force simulation only. Fine to use D3 utilities (scale,
-  layout) in other tabs if genuinely needed.
-- **Everything else** — hand-rolled CSS/SVG/vanilla JS. Don't add Recharts, Chart.js,
-  or similar. The file must remain self-contained and fast to open locally.
+- **None** — no D3, no Recharts, no Chart.js. The DAG force simulation
+  (`dagInitPositions()`/`dagSimStep()`) and the mind map's radial tree layout are
+  both hand-rolled vanilla JS, not D3 — despite this doc previously claiming D3 was
+  loaded for the DAG tab (corrected 2026-08-07; no such load ever existed in
+  `template.html`, confirmed by `grep -a "d3\."` returning zero hits outside comments
+  explicitly noting "no D3 dependency"/"no D3 needed"). Hand-rolled CSS/SVG/vanilla JS
+  throughout — the file must remain self-contained and fast to open locally.
 
 ---
 
@@ -291,6 +296,7 @@ count as user-controlled.
 | `test_data_loading.py` | 62 unit tests for `_reality_completeness`, `_corpus_health`, `_goal_stats`, `_stale_bullet_count`, `_retrieval_stale_texts` (P58), and more — no filesystem deps |
 | `test_generate.py` | 55 smoke tests for `generate()` — structural markers, `const NS = [` embedding, script-tag injection escaping, community/mindmap/P51-P53/P56-P58 wiring |
 | `js/dashboard_helpers.test.mjs` | Node-native (`node --test`, no deps) smoke tests for pure JS helpers in `template.html` — `esc`, `fmtYM`, `_daysSince`, `urgencyScore`, `scoreItem`, `scaleLinear`, `renderYAxisGridlines`. Extracts function source directly from the file text (brace-matched) since the script is wrapped in an IIFE with no module exports — see `extractFunction()` for the brace-matching approach and its default-parameter gotcha. Run: `node --test tests/js/dashboard_helpers.test.mjs` |
+| `js/render_smoke.test.mjs` | Node-native (`node --test`, no deps — hand-rolled DOM stub, not jsdom) smoke tests for the ~46 `render*` functions that touch `document`/`window` and so can't be extracted in isolation like the pure helpers above. Runs the *entire* `<script>` IIFE in a `node:vm` sandbox against `js/fixtures/dashboard_fixture.json` (synthetic data only — regenerate via `python3 tests/js/fixtures/generate_fixture.py`, which builds it from the real `load_namespace()`/`_js_data()` field shapes so it can't drift from production shape), then calls `switchView()` for all 10 tabs, `selectCard()`+`switchTab()` for the detail panel, and the mind-map/search/DAG-resume entrypoints — asserting only "does it throw," not output content. This is exactly the safety net CLAUDE.md's four documented `<script>`-IIFE traps call for: it would have caught the historical `mmRotate is not defined` regression and would catch a broken template-literal quote before a `javascript_tool` debugging session is needed. Run: `node --test tests/js/render_smoke.test.mjs` |
 
 Run: `python3 -m pytest tests/ -q` from the repo root.
 

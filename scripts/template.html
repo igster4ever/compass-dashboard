@@ -1272,9 +1272,12 @@ function renderStateSection_SkillFeedback(ns) {
     const w    = f.weight || 1;
     const step = esc(f.step_ref || 'general');
     const bar  = '█'.repeat(Math.min(w, 5)) + '░'.repeat(Math.max(0, 5 - w));
+    const dim  = f.failure_dimension
+      ? `<span style="color:var(--blue);font-size:.68rem;margin-left:.4rem;border:1px solid var(--blue);border-radius:3px;padding:0 .3rem">${esc(f.failure_dimension)}</span>`
+      : '';
     return `<div style="margin-bottom:.5rem;font-size:.78rem">
       <span style="color:var(--amber);font-family:monospace;font-size:.7rem">${bar}</span>
-      <span style="color:var(--muted);font-size:.68rem;margin-left:.4rem">[${step}]</span>
+      <span style="color:var(--muted);font-size:.68rem;margin-left:.4rem">[${step}]</span>${dim}
       <div style="color:var(--text);margin-top:.15rem">${esc(f.text || '')}</div>
     </div>`;
   }).join('');
