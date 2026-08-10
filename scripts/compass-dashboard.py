@@ -691,18 +691,37 @@ def _check_dream_due(state, corpus_size):
     return due, {"sessions_since_dream": sessions_since_dream, "corpus_delta": corpus_delta}
 
 
-def _check_research_due(state, config):
-    """Whether a periodic external research cycle is due (P11). Cadence-only gate —
+def _check_research_due(state, config, complexity_signal=None):
+    """Whether a periodic external research cycle is due (P11). Base gate:
     sessions_since_research >= research_interval_sessions.
 
-    compass core's P68 added a complexity pull-forward here (mirroring
-    _check_code_review_due's pulled_forward_by_complexity), gated on P50 complexity-
-    clustering signals rather than a git-diff signal. Not yet mirrored in this
-    script — see reality.md Backlog / Tactical.
+    Mirrors compass core's P68 (MemoHarness carryforward) complexity pull-forward:
+    when complexity_signal (P50's complexity-clustering signals — tag domains where
+    ≥2 complex/chaotic decisions cluster) is non-empty, research is pulled forward
+    ahead of the base gate — but never before research_complexity_min_sessions
+    (default 2) sessions have elapsed, same *_complexity_min_sessions floor
+    convention _check_code_review_due already uses, so a single complex decision
+    moments after opening doesn't demand research every session.
     """
-    research_interval = config.get("research_interval_sessions", 10)
+    interval_sessions       = config.get("research_interval_sessions", 10)
     sessions_since_research = state.get("sessions_since_research", 0)
-    return sessions_since_research >= research_interval
+    base_due                = sessions_since_research >= interval_sessions
+
+    min_sessions   = int(config.get("research_complexity_min_sessions", 2))
+    pulled_forward = bool(
+        complexity_signal
+        and not base_due
+        and sessions_since_research >= min_sessions
+    )
+    due = base_due or pulled_forward
+
+    return due, {
+        "due":                          due,
+        "sessions_since_research":      sessions_since_research,
+        "interval_sessions":            interval_sessions,
+        "last_research_at":             state.get("last_research_at"),
+        "pulled_forward_by_complexity": pulled_forward,
+    }
 
 
 def _check_claude_review_due(ns_dir, state, config, repo_path):
@@ -857,7 +876,14 @@ def load_namespace(ns_dir):
     reality_completeness_score = _reality_completeness(reality)
     suggested_goal_count      = _suggested_goal_count(state)
 
-    research_due       = _check_research_due(state, config)
+    # P50 — complexity clustering signals: tag domains where ≥2 complex/chaotic decisions
+    # cluster. Mirrors compass/_monolith.py's _get_complexity_clustering_signals(), but reads
+    # from the `decisions` list already loaded above rather than re-reading decisions.jsonl.
+    # Computed early so P68's research pull-forward (below) can reuse it — same convention
+    # compass core's own read() uses.
+    complexity_clustering_signals = _complexity_clustering_signals(decisions)
+
+    research_due, research_status = _check_research_due(state, config, complexity_clustering_signals)
 
     watches       = config.get("watches", [])
     watch_signals = _load_watch_signals(ns_dir, config, state)
@@ -873,11 +899,6 @@ def load_namespace(ns_dir):
     # dream_defer_count — a scalar in state.json (set by compass/dream.py's cmd_defer_dream),
     # NOT a *_deferrals.jsonl file like code_review_defer_count/research_defer_count above.
     dream_defer_count = state.get("dream_defer_count", 0)
-
-    # P50 — complexity clustering signals: tag domains where ≥2 complex/chaotic decisions
-    # cluster. Mirrors compass/_monolith.py's _get_complexity_clustering_signals(), but reads
-    # from the `decisions` list already loaded above rather than re-reading decisions.jsonl.
-    complexity_clustering_signals = _complexity_clustering_signals(decisions)
 
     # P47 — Strategic Assumption Audit due chip
     assumption_audit_due, assumption_audit_candidates = _check_assumption_audit_due(
@@ -1029,6 +1050,7 @@ def load_namespace(ns_dir):
         "reality_completeness_score": reality_completeness_score,
         "suggested_goal_count":      suggested_goal_count,
         "research_due":              research_due,
+        "research_status":           research_status,
         "code_review_due":           code_review_due,
         "code_review_status":        code_review_status,
         "watches":                   watches,
@@ -1164,7 +1186,14 @@ def _card_html(n, i, community_published=None):
             deferred_html = f'<span class="deferred-chip">{dc} deferred</span>'
 
     dream_html     = '<span class="dream-chip">🌙 dream due</span>' if n["dream_due"] else ""
-    research_html  = '<span class="cadence-chip research">🔬 research due</span>' if n["research_due"] else ""
+    if n["research_due"]:
+        if n.get("research_status", {}).get("pulled_forward_by_complexity"):
+            research_html = ('<span class="cadence-chip research" title="Pulled forward by '
+                              'complex/chaotic decision clustering, not session cadence">🔬 research due ⚡</span>')
+        else:
+            research_html = '<span class="cadence-chip research">🔬 research due</span>'
+    else:
+        research_html = ""
     if n["code_review_due"]:
         if n.get("code_review_status", {}).get("pulled_forward_by_complexity"):
             review_html = ('<span class="cadence-chip review" title="Pulled forward by '
@@ -1561,6 +1590,9 @@ def _js_data(namespaces):
             "realityCompletenessScore": n["reality_completeness_score"],
             "suggestedGoalCount":       n["suggested_goal_count"],
             "researchDue":             n["research_due"],
+            "researchStatus":          n.get("research_status", {
+                "due": n["research_due"], "pulled_forward_by_complexity": False,
+            }),
             "codeReviewDue":           n["code_review_due"],
             "codeReviewStatus":        n.get("code_review_status", {
                 "due": n["code_review_due"], "pulled_forward_by_complexity": False,

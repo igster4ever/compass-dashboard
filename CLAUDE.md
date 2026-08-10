@@ -110,11 +110,18 @@ reference an out-of-scope identifier and throw.
 
 ## Tab system (two tiers — don't confuse them)
 
-**Top-level view tabs** (`.view-tab`, `switchView(v)`) — full-page views:
+**Top-level view tabs** (`.view-tab`, `switchView(v)`) — full-page views. `switchView()`'s
+own `forEach` array is the authoritative list — this table just names what each one is for:
 - `overview` — card grid + namespace detail panel
 - `priorities` — cross-namespace priority signals
+- `scorecard` — namespace fitness across 5 axes (parallel coordinates + ranked table)
 - `dag` — force-directed dependency graph
-- `heatmap` — session activity heatmap
+- `heatmap` — session activity heatmap (with sub-selectors: activity, goal completion, velocity, goal types, planning, session timeline)
+- `timeline` — cumulative learnings-by-tag line chart (Learning Timeline)
+- `decisions` — global decisions registry across all namespaces
+- `artefacts` — cross-namespace artefact browser
+- `mindmap` — radial tree view of a namespace's learnings/decisions/goals/reality
+- `community` — cross-namespace federation feed health + trust registry + adoption Sankey
 
 Each view has `id="view-<name>"` and `id="vtab-<name>"`. Adding a new view tab requires:
 1. Button in the `<nav>` HTML
