@@ -44,7 +44,7 @@ function extractFunction(name) {
   return html.slice(start, i + 1);
 }
 
-const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines'];
+const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue'];
 const source = PURE_HELPERS.map(extractFunction).join('\n\n');
 // `source` is read only from this repo's own scripts/template.html (never from
 // user input, network, or CLI args) — there is no untrusted-string injection
@@ -138,4 +138,78 @@ test('renderYAxisGridlines() emits one line+label pair per tick, honoring dash',
   assert.match(svg, /y1="65\.0"/);
   // value 100 sits at the top of the chart area (chartTop)
   assert.match(svg, /y1="5\.0"/);
+});
+
+test('healthColor() thresholds match Scorecard bands', () => {
+  assert.equal(helpers.healthColor(80), '#3fb950');
+  assert.equal(helpers.healthColor(68), '#3fb950');
+  assert.equal(helpers.healthColor(50), '#d29922');
+  assert.equal(helpers.healthColor(40), '#d29922');
+  assert.equal(helpers.healthColor(10), '#f85149');
+});
+
+test('radarAxisValue() computes recency from days since last session', () => {
+  const ns = { open: false, lastClose: '5d ago' };
+  const r = helpers.radarAxisValue(ns, 'recency');
+  assert.equal(r.fallback, false);
+  // 100 - 5 * (100/30) = ~83.33
+  assert.ok(Math.abs(r.value - 83.33) < 0.1);
+});
+
+test('radarAxisValue() falls back to 50 with fallback:true when discipline/maturity data is missing', () => {
+  const ns = { goalRate: null, realityCompletenessScore: null };
+  const discipline = helpers.radarAxisValue(ns, 'discipline');
+  const maturity = helpers.radarAxisValue(ns, 'maturity');
+  assert.deepEqual(discipline, { value: 50, fallback: true });
+  assert.deepEqual(maturity, { value: 50, fallback: true });
+});
+
+test('radarAxisValue() uses real discipline/maturity values when present, fallback:false', () => {
+  const ns = { goalRate: 72, realityCompletenessScore: 61 };
+  assert.deepEqual(helpers.radarAxisValue(ns, 'discipline'), { value: 72, fallback: false });
+  assert.deepEqual(helpers.radarAxisValue(ns, 'maturity'), { value: 61, fallback: false });
+});
+
+test('radarAxisValue() caps learning at 2 learnings/session = 100%', () => {
+  const ns = { sessionCount: 2, learnings: [1, 2, 3, 4] }; // 2/session
+  assert.deepEqual(helpers.radarAxisValue(ns, 'learning'), { value: 100, fallback: false });
+  const nsZero = { sessionCount: 0, learnings: [] };
+  assert.deepEqual(helpers.radarAxisValue(nsZero, 'learning'), { value: 0, fallback: false });
+});
+
+test('radarAxisValue() focus approaches 100 with zero deferred items, drops as deferred grows', () => {
+  assert.deepEqual(helpers.radarAxisValue({ deferred: [] }, 'focus'), { value: 100, fallback: false });
+  const withThree = helpers.radarAxisValue({ deferred: [1, 2, 3] }, 'focus');
+  assert.ok(withThree.value < 30 && withThree.value > 20); // 1/(1+3)*100 = 25
+});
+
+test('radarAxisValue() corpus health and exploration ratio fall back when null', () => {
+  const ns = { corpusHealth: null, explorationRatio: null };
+  assert.deepEqual(helpers.radarAxisValue(ns, 'corpusHealth'), { value: 50, fallback: true });
+  assert.deepEqual(helpers.radarAxisValue(ns, 'explorationRatio'), { value: 50, fallback: true });
+});
+
+test('radarAxisValue() corpus health and exploration ratio read the .score/.ratio field when present', () => {
+  const ns = { corpusHealth: { score: 88 }, explorationRatio: { ratio: 30.5 } };
+  assert.deepEqual(helpers.radarAxisValue(ns, 'corpusHealth'), { value: 88, fallback: false });
+  assert.deepEqual(helpers.radarAxisValue(ns, 'explorationRatio'), { value: 30.5, fallback: false });
+});
+
+test('radarAxisValue() quality trend is % of high-quality sessions, 50 when no sessions classified', () => {
+  const ns = { qualityDist: { high: 3, neutral: 1, poor: 0 } };
+  assert.deepEqual(helpers.radarAxisValue(ns, 'qualityTrend'), { value: 75, fallback: false });
+  const nsEmpty = { qualityDist: { high: 0, neutral: 0, poor: 0 } };
+  assert.deepEqual(helpers.radarAxisValue(nsEmpty, 'qualityTrend'), { value: 50, fallback: true });
+});
+
+test('radarAxisValue() cadence pressure inverts the count of due flags out of 3', () => {
+  const nsNoneDue = { researchDue: false, codeReviewDue: false, dreamDue: false };
+  assert.deepEqual(helpers.radarAxisValue(nsNoneDue, 'cadencePressure'), { value: 100, fallback: false });
+  const nsAllDue = { researchDue: true, codeReviewDue: true, dreamDue: true };
+  assert.deepEqual(helpers.radarAxisValue(nsAllDue, 'cadencePressure'), { value: 0, fallback: false });
+});
+
+test('radarAxisValue() retrieval freshness drops 10 points per stale-surfacing learning, floors at 0', () => {
+  assert.deepEqual(helpers.radarAxisValue({ retrievalStaleCount: 0 }, 'retrievalFreshness'), { value: 100, fallback: false });
+  assert.deepEqual(helpers.radarAxisValue({ retrievalStaleCount: 15 }, 'retrievalFreshness'), { value: 0, fallback: false });
 });

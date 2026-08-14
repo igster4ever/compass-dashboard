@@ -2770,6 +2770,67 @@ function renderLearningTimeline() {
   </div>`;
 }
 
+// ── Radar chart (namespace detail) ────────────────────────────────────────────
+
+function healthColor(h) {
+  return h >= 68 ? '#3fb950' : h >= 40 ? '#d29922' : '#f85149';
+}
+
+const RADAR_AXIS_DEFS = [
+  { key: 'recency',            label: 'Recency',            tip: 'Days since last session (recent = high)' },
+  { key: 'discipline',         label: 'Discipline',         tip: 'Avg goal completion %' },
+  { key: 'maturity',           label: 'Maturity',           tip: 'Reality completeness score (% of bullets marked done)' },
+  { key: 'learning',           label: 'Learning',           tip: 'Learnings per session' },
+  { key: 'focus',              label: 'Focus',              tip: 'Low deferred items (fewer = high)' },
+  { key: 'corpusHealth',       label: 'Corpus health',      tip: 'Learnings corpus quality score (needs ≥ 3 active learnings)' },
+  { key: 'explorationRatio',   label: 'Exploration ratio',  tip: 'Explore vs exploit balance across sessions (needs ≥ 2 typed sessions)' },
+  { key: 'qualityTrend',       label: 'Quality trend',      tip: '% of recent sessions classified high-quality' },
+  { key: 'cadencePressure',    label: 'Cadence pressure',   tip: 'Inverted — high score means nothing overdue (review/research/dream)' },
+  { key: 'retrievalFreshness', label: 'Retrieval freshness', tip: 'Inverted — high score means few stale-but-still-surfacing learnings' },
+];
+
+const RADAR_DEFAULT_AXES = ['recency', 'discipline', 'maturity', 'learning', 'focus'];
+
+const _radar = { warning: '' };
+
+function radarAxisValue(ns, key) {
+  switch (key) {
+    case 'recency': {
+      const days = _daysSince(ns.open ? ns.lastOpen : ns.lastClose);
+      return { value: Math.max(0, Math.min(100, 100 - days * (100 / 30))), fallback: false };
+    }
+    case 'discipline':
+      return { value: ns.goalRate != null ? ns.goalRate : 50, fallback: ns.goalRate == null };
+    case 'maturity':
+      return { value: ns.realityCompletenessScore != null ? ns.realityCompletenessScore : 50, fallback: ns.realityCompletenessScore == null };
+    case 'learning': {
+      const perSession = ns.sessionCount > 0 ? (ns.learnings || []).length / ns.sessionCount : 0;
+      return { value: Math.min(100, perSession / 2 * 100), fallback: false };
+    }
+    case 'focus':
+      return { value: (1 / (1 + (ns.deferred || []).length)) * 100, fallback: false };
+    case 'corpusHealth':
+      return { value: ns.corpusHealth ? ns.corpusHealth.score : 50, fallback: !ns.corpusHealth };
+    case 'explorationRatio':
+      return { value: ns.explorationRatio ? ns.explorationRatio.ratio : 50, fallback: !ns.explorationRatio };
+    case 'qualityTrend': {
+      const qd = ns.qualityDist || {};
+      const total = (qd.high || 0) + (qd.neutral || 0) + (qd.poor || 0);
+      return { value: total > 0 ? (qd.high || 0) / total * 100 : 50, fallback: total === 0 };
+    }
+    case 'cadencePressure': {
+      const dueCount = [ns.researchDue, ns.codeReviewDue, ns.dreamDue].filter(Boolean).length;
+      return { value: 100 - (dueCount / 3 * 100), fallback: false };
+    }
+    case 'retrievalFreshness': {
+      const stale = ns.retrievalStaleCount || 0;
+      return { value: 100 - Math.min(100, stale * 10), fallback: false };
+    }
+    default:
+      return { value: 50, fallback: true };
+  }
+}
+
 // ── Scorecard ─────────────────────────────────────────────────────────────────
 
 function renderScorecard() {
@@ -2808,10 +2869,6 @@ function renderScorecard() {
     r.health = AXES.reduce((s, a) => s + r[a.key], 0) / AXES.length;
   });
   rows.sort((a, b) => b.health - a.health);
-
-  function healthColor(h) {
-    return h >= 68 ? '#3fb950' : h >= 40 ? '#d29922' : '#f85149';
-  }
 
   // ── Parallel coordinates SVG ─────────────────────────────────────────────
 
