@@ -472,6 +472,19 @@ class TestMindMap(unittest.TestCase):
         self.assertIn("'mindmap'", template)
         self.assertIn("renderMindMap", template)
 
+    def test_vtab_compare_button_in_template(self):
+        template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
+        self.assertIn('id="vtab-compare"', template)
+
+    def test_view_compare_div_in_template(self):
+        template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
+        self.assertIn('id="view-compare"', template)
+
+    def test_switchview_includes_compare(self):
+        template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
+        self.assertIn("'compare'", template)
+        self.assertIn("renderCompare", template)
+
     def test_mm_state_object_defined(self):
         template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
         self.assertIn("const _mm =", template)

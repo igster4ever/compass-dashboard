@@ -149,7 +149,7 @@ test('template.html script IIFE parses and executes without throwing', () => {
 
 test('every render* function exposed via switchView() runs against the fixture without throwing', () => {
   const sandbox = runScriptInSandbox();
-  const views = ['overview', 'priorities', 'scorecard', 'dag', 'heatmap', 'timeline', 'decisions', 'artefacts', 'mindmap', 'community'];
+  const views = ['overview', 'priorities', 'scorecard', 'dag', 'heatmap', 'timeline', 'decisions', 'artefacts', 'mindmap', 'community', 'compare'];
   for (const v of views) {
     assert.doesNotThrow(() => sandbox.window.switchView(v), `switchView('${v}') threw`);
   }
@@ -263,4 +263,20 @@ test('compareToggleNamespace() allows toggling down to 0 active namespaces (no s
   sandbox.window.compareToggleNamespace('example-ns-one');
   sandbox.window.compareToggleNamespace('example-ns-two');
   assert.doesNotThrow(() => sandbox.window.compareToggleNamespace('example-ns-one'));
+});
+
+test('switchView(\'compare\') renders the namespace picker, legend, and SVG without throwing', () => {
+  const sandbox = runScriptInSandbox();
+  assert.doesNotThrow(() => sandbox.window.switchView('compare'), 'switchView(\'compare\') threw');
+  const html = sandbox.document.getElementById('view-compare').innerHTML;
+  assert.match(html, /cmp-controls/);
+  assert.match(html, /<svg/);
+});
+
+test('compareToggleNamespace() re-render reflects the new namespace set in the DOM once view-compare exists', () => {
+  const sandbox = runScriptInSandbox();
+  sandbox.window.switchView('compare'); // creates #view-compare content, establishing the container
+  assert.doesNotThrow(() => sandbox.window.compareToggleNamespace('example-ns-two'));
+  const html = sandbox.document.getElementById('view-compare').innerHTML;
+  assert.match(html, /cmp-controls/);
 });

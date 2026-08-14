@@ -58,7 +58,7 @@ function extractConst(name) {
   return html.slice(start, i + 1);
 }
 
-const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex'];
+const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'compareActiveNamespaces', 'renderCompare'];
 const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES', 'NS_PALETTE', 'COMPARE_AXIS_DEFS'];
 // A minimal in-memory localStorage — radarActiveAxes() reads it; no test here
 // relies on cross-call persistence, so a single shared instance is fine.
@@ -298,4 +298,17 @@ test('_compareCentralityByNsIndex() derives weighted degree from computeAllEdges
   const degree = helpers._compareCentralityByNsIndex();
   assert.equal(degree.length, 2);
   assert.ok(degree[0] > 0 || degree[1] > 0, 'at least one namespace should have nonzero centrality from the dep edge');
+});
+
+test('renderCompare() shows an empty-state message when 0 namespaces are active', () => {
+  helpers.localStorage.setItem('compass-compare-namespaces', JSON.stringify([]));
+  const html = helpers.renderCompare();
+  assert.match(html, /select at least 1 namespace/i);
+});
+
+test('renderCompare() draws one polygon per active namespace, coloured by nsColor()', () => {
+  helpers.localStorage.setItem('compass-compare-namespaces', JSON.stringify(['ns-a', 'ns-b']));
+  const html = helpers.renderCompare();
+  assert.equal((html.match(/<polygon/g) || []).length >= 2, true, 'expected at least one data polygon per active namespace plus grid rings');
+  assert.match(html, new RegExp(helpers.nsColor('ns-a').replace('#', '#')));
 });
