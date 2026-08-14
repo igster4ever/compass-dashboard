@@ -2803,8 +2803,6 @@ const RADAR_AXIS_DEFS = [
 
 const RADAR_DEFAULT_AXES = ['recency', 'discipline', 'maturity', 'learning', 'focus'];
 
-const _radar = { warning: '' };
-
 function radarAxisValue(ns, key) {
   switch (key) {
     case 'recency': {
@@ -2853,25 +2851,24 @@ function radarActiveAxes() {
 
 function radarToggleAxis(key) {
   const active = radarActiveAxes();
+  let warning = '';
   if (active.has(key)) {
     if (active.size <= 3) {
-      _radar.warning = 'At least 3 axes needed — pick another before removing this one.';
+      warning = 'At least 3 axes needed — pick another before removing this one.';
     } else {
       active.delete(key);
-      _radar.warning = '';
     }
   } else {
     active.add(key);
-    _radar.warning = '';
   }
   localStorage.setItem('compass-radar-axes', JSON.stringify([...active]));
   if (Search.selected >= 0) {
     const tabEl = document.getElementById('tab-radar');
-    if (tabEl) tabEl.innerHTML = renderRadar(NS[Search.selected]);
+    if (tabEl) tabEl.innerHTML = renderRadar(NS[Search.selected], warning);
   }
 }
 
-function renderRadar(ns) {
+function renderRadar(ns, warning) {
   const active = radarActiveAxes();
   const axes = RADAR_AXIS_DEFS.filter(ax => active.has(ax.key));
   const N = axes.length;
@@ -2883,7 +2880,7 @@ function renderRadar(ns) {
     </label>`;
   }).join('');
 
-  const warningHtml = _radar.warning ? `<div class="radar-warning">${esc(_radar.warning)}</div>` : '';
+  const warningHtml = warning ? `<div class="radar-warning">${esc(warning)}</div>` : '';
 
   if (N < 3) {
     return `<div class="radar-wrap">

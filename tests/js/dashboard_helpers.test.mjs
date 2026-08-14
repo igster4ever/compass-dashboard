@@ -44,8 +44,35 @@ function extractFunction(name) {
   return html.slice(start, i + 1);
 }
 
-const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue'];
-const source = PURE_HELPERS.map(extractFunction).join('\n\n');
+function extractConst(name) {
+  const marker = `const ${name} = `;
+  const start = html.indexOf(marker);
+  if (start === -1) throw new Error(`const ${name} not found in template.html — has it been renamed?`);
+  let depth = 0, i = start + marker.length;
+  for (; i < html.length; i++) {
+    const c = html[i];
+    if (c === '[' || c === '{' || c === '(') depth++;
+    else if (c === ']' || c === '}' || c === ')') depth--;
+    else if (c === ';' && depth === 0) break;
+  }
+  return html.slice(start, i + 1);
+}
+
+const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar'];
+const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES'];
+// A minimal in-memory localStorage — radarActiveAxes() reads it; no test here
+// relies on cross-call persistence, so a single shared instance is fine.
+const localStorageShim = `
+  let localStorage = (() => {
+    const store = new Map();
+    return {
+      getItem: k => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: k => store.delete(k),
+    };
+  })();
+`;
+const source = localStorageShim + CONSTS.map(extractConst).join('\n\n') + '\n\n' + PURE_HELPERS.map(extractFunction).join('\n\n');
 // `source` is read only from this repo's own scripts/template.html (never from
 // user input, network, or CLI args) — there is no untrusted-string injection
 // surface here, just an in-repo test harness for embedded functions.
@@ -212,4 +239,12 @@ test('radarAxisValue() cadence pressure inverts the count of due flags out of 3'
 test('radarAxisValue() retrieval freshness drops 10 points per stale-surfacing learning, floors at 0', () => {
   assert.deepEqual(helpers.radarAxisValue({ retrievalStaleCount: 0 }, 'retrievalFreshness'), { value: 100, fallback: false });
   assert.deepEqual(helpers.radarAxisValue({ retrievalStaleCount: 15 }, 'retrievalFreshness'), { value: 0, fallback: false });
+});
+
+test('renderRadar() warning is a per-call parameter, not persistent module state — a namespace switch must never inherit a stale warning from a prior blocked toggle elsewhere', () => {
+  const ns = { open: false, lastClose: '5d ago', goalRate: 80, realityCompletenessScore: 60, sessionCount: 3, learnings: [], deferred: [] };
+  const withWarning = helpers.renderRadar(ns, 'At least 3 axes needed — pick another before removing this one.');
+  assert.match(withWarning, /At least 3 axes needed/);
+  const freshRenderNoWarningArg = helpers.renderRadar(ns);
+  assert.doesNotMatch(freshRenderNoWarningArg, /At least 3 axes needed/);
 });
