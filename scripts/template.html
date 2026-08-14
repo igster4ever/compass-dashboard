@@ -2985,6 +2985,28 @@ function _compareCentralityByNsIndex() {
   return degree;
 }
 
+function compareActiveNamespaces() {
+  let stored = null;
+  try { stored = JSON.parse(localStorage.getItem('compass-compare-namespaces')); } catch (e) { stored = null; }
+  const validNames = NS.map(n => n.namespace);
+  if (Array.isArray(stored)) {
+    return new Set(stored.filter(n => validNames.includes(n)));
+  }
+  const top5 = NS.slice().sort((a, b) => urgencyScore(b) - urgencyScore(a)).slice(0, 5).map(n => n.namespace);
+  return new Set(top5);
+}
+
+function compareToggleNamespace(namespace) {
+  const active = compareActiveNamespaces();
+  if (active.has(namespace)) active.delete(namespace);
+  else active.add(namespace);
+  localStorage.setItem('compass-compare-namespaces', JSON.stringify([...active]));
+  const container = document.getElementById('view-compare');
+  if (container) container.innerHTML = renderCompare();
+}
+
+function renderCompare() { return '<div class="empty-state">Compare chart coming in Task 3.</div>'; }
+
 // ── Scorecard ─────────────────────────────────────────────────────────────────
 
 function renderScorecard() {
@@ -4633,7 +4655,7 @@ Object.assign(window, {
   openSearch, closeSearch, closeSearchIfBackdrop, handleSearch, handleSearchKey, handleResultClick,
   toggleDAGSystem, resetDAGLayout, clearDAGFocus,
   mmNodeClick, mmResetView, mmSelectNs, mmToggleBridges, mmRotate,
-  radarToggleAxis,
+  radarToggleAxis, compareToggleNamespace,
 });
 })();
 </script>

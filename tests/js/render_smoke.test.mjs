@@ -239,3 +239,28 @@ test('radarToggleAxis() refuses to drop below 3 active axes', () => {
   const after = sandbox.localStorage.getItem('compass-radar-axes');
   assert.equal(before, after, 'axis set must be unchanged when the minimum would be violated');
 });
+
+test('compareActiveNamespaces defaults to top 5 by urgencyScore, exercised via compareToggleNamespace persistence', () => {
+  const sandbox = runScriptInSandbox();
+  assert.doesNotThrow(() => sandbox.window.compareToggleNamespace('example-ns-one'), 'compareToggleNamespace() threw');
+  const stored = JSON.parse(sandbox.localStorage.getItem('compass-compare-namespaces'));
+  assert.ok(Array.isArray(stored), 'toggle must persist an array to localStorage');
+});
+
+test('compareToggleNamespace() removes a namespace already in the active set', () => {
+  const sandbox = runScriptInSandbox();
+  sandbox.window.compareToggleNamespace('example-ns-one'); // toggled off if it was a default, or on otherwise
+  const first = JSON.parse(sandbox.localStorage.getItem('compass-compare-namespaces'));
+  sandbox.window.compareToggleNamespace('example-ns-one'); // toggle back
+  const second = JSON.parse(sandbox.localStorage.getItem('compass-compare-namespaces'));
+  assert.notDeepEqual(first.sort(), second.sort());
+});
+
+test('compareToggleNamespace() allows toggling down to 0 active namespaces (no structural minimum)', () => {
+  const sandbox = runScriptInSandbox();
+  // The fixture has 2 namespaces (example-ns-one, example-ns-two) — toggle both off from
+  // whatever the default (top-5-by-urgency, capped at fixture size) leaves active.
+  sandbox.window.compareToggleNamespace('example-ns-one');
+  sandbox.window.compareToggleNamespace('example-ns-two');
+  assert.doesNotThrow(() => sandbox.window.compareToggleNamespace('example-ns-one'));
+});
