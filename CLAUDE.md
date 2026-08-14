@@ -122,6 +122,10 @@ own `forEach` array is the authoritative list — this table just names what eac
 - `artefacts` — cross-namespace artefact browser
 - `mindmap` — radial tree view of a namespace's learnings/decisions/goals/reality
 - `community` — cross-namespace federation feed health + trust registry + adoption Sankey
+- `compare` — cross-namespace radar comparison: overlaid polygons on 6 fixed macro axes
+  (Maturity, Learnings, Decisions, Signals, Long-run discipline, Centrality), namespace
+  on/off toggle recalibrates min-max normalisation live; distinct from the per-namespace
+  `radar` sub-tab's toggleable micro axes
 
 Each view has `id="view-<name>"` and `id="vtab-<name>"`. Adding a new view tab requires:
 1. Button in the `<nav>` HTML
@@ -309,6 +313,34 @@ via `getElementById(...).innerHTML = ...` (as `radarToggleAxis()`'s re-render do
 readable this way. Every existing `switchTab()` sub-tab test already worked around this by
 asserting "does it throw" only, not content — the radar tests follow the same pattern, with
 content assertions living on the `radarToggleAxis()` re-render test instead.
+
+---
+
+## Cross-namespace Compare radar chart (2026-08-14)
+
+New top-level `compare` view tab (`renderCompare()`, `template.html`) overlays multiple
+namespaces as radar polygons on 6 fixed macro axes — distinct from the per-namespace radar's
+10 toggleable micro axes. Surface (2) from that feature's own deferred scope, now built on
+explicit request.
+
+Six fixed axes (`COMPARE_AXIS_DEFS`): Maturity (reality completeness), Learnings/Decisions/
+Signals (raw counts), Long-run discipline (average of `goalByMonth`, distinct from the
+per-namespace radar's "Discipline" axis which only reads the latest session's `goalRate`),
+and Centrality (weighted dependency degree from `computeAllEdges(true)`, reusing DAG's own
+`DEGREE_WEIGHT` map). No axis picker on this view — the 6 axes are fixed by design.
+
+Namespace toggle state persists to `localStorage['compass-compare-namespaces']` (separate
+key from the per-namespace radar's `compass-radar-axes`), defaulting to the top 5 namespaces
+by `urgencyScore()` (the same pure function Priorities already uses). Centrality is computed
+over the full namespace graph regardless of toggle state — it's an intrinsic relationship
+property — but min-max normalisation for every axis is scoped to only the currently active
+namespace set, so toggling visibly recalibrates every polygon's shape, not just the newly
+added/removed one.
+
+`nsColor(namespace)` was hoisted out of **three** independently-duplicated closures
+(`renderDecisionsView()`, `renderArtefactsView()`, and this feature's own first draft) into
+one shared function — same palette, same `NS`-array-position indexing as before, now with one
+definition instead of three to keep in sync.
 
 ---
 
