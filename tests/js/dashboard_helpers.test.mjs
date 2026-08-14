@@ -58,8 +58,8 @@ function extractConst(name) {
   return html.slice(start, i + 1);
 }
 
-const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar'];
-const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES'];
+const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex'];
+const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES', 'NS_PALETTE', 'COMPARE_AXIS_DEFS'];
 // A minimal in-memory localStorage — radarActiveAxes() reads it; no test here
 // relies on cross-call persistence, so a single shared instance is fine.
 const localStorageShim = `
@@ -72,11 +72,21 @@ const localStorageShim = `
     };
   })();
 `;
-const source = localStorageShim + CONSTS.map(extractConst).join('\n\n') + '\n\n' + PURE_HELPERS.map(extractFunction).join('\n\n');
+// Minimal NS fixture — nsColor()/compareAxisValue()/_compareCentralityByNsIndex() all
+// read the global NS array, which isn't defined by any extracted function itself.
+const nsFixtureShim = `
+  let NS = [
+    { namespace: 'ns-a', learnings: [{}], decisions: [{}, {}], externalSignals: [], realityCompletenessScore: 60, goalByMonth: { '2026-06': 70, '2026-07': 80 }, plannedActions: [], reality: '', topTags: [], open: false },
+    { namespace: 'ns-b', learnings: [], decisions: [], externalSignals: [{}, {}], realityCompletenessScore: null, goalByMonth: {}, plannedActions: ['depends on ns-a'], reality: '', topTags: [], open: false },
+  ];
+  let BLOCKING_EDGES = [];
+  let SYSTEM_NS = new Set(['global', 'compass']);
+`;
+const source = localStorageShim + nsFixtureShim + CONSTS.map(extractConst).join('\n\n') + '\n\n' + ['_addEdge', 'computeAllEdges', ...PURE_HELPERS].map(extractFunction).join('\n\n');
 // `source` is read only from this repo's own scripts/template.html (never from
 // user input, network, or CLI args) — there is no untrusted-string injection
 // surface here, just an in-repo test harness for embedded functions.
-const helpers = new Function(`${source}\nreturn { ${PURE_HELPERS.join(', ')} };`)();
+const helpers = new Function(`${source}\nreturn { ${PURE_HELPERS.join(', ')}, localStorage };`)();
 
 test('esc() escapes HTML-significant characters', () => {
   assert.equal(helpers.esc('<script>&"'), '&lt;script&gt;&amp;&quot;');
@@ -247,4 +257,45 @@ test('renderRadar() warning is a per-call parameter, not persistent module state
   assert.match(withWarning, /At least 3 axes needed/);
   const freshRenderNoWarningArg = helpers.renderRadar(ns);
   assert.doesNotMatch(freshRenderNoWarningArg, /At least 3 axes needed/);
+});
+
+test('nsColor() assigns a stable colour per namespace, indexed by NS array position', () => {
+  assert.equal(helpers.nsColor('ns-a'), '#6366f1');
+  assert.equal(helpers.nsColor('ns-b'), '#0ea5e9');
+});
+
+test('nsColor() falls back to grey for an unknown namespace name', () => {
+  assert.equal(helpers.nsColor('does-not-exist'), '#888');
+});
+
+test('compareAxisValue() maturity reads realityCompletenessScore, falls back to raw 50 when null', () => {
+  assert.deepEqual(helpers.compareAxisValue({ realityCompletenessScore: 72 }, 'maturity'), { value: 72, fallback: false });
+  assert.deepEqual(helpers.compareAxisValue({ realityCompletenessScore: null }, 'maturity'), { value: 50, fallback: true });
+});
+
+test('compareAxisValue() learnings/decisions/signals are raw counts, always defined', () => {
+  assert.deepEqual(helpers.compareAxisValue({ learnings: [{}, {}, {}] }, 'learnings'), { value: 3, fallback: false });
+  assert.deepEqual(helpers.compareAxisValue({ decisions: [] }, 'decisions'), { value: 0, fallback: false });
+  assert.deepEqual(helpers.compareAxisValue({ externalSignals: [{}] }, 'signals'), { value: 1, fallback: false });
+  assert.deepEqual(helpers.compareAxisValue({}, 'learnings'), { value: 0, fallback: false });
+});
+
+test('compareAxisValue() long-run discipline averages goalByMonth, falls back to raw 50 when empty', () => {
+  assert.deepEqual(helpers.compareAxisValue({ goalByMonth: { '2026-06': 60, '2026-07': 80 } }, 'longRunDiscipline'), { value: 70, fallback: false });
+  assert.deepEqual(helpers.compareAxisValue({ goalByMonth: {} }, 'longRunDiscipline'), { value: 50, fallback: true });
+});
+
+test('compareAxisValue() centrality reads the precomputed degree array, always defined', () => {
+  const degree = [5, 12];
+  assert.deepEqual(helpers.compareAxisValue({ _nsIdx: 0 }, 'centrality', degree), { value: 5, fallback: false });
+  assert.deepEqual(helpers.compareAxisValue({ _nsIdx: 1 }, 'centrality', degree), { value: 12, fallback: false });
+});
+
+test('_compareCentralityByNsIndex() derives weighted degree from computeAllEdges, indexed by NS position', () => {
+  // ns-b's plannedActions text is "depends on ns-a" — computeAllEdges() matches "ns-a" as a
+  // substring of ns-b's planned-work text, producing one 'dep' edge {source: 1, target: 0}
+  // (weight 3), so both degree[0] and degree[1] end up nonzero.
+  const degree = helpers._compareCentralityByNsIndex();
+  assert.equal(degree.length, 2);
+  assert.ok(degree[0] > 0 || degree[1] > 0, 'at least one namespace should have nonzero centrality from the dep edge');
 });

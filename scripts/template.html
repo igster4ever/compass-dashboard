@@ -2218,13 +2218,6 @@ function renderDecisionsView() {
       return av < bv ? sortDir : av > bv ? -sortDir : 0;
     });
 
-    const nsBadgeColour = (() => {
-      const palette = ['#6366f1','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
-      const map = {};
-      NS.forEach((ns, i) => { map[ns.namespace] = palette[i % palette.length]; });
-      return map;
-    })();
-
     const nsOptions = [...new Set(allDecisions.map(d => d.namespace))].sort();
 
     const clusterFilterHtml = clusterSignals.length === 0 ? '' : `
@@ -2248,7 +2241,7 @@ function renderDecisionsView() {
     const colDir = k => sortKey === k ? (sortDir === -1 ? ' ↓' : ' ↑') : '';
 
     const rows = sorted.map((d, i) => {
-      const bg = nsBadgeColour[d.namespace] || '#888';
+      const bg = nsColor(d.namespace);
       const dateStr = d.date ? d.date.slice(0, 10) : '—';
       const isExpanded = expandedIdx === i;
       const domainColour = { complex: 'var(--amber)', chaotic: 'var(--red)' }[d.complexity_domain] || '';
@@ -2327,10 +2320,6 @@ function renderArtefactsView() {
   const container = document.getElementById('view-artefacts');
   if (container.dataset.rendered) return;
 
-  const palette = ['#6366f1','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
-  const nsBadgeColour = {};
-  NS.forEach((ns, i) => { nsBadgeColour[ns.namespace] = palette[i % palette.length]; });
-
   const all = NS.flatMap(ns =>
     (ns.artefacts || []).map(a => ({ ...a, namespace: ns.namespace }))
   ).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
@@ -2355,7 +2344,7 @@ function renderArtefactsView() {
     const btnStyle = 'padding:.2rem .5rem;font-size:.72rem;border-radius:3px;border:1px solid var(--border);background:var(--panel);color:var(--text);cursor:pointer';
 
     const tableRows = rows.map(a => {
-      const bg       = nsBadgeColour[a.namespace] || '#888';
+      const bg       = nsColor(a.namespace);
       const date     = (a.created_at || '').slice(0, 10);
       const tags     = (a.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join(' ');
       const desc     = a.description ? `<span style="color:var(--muted);font-size:.78rem"> — ${esc(a.description)}</span>` : '';
@@ -2940,6 +2929,60 @@ function renderRadar(ns, warning) {
     ${warningHtml}
     ${svg}
   </div>`;
+}
+
+// ── Compare (cross-namespace) ─────────────────────────────────────────────────
+
+const NS_PALETTE = ['#6366f1','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6'];
+
+function nsColor(namespace) {
+  const i = NS.findIndex(n => n.namespace === namespace);
+  return i === -1 ? '#888' : NS_PALETTE[i % NS_PALETTE.length];
+}
+
+const COMPARE_AXIS_DEFS = [
+  { key: 'maturity',          label: 'Maturity',           tip: 'Reality completeness score' },
+  { key: 'learnings',         label: 'Learnings',          tip: 'Active learnings count' },
+  { key: 'decisions',         label: 'Decisions',          tip: 'Decisions logged count' },
+  { key: 'signals',           label: 'Signals',            tip: 'External research signals count' },
+  { key: 'longRunDiscipline', label: 'Long-run discipline', tip: 'Avg goal hit-rate across all history (goalByMonth)' },
+  { key: 'centrality',        label: 'Centrality',         tip: 'Weighted dependency/relationship degree vs other namespaces' },
+];
+
+function compareAxisValue(ns, key, degreeArr) {
+  switch (key) {
+    case 'maturity':
+      return { value: ns.realityCompletenessScore != null ? ns.realityCompletenessScore : 50, fallback: ns.realityCompletenessScore == null };
+    case 'learnings':
+      return { value: (ns.learnings || []).length, fallback: false };
+    case 'decisions':
+      return { value: (ns.decisions || []).length, fallback: false };
+    case 'signals':
+      return { value: (ns.externalSignals || []).length, fallback: false };
+    case 'longRunDiscipline': {
+      const months = Object.values(ns.goalByMonth || {});
+      const avg = months.length ? months.reduce((s, v) => s + v, 0) / months.length : null;
+      return { value: avg != null ? avg : 50, fallback: avg == null };
+    }
+    case 'centrality': {
+      const idx = ns._nsIdx;
+      const v = degreeArr && idx != null ? (degreeArr[idx] || 0) : 0;
+      return { value: v, fallback: false };
+    }
+    default:
+      return { value: 50, fallback: true };
+  }
+}
+
+function _compareCentralityByNsIndex() {
+  const DEGREE_WEIGHT = { dep: 3, blocking: 3, conflict: 2, shared: 1, concurrent: 1 };
+  const degree = new Array(NS.length).fill(0);
+  computeAllEdges(true).forEach(e => {
+    const w = DEGREE_WEIGHT[e.type] || 1;
+    degree[e.source] += w;
+    degree[e.target] += w;
+  });
+  return degree;
 }
 
 // ── Scorecard ─────────────────────────────────────────────────────────────────
