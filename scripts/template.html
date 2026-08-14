@@ -2831,6 +2831,36 @@ function radarAxisValue(ns, key) {
   }
 }
 
+function radarActiveAxes() {
+  let stored = null;
+  try { stored = JSON.parse(localStorage.getItem('compass-radar-axes')); } catch (e) { stored = null; }
+  const validKeys = RADAR_AXIS_DEFS.map(a => a.key);
+  const keys = Array.isArray(stored) ? stored.filter(k => validKeys.includes(k)) : [];
+  return new Set(keys.length >= 3 ? keys : RADAR_DEFAULT_AXES);
+}
+
+function radarToggleAxis(key) {
+  const active = radarActiveAxes();
+  if (active.has(key)) {
+    if (active.size <= 3) {
+      _radar.warning = 'At least 3 axes needed — pick another before removing this one.';
+    } else {
+      active.delete(key);
+      _radar.warning = '';
+    }
+  } else {
+    active.add(key);
+    _radar.warning = '';
+  }
+  localStorage.setItem('compass-radar-axes', JSON.stringify([...active]));
+  if (Search.selected >= 0) {
+    const tabEl = document.getElementById('tab-radar');
+    if (tabEl) tabEl.innerHTML = renderRadar(NS[Search.selected]);
+  }
+}
+
+function renderRadar(ns) { return '<div class="empty-state">Radar chart coming in Task 3.</div>'; }
+
 // ── Scorecard ─────────────────────────────────────────────────────────────────
 
 function renderScorecard() {
@@ -4479,6 +4509,7 @@ Object.assign(window, {
   openSearch, closeSearch, closeSearchIfBackdrop, handleSearch, handleSearchKey, handleResultClick,
   toggleDAGSystem, resetDAGLayout, clearDAGFocus,
   mmNodeClick, mmResetView, mmSelectNs, mmToggleBridges, mmRotate,
+  radarToggleAxis,
 });
 })();
 </script>

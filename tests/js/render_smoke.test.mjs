@@ -119,6 +119,14 @@ function runScriptInSandbox() {
   const sandbox = {};
   sandbox.window = sandbox; // `window.foo = ...` and bare `foo` resolve to the same object
   sandbox.document = makeDocumentStub();
+  sandbox.localStorage = (() => {
+    const store = new Map();
+    return {
+      getItem:    k => (store.has(k) ? store.get(k) : null),
+      setItem:    (k, v) => store.set(k, String(v)),
+      removeItem: k => store.delete(k),
+    };
+  })();
   sandbox.console = console;
   // Bounded synchronous rAF: DAG's sim loop self-schedules until _dag.tick >= 280
   // (see template.html's `_dag` state object) — calling back immediately exercises
@@ -188,4 +196,32 @@ test('search (⌘K) open/query/close cycle runs without throwing', () => {
   assert.doesNotThrow(() => sandbox.window.openSearch(), 'openSearch() threw');
   assert.doesNotThrow(() => sandbox.window.handleSearch('tooling'), 'handleSearch() threw');
   assert.doesNotThrow(() => sandbox.window.closeSearch(), 'closeSearch() threw');
+});
+
+test('radarToggleAxis() starting from defaults adds a new axis to the persisted set', () => {
+  const sandbox = runScriptInSandbox();
+  sandbox.window.selectCard(0);
+  assert.doesNotThrow(() => sandbox.window.radarToggleAxis('corpusHealth'), 'radarToggleAxis() threw');
+  const stored = JSON.parse(sandbox.localStorage.getItem('compass-radar-axes'));
+  assert.deepEqual(stored.slice().sort(), ['corpusHealth', 'discipline', 'focus', 'learning', 'maturity', 'recency'].sort());
+});
+
+test('radarToggleAxis() removes a default axis when more than 3 remain active', () => {
+  const sandbox = runScriptInSandbox();
+  sandbox.window.selectCard(0);
+  sandbox.window.radarToggleAxis('learning');
+  const stored = JSON.parse(sandbox.localStorage.getItem('compass-radar-axes'));
+  assert.deepEqual(stored.slice().sort(), ['discipline', 'focus', 'maturity', 'recency'].sort());
+});
+
+test('radarToggleAxis() refuses to drop below 3 active axes', () => {
+  const sandbox = runScriptInSandbox();
+  sandbox.window.selectCard(0);
+  // Default is 5 axes; remove down to 3, the 3rd removal attempt must be a no-op.
+  sandbox.window.radarToggleAxis('learning');
+  sandbox.window.radarToggleAxis('focus');
+  const before = sandbox.localStorage.getItem('compass-radar-axes');
+  sandbox.window.radarToggleAxis('maturity'); // would drop to 2 — must be blocked
+  const after = sandbox.localStorage.getItem('compass-radar-axes');
+  assert.equal(before, after, 'axis set must be unchanged when the minimum would be violated');
 });
