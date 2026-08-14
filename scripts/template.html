@@ -770,6 +770,16 @@
     .scard-bar-col { flex: 1; min-width: 0; }
     .scard-bar-bg  { height: 5px; border-radius: 3px; background: var(--surface); }
     .scard-bar-fg  { height: 5px; border-radius: 3px; }
+
+    /* ── Radar chart ── */
+    .radar-wrap { padding: .25rem 0; }
+    .radar-controls { display: flex; flex-wrap: wrap; gap: .5rem .9rem; margin-bottom: .75rem; }
+    .radar-axis-label {
+      font-size: .74rem; color: var(--muted); display: flex; align-items: center;
+      gap: .35rem; cursor: pointer; user-select: none;
+    }
+    .radar-axis-label input { cursor: pointer; }
+    .radar-warning { font-size: .74rem; color: #f85149; margin-bottom: .6rem; }
   </style>
 </head>
 <body>
@@ -933,13 +943,14 @@ function renderDetail(ns) {
   const baseTabs     = hasDecisions
     ? ['state', 'learnings', 'decisions', 'history']
     : ['state', 'learnings', 'history'];
-  const tabs   = [...baseTabs, 'tasks', ...(hasSignals ? ['signals'] : [])];
+  const tabs   = [...baseTabs, 'tasks', 'radar', ...(hasSignals ? ['signals'] : [])];
   const labels = {
     state:     'State',
     learnings: `Learnings (${ns.learnings.length})`,
     decisions: `Decisions (${(ns.decisions || []).length})`,
     history:   `History (${ns.sessionCount})`,
     tasks:     derivedTasks.length ? `Tasks (${derivedTasks.length})` : 'Tasks',
+    radar:     'Radar',
     signals:   `Signals (${(ns.externalSignals || []).length})`,
   };
 
@@ -983,6 +994,7 @@ function renderTab(tab, ns) {
   if (tab === 'decisions') return renderDecisions(ns);
   if (tab === 'history')   return renderHistory(ns);
   if (tab === 'tasks')     return renderTasks(ns);
+  if (tab === 'radar')     return renderRadar(ns);
   if (tab === 'signals')   return renderExternalSignals(ns);
   return '';
 }
@@ -2859,7 +2871,79 @@ function radarToggleAxis(key) {
   }
 }
 
-function renderRadar(ns) { return '<div class="empty-state">Radar chart coming in Task 3.</div>'; }
+function renderRadar(ns) {
+  const active = radarActiveAxes();
+  const axes = RADAR_AXIS_DEFS.filter(ax => active.has(ax.key));
+  const N = axes.length;
+
+  const pickerHtml = RADAR_AXIS_DEFS.map(ax => {
+    const checked = active.has(ax.key) ? ' checked' : '';
+    return `<label class="radar-axis-label" title="${esc(ax.tip)}">
+      <input type="checkbox"${checked} onchange="radarToggleAxis('${ax.key}')">${esc(ax.label)}
+    </label>`;
+  }).join('');
+
+  const warningHtml = _radar.warning ? `<div class="radar-warning">${esc(_radar.warning)}</div>` : '';
+
+  if (N < 3) {
+    return `<div class="radar-wrap">
+      <div class="radar-controls">${pickerHtml}</div>
+      ${warningHtml}
+      <div class="empty-state">Select at least 3 axes to draw the radar.</div>
+    </div>`;
+  }
+
+  const cx = 210, cy = 200, R = 150;
+  const ringFracs = [0.25, 0.5, 0.75, 1];
+
+  function pt(i, frac) {
+    const angle = i * 2 * Math.PI / N - Math.PI / 2;
+    return { x: cx + Math.cos(angle) * R * frac, y: cy + Math.sin(angle) * R * frac };
+  }
+
+  let svg = `<svg width="420" height="400" viewBox="0 0 420 400" style="display:block;overflow:visible">`;
+
+  ringFracs.forEach(frac => {
+    const ringPts = axes.map((_, i) => { const p = pt(i, frac); return `${p.x.toFixed(1)},${p.y.toFixed(1)}`; }).join(' ');
+    const dash = frac === 1 ? '' : ' stroke-dasharray="2,2"';
+    svg += `<polygon points="${ringPts}" fill="none" stroke="var(--border)" stroke-width="1"${dash}/>`;
+  });
+
+  axes.forEach((ax, i) => {
+    const edge = pt(i, 1);
+    svg += `<line x1="${cx}" y1="${cy}" x2="${edge.x.toFixed(1)}" y2="${edge.y.toFixed(1)}" stroke="var(--border)" stroke-width="1"/>`;
+    const label = pt(i, 1.16);
+    svg += `<text x="${label.x.toFixed(1)}" y="${label.y.toFixed(1)}" text-anchor="middle" fill="var(--muted)" font-size="10" font-family="monospace" font-weight="600"><title>${esc(ax.tip)}</title>${esc(ax.label)}</text>`;
+  });
+
+  const values = axes.map(ax => radarAxisValue(ns, ax.key));
+  const mean = values.reduce((s, v) => s + v.value, 0) / values.length;
+  const col = healthColor(mean);
+  const dataPts = values.map((v, i) => {
+    const frac = Math.max(0, Math.min(100, v.value)) / 100;
+    const p = pt(i, frac);
+    return `${p.x.toFixed(1)},${p.y.toFixed(1)}`;
+  }).join(' ');
+  svg += `<polygon points="${dataPts}" fill="${col}" fill-opacity="0.22" stroke="${col}" stroke-width="2" stroke-linejoin="round"/>`;
+
+  values.forEach((v, i) => {
+    const frac = Math.max(0, Math.min(100, v.value)) / 100;
+    const p = pt(i, frac);
+    if (v.fallback) {
+      svg += `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4" fill="none" stroke="${col}" stroke-width="1.5" stroke-dasharray="2,2"><title>${esc(axes[i].label)}: insufficient data, showing neutral midpoint</title></circle>`;
+    } else {
+      svg += `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3" fill="${col}"><title>${esc(axes[i].label)}: ${Math.round(v.value)}%</title></circle>`;
+    }
+  });
+
+  svg += '</svg>';
+
+  return `<div class="radar-wrap">
+    <div class="radar-controls">${pickerHtml}</div>
+    ${warningHtml}
+    ${svg}
+  </div>`;
+}
 
 // ── Scorecard ─────────────────────────────────────────────────────────────────
 

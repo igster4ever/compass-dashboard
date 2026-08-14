@@ -163,9 +163,23 @@ test('selectCard() renders the namespace detail panel (State/Learnings/Decisions
 test('switchTab() renders each namespace-detail sub-tab without throwing', () => {
   const sandbox = runScriptInSandbox();
   sandbox.window.selectCard(0);
-  for (const t of ['state', 'learnings', 'decisions', 'history', 'tasks', 'signals']) {
+  for (const t of ['state', 'learnings', 'decisions', 'history', 'tasks', 'radar', 'signals']) {
     assert.doesNotThrow(() => sandbox.window.switchTab(t), `switchTab('${t}') threw`);
   }
+});
+
+test('switchTab(\'radar\') runs without throwing', () => {
+  const sandbox = runScriptInSandbox();
+  sandbox.window.selectCard(0);
+  assert.doesNotThrow(() => sandbox.window.switchTab('radar'), 'switchTab(\'radar\') threw');
+});
+
+test('radarToggleAxis() re-render reflects the new axis set in the DOM', () => {
+  const sandbox = runScriptInSandbox();
+  sandbox.window.selectCard(0);
+  sandbox.window.radarToggleAxis('corpusHealth');
+  const html = sandbox.document.getElementById('tab-radar').innerHTML;
+  assert.match(html, /Corpus health/);
 });
 
 test('DAG force simulation runs to completion, and re-activating the tab (resume path) does not throw', () => {
