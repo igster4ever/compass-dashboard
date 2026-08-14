@@ -131,7 +131,9 @@ Each view has `id="view-<name>"` and `id="vtab-<name>"`. Adding a new view tab r
 5. A `render<Name>()` function
 
 **Namespace detail sub-tabs** (`.tab-btn`, `switchTab(t)`) — panels within a selected namespace:
-`state`, `learnings`, `decisions`, `history`, `tasks`
+`state`, `learnings`, `decisions`, `history`, `tasks`, `radar` (added 2026-08-14; `signals` also
+exists conditionally when `externalSignals` is non-empty — `renderDetail()`'s `tabs` array in
+`template.html` is the authoritative list)
 
 ---
 
@@ -271,6 +273,42 @@ dict from `load_namespace()`.** Any Python-side annotation of the mind-map tree 
 cross-namespace bridge info, a new node type) must hook into the JS-serialisation step in
 `_js_data()`, not the `namespaces` list built earlier in `generate()` — annotating the
 latter is silently discarded when `_js_data()` rebuilds the tree from scratch.
+
+---
+
+## Per-namespace Radar chart (2026-08-14)
+
+New `radar` sub-tab in the namespace detail panel (`renderRadar(ns)`, `template.html`) shows
+one namespace's health as a configurable radar/spider chart — distinct from the existing
+cross-namespace Scorecard tab (parallel coordinates across all namespaces), which is
+untouched by this feature.
+
+Ten toggleable axes (`RADAR_AXIS_DEFS`): Scorecard's original 5 (recency, discipline,
+maturity, learning, focus — on by default) plus 5 richer per-namespace health signals
+(corpus health, exploration ratio, quality trend, cadence pressure, retrieval freshness).
+Each axis is normalised to 0–100 independently per namespace via `radarAxisValue(ns, key)` —
+unlike Scorecard, there's no cross-namespace min-max normalisation here, since only one
+polygon is ever drawn. Axis selection is global (not per-namespace), persisted to
+`localStorage['compass-radar-axes']`, enforced at a minimum of 3 active axes.
+
+Null/insufficient-data axes (corpus health needs ≥3 learnings, exploration ratio needs ≥2
+typed sessions, quality trend needs ≥1 classified session) render as a dashed/hollow point at
+the neutral midpoint (50) rather than being dropped — keeps the polygon shape stable across
+namespace switches, with a tooltip explaining why.
+
+`healthColor()` was hoisted out of `renderScorecard()`'s closure to module scope so both
+Scorecard and the radar chart can share the same ≥68 green / ≥40 amber / red thresholds —
+if retuning those thresholds, only one definition needs to change now.
+
+**Gotcha hit during implementation:** `render_smoke.test.mjs`'s hand-rolled DOM stub doesn't
+parse `innerHTML` strings into real child nodes — so a nested element (e.g. `#tab-radar`,
+written as part of `renderDetail()`'s single parent-level `innerHTML` assignment) is invisible
+to a direct `document.getElementById('tab-radar')` lookup performed afterwards; that lookup
+returns a fresh, empty `FakeElement` instead. Only elements whose `innerHTML` is set *directly*
+via `getElementById(...).innerHTML = ...` (as `radarToggleAxis()`'s re-render does) are
+readable this way. Every existing `switchTab()` sub-tab test already worked around this by
+asserting "does it throw" only, not content — the radar tests follow the same pattern, with
+content assertions living on the `radarToggleAxis()` re-render test instead.
 
 ---
 
