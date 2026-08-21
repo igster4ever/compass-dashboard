@@ -141,6 +141,36 @@ exists conditionally when `externalSignals` is non-empty — `renderDetail()`'s 
 
 ---
 
+## Tasks sub-tab — Backlog "Tactical"/"Strategic" bullets (2026-08-21)
+
+`deriveTasks(ns)` (`template.html`) is a pure JS function — no compass source changes needed —
+that scans `ns.reality` (raw markdown) client-side for task candidates: `## What is next`
+bullets, inline `Next session: ...` lines, `plannedActions`, `deferred` opportunities, and
+recent `history[].incomplete` bullets. It did **not** previously read reality.md's `## Backlog`
+section at all, so namespaces that started organising their backlog under `### Tactical` /
+`### Strategic` H3 subheaders (a convention some namespaces' reality.md now use, independent
+of any compass-core change) had those items invisible in the dashboard's Tasks tab.
+
+Fixed by tracking an `inBacklogSection` + `backlogBucket` state through the same single-pass
+`realityLines.forEach()` that already tracks `inNextSection` — a `## Backlog` heading enters
+the section, `### Tactical`/`### Strategic` select the bucket, and any other heading (matched
+by the existing `/^#{1,4}\s/` exit check) clears both. Bullets found under Tactical get
+`src: 'backlog-tactical'` (score `N+3`, just under `next`), Strategic get `src:
+'backlog-strategic'` (score `N+1`, just above `deferred`) — tactical (near-term, actionable)
+outranks strategic (longer-range) by design. Italic placeholder lines like `*(empty — ...)*`
+are correctly skipped since they don't match the `- `/`* ` bullet regex.
+
+New badges `.task-src-tactical` (blue, reusing `--blue-bg`) and `.task-src-strategic` (a
+one-off `#a371f7` purple — no `--purple` CSS variable exists in this file's `:root`, unlike
+`--blue`/`--green`/`--amber`/`--red` which do) were added alongside the existing
+incomplete/next/planned/deferred badges in `renderTasks()`.
+
+Covered by two new cases in `tests/js/dashboard_helpers.test.mjs` (`deriveTasks` added to
+`PURE_HELPERS`) — bucket attribution + score ordering, and that a later heading (even a plain
+`##` one, not just `## Backlog` again) correctly stops attributing bullets to the prior bucket.
+
+---
+
 ## Data model — key fields in each NS object
 
 | Field | Source | Notes |

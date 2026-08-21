@@ -269,6 +269,8 @@
     .task-src-next       { background: rgba(63,185,80,.15);  color: var(--green); }
     .task-src-planned    { background: rgba(88,166,255,.15); color: var(--blue); }
     .task-src-deferred   { background: var(--surface); color: var(--muted); border: 1px solid var(--border); }
+    .task-src-tactical   { background: var(--blue-bg);  color: var(--blue); }
+    .task-src-strategic  { background: rgba(163,113,247,.15); color: #a371f7; }
     .task-recur { font-size: .67rem; color: var(--muted); }
     .task-empty { color: var(--muted); font-size: .82rem; padding: .5rem 0; }
 
@@ -1029,14 +1031,22 @@ function deriveTasks(ns) {
     });
   });
 
-  // 'What is next' section bullets and inline 'Next session:' lines in reality.md
+  // 'What is next' section bullets, '## Backlog' → 'Tactical'/'Strategic' subsections,
+  // and inline 'Next session:' lines in reality.md
   const realityLines = (ns.reality || '').split('\n');
   let inNextSection = false;
+  let inBacklogSection = false;
+  let backlogBucket = null; // 'tactical' | 'strategic' | null
   realityLines.forEach(line => {
     // Detect '## What is next' (compass skill canonical format)
-    if (/^#{1,4}\s+[Ww]hat\s+is\s+next/i.test(line)) { inNextSection = true; return; }
-    // Any subsequent heading exits the section
-    if (/^#{1,4}\s/.test(line)) { inNextSection = false; }
+    if (/^#{1,4}\s+[Ww]hat\s+is\s+next/i.test(line)) { inNextSection = true; inBacklogSection = false; backlogBucket = null; return; }
+    // Detect '## Backlog'
+    if (/^##\s+backlog/i.test(line)) { inBacklogSection = true; inNextSection = false; backlogBucket = null; return; }
+    // Within a backlog section, 'Tactical'/'Strategic' H3s select the bucket
+    if (inBacklogSection && /^###\s+tactical/i.test(line)) { backlogBucket = 'tactical'; return; }
+    if (inBacklogSection && /^###\s+strategic/i.test(line)) { backlogBucket = 'strategic'; return; }
+    // Any other heading exits both sections
+    if (/^#{1,4}\s/.test(line)) { inNextSection = false; inBacklogSection = false; backlogBucket = null; }
     if (inNextSection) {
       const bullet = line.match(/^\s*[-*]\s+(.+)/);
       if (!bullet) return;
@@ -1044,6 +1054,17 @@ function deriveTasks(ns) {
       const key = raw.toLowerCase().trim();
       if (raw.length > 2 && !candidates.has(key))
         candidates.set(key, { text: raw, score: N + 4, sessions: 1, src: 'next' });
+      return;
+    }
+    if (inBacklogSection && backlogBucket) {
+      const bullet = line.match(/^\s*[-*]\s+(.+)/);
+      if (!bullet) return;
+      const raw = bullet[1].trim();
+      const key = raw.toLowerCase().trim();
+      const src = backlogBucket === 'tactical' ? 'backlog-tactical' : 'backlog-strategic';
+      const score = backlogBucket === 'tactical' ? N + 3 : N + 1;
+      if (raw.length > 2 && !candidates.has(key))
+        candidates.set(key, { text: raw, score, sessions: 1, src });
       return;
     }
     // Inline 'Next session: ...' fallback
@@ -1077,8 +1098,8 @@ function deriveTasks(ns) {
 function renderTasks(ns) {
   const tasks = deriveTasks(ns);
   if (!tasks.length) return '<p class="task-empty">No pending tasks found — all clear.</p>';
-  const SRC_LABELS = { incomplete: 'incomplete', next: 'next session', planned: 'planned', deferred: 'deferred' };
-  const SRC_CLS    = { incomplete: 'task-src-incomplete', next: 'task-src-next', planned: 'task-src-planned', deferred: 'task-src-deferred' };
+  const SRC_LABELS = { incomplete: 'incomplete', next: 'next session', planned: 'planned', deferred: 'deferred', 'backlog-tactical': 'tactical', 'backlog-strategic': 'strategic' };
+  const SRC_CLS    = { incomplete: 'task-src-incomplete', next: 'task-src-next', planned: 'task-src-planned', deferred: 'task-src-deferred', 'backlog-tactical': 'task-src-tactical', 'backlog-strategic': 'task-src-strategic' };
   const rows = tasks.map((t, i) => {
     const rankCls = i < 3 ? ' top3' : '';
     const recur = t.sessions > 1 ? `<span class="task-recur">${t.sessions}× sessions</span>` : '';

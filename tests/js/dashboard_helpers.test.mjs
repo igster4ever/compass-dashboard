@@ -58,7 +58,7 @@ function extractConst(name) {
   return html.slice(start, i + 1);
 }
 
-const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'compareActiveNamespaces', 'renderCompare'];
+const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'compareActiveNamespaces', 'renderCompare', 'deriveTasks'];
 const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES', 'NS_PALETTE', 'COMPARE_AXIS_DEFS'];
 // A minimal in-memory localStorage — radarActiveAxes() reads it; no test here
 // relies on cross-call persistence, so a single shared instance is fine.
@@ -311,4 +311,43 @@ test('renderCompare() draws one polygon per active namespace, coloured by nsColo
   const html = helpers.renderCompare();
   assert.equal((html.match(/<polygon/g) || []).length >= 2, true, 'expected at least one data polygon per active namespace plus grid rings');
   assert.match(html, new RegExp(helpers.nsColor('ns-a').replace('#', '#')));
+});
+
+test('deriveTasks() surfaces "## Backlog" > "### Tactical"/"### Strategic" bullets as tactical/strategic tasks', () => {
+  const ns = {
+    history: [],
+    reality: [
+      '## Backlog',
+      '### Tactical',
+      '- wire up the missing retry metric',
+      '### Strategic',
+      '- explore a federated learnings index',
+    ].join('\n'),
+    plannedActions: [],
+    deferred: [],
+  };
+  const tasks = helpers.deriveTasks(ns);
+  const tactical = tasks.find(t => t.text === 'wire up the missing retry metric');
+  const strategic = tasks.find(t => t.text === 'explore a federated learnings index');
+  assert.equal(tactical.src, 'backlog-tactical');
+  assert.equal(strategic.src, 'backlog-strategic');
+  assert.ok(tactical.score > strategic.score, 'tactical items should outrank strategic items by default');
+});
+
+test('deriveTasks() stops attributing bullets to a backlog bucket once a new heading is reached', () => {
+  const ns = {
+    history: [],
+    reality: [
+      '## Backlog',
+      '### Tactical',
+      '- fix the flaky heatmap test',
+      '## Something else',
+      '- unrelated bullet should not be a task',
+    ].join('\n'),
+    plannedActions: [],
+    deferred: [],
+  };
+  const tasks = helpers.deriveTasks(ns);
+  assert.ok(tasks.some(t => t.text === 'fix the flaky heatmap test'));
+  assert.ok(!tasks.some(t => t.text === 'unrelated bullet should not be a task'));
 });
