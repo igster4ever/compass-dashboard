@@ -240,43 +240,42 @@ test('radarToggleAxis() refuses to drop below 3 active axes', () => {
   assert.equal(before, after, 'axis set must be unchanged when the minimum would be violated');
 });
 
-test('compareActiveNamespaces defaults to top 5 by urgencyScore, exercised via compareToggleNamespace persistence', () => {
+test('globalVisibleNames defaults to every namespace, exercised via globalToggleNamespace persistence', () => {
   const sandbox = runScriptInSandbox();
-  assert.doesNotThrow(() => sandbox.window.compareToggleNamespace('example-ns-one'), 'compareToggleNamespace() threw');
-  const stored = JSON.parse(sandbox.localStorage.getItem('compass-compare-namespaces'));
+  assert.doesNotThrow(() => sandbox.window.globalToggleNamespace('example-ns-one'), 'globalToggleNamespace() threw');
+  const stored = JSON.parse(sandbox.localStorage.getItem('compass-global-namespaces'));
   assert.ok(Array.isArray(stored), 'toggle must persist an array to localStorage');
 });
 
-test('compareToggleNamespace() removes a namespace already in the active set', () => {
+test('globalToggleNamespace() removes a namespace already in the active set', () => {
   const sandbox = runScriptInSandbox();
-  sandbox.window.compareToggleNamespace('example-ns-one'); // toggled off if it was a default, or on otherwise
-  const first = JSON.parse(sandbox.localStorage.getItem('compass-compare-namespaces'));
-  sandbox.window.compareToggleNamespace('example-ns-one'); // toggle back
-  const second = JSON.parse(sandbox.localStorage.getItem('compass-compare-namespaces'));
+  sandbox.window.globalToggleNamespace('example-ns-one'); // toggled off (default is all-visible)
+  const first = JSON.parse(sandbox.localStorage.getItem('compass-global-namespaces'));
+  sandbox.window.globalToggleNamespace('example-ns-one'); // toggle back
+  const second = JSON.parse(sandbox.localStorage.getItem('compass-global-namespaces'));
   assert.notDeepEqual(first.sort(), second.sort());
 });
 
-test('compareToggleNamespace() allows toggling down to 0 active namespaces (no structural minimum)', () => {
+test('globalSetAllNamespaces(false) allows toggling down to 0 active namespaces (no structural minimum)', () => {
   const sandbox = runScriptInSandbox();
-  // The fixture has 2 namespaces (example-ns-one, example-ns-two) — toggle both off from
-  // whatever the default (top-5-by-urgency, capped at fixture size) leaves active.
-  sandbox.window.compareToggleNamespace('example-ns-one');
-  sandbox.window.compareToggleNamespace('example-ns-two');
-  assert.doesNotThrow(() => sandbox.window.compareToggleNamespace('example-ns-one'));
+  assert.doesNotThrow(() => sandbox.window.globalSetAllNamespaces(false));
+  const stored = JSON.parse(sandbox.localStorage.getItem('compass-global-namespaces'));
+  assert.deepEqual(stored, []);
+  assert.doesNotThrow(() => sandbox.window.globalToggleNamespace('example-ns-one'));
 });
 
-test('switchView(\'compare\') renders the namespace picker, legend, and SVG without throwing', () => {
+test('switchView(\'compare\') renders the legend and SVG without throwing', () => {
   const sandbox = runScriptInSandbox();
   assert.doesNotThrow(() => sandbox.window.switchView('compare'), 'switchView(\'compare\') threw');
   const html = sandbox.document.getElementById('view-compare').innerHTML;
-  assert.match(html, /cmp-controls/);
+  assert.match(html, /cmp-legend/);
   assert.match(html, /<svg/);
 });
 
-test('compareToggleNamespace() re-render reflects the new namespace set in the DOM once view-compare exists', () => {
+test('globalToggleNamespace() re-render reflects the new namespace set in the DOM once view-compare exists', () => {
   const sandbox = runScriptInSandbox();
   sandbox.window.switchView('compare'); // creates #view-compare content, establishing the container
-  assert.doesNotThrow(() => sandbox.window.compareToggleNamespace('example-ns-two'));
+  assert.doesNotThrow(() => sandbox.window.globalToggleNamespace('example-ns-two'));
   const html = sandbox.document.getElementById('view-compare').innerHTML;
-  assert.match(html, /cmp-controls/);
+  assert.match(html, /cmp-legend/);
 });

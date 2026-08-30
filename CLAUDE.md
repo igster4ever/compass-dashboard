@@ -359,18 +359,70 @@ per-namespace radar's "Discipline" axis which only reads the latest session's `g
 and Centrality (weighted dependency degree from `computeAllEdges(true)`, reusing DAG's own
 `DEGREE_WEIGHT` map). No axis picker on this view — the 6 axes are fixed by design.
 
-Namespace toggle state persists to `localStorage['compass-compare-namespaces']` (separate
-key from the per-namespace radar's `compass-radar-axes`), defaulting to the top 5 namespaces
-by `urgencyScore()` (the same pure function Priorities already uses). Centrality is computed
-over the full namespace graph regardless of toggle state — it's an intrinsic relationship
-property — but min-max normalisation for every axis is scoped to only the currently active
-namespace set, so toggling visibly recalibrates every polygon's shape, not just the newly
-added/removed one.
-
 `nsColor(namespace)` was hoisted out of **three** independently-duplicated closures
 (`renderDecisionsView()`, `renderArtefactsView()`, and this feature's own first draft) into
 one shared function — same palette, same `NS`-array-position indexing as before, now with one
 definition instead of three to keep in sync.
+
+**Update (2026-08-30):** Compare's own namespace picker (`compareActiveNamespaces()`/
+`compareToggleNamespace()`, `localStorage['compass-compare-namespaces']`, top-5-by-urgency
+default) was removed and unified into the global namespace filter — see "Global namespace
+filter" below. `renderCompare()` now reads `visibleNS()`/`globalVisibleNames()` like every
+other affected view; min-max normalisation is still scoped to just the currently visible set,
+so toggling the header filter still recalibrates every polygon's shape.
+
+---
+
+## Global namespace filter (2026-08-30)
+
+A persistent header control (`#gfilter`, next to the search trigger) lets the user
+select/deselect which namespaces are visible, driving six views at once: Overview,
+Priorities, Scorecard, DAG, Heatmap, and Compare (Compare's own picker was retired in favour
+of this — see the Compare section above). Distinct from DAG's own `showSystem` toggle
+(hardcoded `SYSTEM_NS = {'global', 'compass'}` exclusion) and the per-namespace Radar's axis
+picker — this is a user-driven, namespace-*selection* filter, orthogonal to both.
+
+**State:** `globalVisibleNames()` returns a `Set` of visible namespace names, persisted to
+`localStorage['compass-global-namespaces']`; absent/invalid storage defaults to *every*
+namespace visible (a no-op filter), not a top-N-by-urgency default. `visibleNS()` returns
+`NS.filter(...)` against that set. `NS` itself is never mutated — it stays `const`, filtered
+copies only.
+
+**Per-view wiring** (all in `template.html`):
+- **Overview** has no render function — cards are static HTML baked at generation time
+  (`id="card-{i}"`, `compass-dashboard.py`). `refreshOverviewVisibility()` hides/shows
+  existing `#card-N` elements by membership, mirroring `initAttentionQueue()`'s existing
+  card-lookup-by-`data-idx` technique; it also clears the detail panel if the selected card
+  becomes hidden.
+- **Priorities**: `computePriorities()`'s `NS.flatMap` became `NS.map((ns,idx)=>({ns,idx}))`
+  `.filter(...).flatMap(...)` — **idx must stay an absolute index into `NS`**, not the
+  filtered array's own index, because `onclick="selectCard(${idx})"` looks up `NS[idx]`
+  directly. `detectSignals()`'s internal `NS.forEach` also gained a visibility check.
+- **Scorecard**: `NS.map(...)` → `visibleNS().map(...)`; added an empty-`rows` guard (render
+  an empty-state message) since an all-namespaces-hidden selection previously fed
+  `Math.min/max` an empty array (`Infinity`/`-Infinity` → `NaN` range).
+- **DAG**: node/edge indices are into the *full* `NS` array (`computeAllEdges` is always
+  `NS`-index-keyed) — do **not** filter `NS` itself here. `renderDAG()`'s node-building
+  `.filter(...)` chain (already pruning by `showSystem`/`SYSTEM_NS`) gained one more
+  `.filter(n => globalVisibleNames().has(n.ns.namespace))` link, same as the existing pattern.
+- **Heatmap**: each of the 7 sub-panel functions swapped its own `NS` references for
+  `visibleNS()` (`renderVelocityPanel`'s locally-scoped `activeNS` kept its name, just gained
+  the extra predicate alongside its existing `SYSTEM_NS` check).
+
+**Re-render on filter change** (`globalFilterRerender()`): Priorities and Compare have no
+render cache, so they're always just re-invoked. Scorecard/Heatmap-panels/DAG guard a cached
+render behind `dataset.rendered`/`_dag.rendered` — for those, `globalFilterRerender()` only
+clears-and-re-invokes ones that have **already been visited** (checked via their own guard
+flag), leaving never-visited ones alone since they'll read `visibleNS()` fresh the first time
+they're shown. This avoids needing to track "which view is currently active."
+
+**UI**: the header button's own `onclick="toggleGlobalFilter()"` opens `#gfilter-panel`, a
+checkbox list built by `renderGlobalFilterList()` (styled via the same `.cmp-ns-label`/
+`.cmp-swatch` classes Compare's old picker used) plus "All"/"None" quick actions
+(`globalSetAllNamespaces(true/false)`). A `document`-level `click` listener closes the panel
+on outside-click. `globalToggleNamespace`, `globalSetAllNamespaces`, and `toggleGlobalFilter`
+are exported via the `Object.assign(window, {...})` list (the 4th IIFE trap above) —
+`compareToggleNamespace` was removed from that list since the function no longer exists.
 
 ---
 

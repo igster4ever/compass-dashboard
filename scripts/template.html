@@ -793,6 +793,31 @@
     .cmp-ns-label input { cursor: pointer; }
     .cmp-swatch { width: .65rem; height: .65rem; border-radius: 2px; display: inline-block; flex-shrink: 0; }
     .cmp-legend { display: flex; flex-wrap: wrap; gap: .5rem 1rem; margin-bottom: .75rem; font-size: .74rem; color: var(--muted); }
+
+    /* ── Global namespace filter ── */
+    .gfilter { position: relative; }
+    .gfilter-btn {
+      display: flex; align-items: center; gap: .4rem;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 20px; padding: .35rem .85rem;
+      color: var(--subtle); font-size: .78rem; cursor: pointer;
+      font-family: inherit; transition: border-color .15s, color .15s;
+    }
+    .gfilter-btn:hover, .gfilter-btn.active { border-color: var(--blue); color: var(--text); }
+    .gfilter-panel {
+      display: none; position: absolute; top: calc(100% + 8px); right: 0; z-index: 500;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+      padding: .75rem; min-width: 220px; max-height: 320px; overflow-y: auto;
+      box-shadow: 0 12px 32px rgba(0,0,0,.35);
+    }
+    .gfilter-panel.open { display: block; }
+    .gfilter-actions { display: flex; gap: .5rem; margin-bottom: .6rem; }
+    .gfilter-actions button {
+      background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;
+      padding: .2em .6em; font-size: .68rem; color: var(--text); cursor: pointer; font-family: inherit;
+    }
+    .gfilter-actions button:hover { border-color: var(--blue); }
+    .gfilter-list { display: flex; flex-direction: column; gap: .35rem; }
   </style>
 </head>
 <body>
@@ -807,6 +832,18 @@
       <span class="search-trigger-icon">&#x2315;</span>
       <span class="search-trigger-label">Search…</span>
       <kbd class="search-trigger-kbd">⌘K</kbd>
+    </div>
+    <div class="gfilter" id="gfilter">
+      <button class="gfilter-btn" id="gfilter-btn" onclick="toggleGlobalFilter()" title="Filter which namespaces are shown across Overview, Priorities, Scorecard, DAG, Heatmap and Compare">
+        &#x2699; Filter <span id="gfilter-count"></span>
+      </button>
+      <div class="gfilter-panel" id="gfilter-panel">
+        <div class="gfilter-actions">
+          <button onclick="globalSetAllNamespaces(true)">All</button>
+          <button onclick="globalSetAllNamespaces(false)">None</button>
+        </div>
+        <div class="gfilter-list" id="gfilter-list"></div>
+      </div>
     </div>
     <div class="header-stats">
       <div class="hstat"><span class="hstat-val">[[N_NS]]</span><span class="hstat-lbl">namespaces</span></div>
@@ -1701,6 +1738,114 @@ function initAttentionQueue() {
   cards.forEach(c => grid.appendChild(c));
 }
 
+// ── Global namespace filter ───────────────────────────────────────────────────
+// Drives which namespaces are visible on Overview, Priorities, Scorecard, DAG,
+// Heatmap and Compare. Persisted; defaults to every namespace visible.
+
+const GLOBAL_NS_KEY = 'compass-global-namespaces';
+
+function globalVisibleNames() {
+  let stored = null;
+  try { stored = JSON.parse(localStorage.getItem(GLOBAL_NS_KEY)); } catch (e) { stored = null; }
+  const validNames = NS.map(n => n.namespace);
+  if (Array.isArray(stored)) return new Set(stored.filter(n => validNames.includes(n)));
+  return new Set(validNames);
+}
+
+function visibleNS() {
+  const visible = globalVisibleNames();
+  return NS.filter(ns => visible.has(ns.namespace));
+}
+
+function globalToggleNamespace(namespace) {
+  const visible = globalVisibleNames();
+  if (visible.has(namespace)) visible.delete(namespace); else visible.add(namespace);
+  localStorage.setItem(GLOBAL_NS_KEY, JSON.stringify([...visible]));
+  globalFilterRerender();
+}
+
+function globalSetAllNamespaces(allVisible) {
+  const names = allVisible ? NS.map(n => n.namespace) : [];
+  localStorage.setItem(GLOBAL_NS_KEY, JSON.stringify(names));
+  globalFilterRerender();
+  renderGlobalFilterList();
+}
+
+function refreshOverviewVisibility() {
+  const visible = globalVisibleNames();
+  NS.forEach((ns, i) => {
+    const card = document.getElementById('card-' + i);
+    if (!card) return;
+    card.style.display = visible.has(ns.namespace) ? '' : 'none';
+  });
+  if (Search.selected >= 0 && !visible.has(NS[Search.selected].namespace)) {
+    document.getElementById(`card-${Search.selected}`)?.classList.remove('selected');
+    document.getElementById('detail')?.classList.remove('visible');
+    Search.selected = -1;
+  }
+}
+
+// Every affected view is either cheap to always recompute (Priorities, Compare)
+// or guards a cached render with a `dataset.rendered`/`_dag.rendered` flag — for
+// those, only refresh views that have actually been visited before (clearing the
+// guard and re-invoking their render function), leaving never-visited ones alone
+// since they'll read visibleNS() fresh the first time they're shown.
+function globalFilterRerender() {
+  refreshOverviewVisibility();
+  renderPriorities();
+
+  const scorecardEl = document.getElementById('view-scorecard');
+  if (scorecardEl && scorecardEl.dataset.rendered) { delete scorecardEl.dataset.rendered; renderScorecard(); }
+
+  if (_dag.rendered) { _dag.rendered = false; renderDAG(); }
+
+  const heatmapPanels = {
+    sessions: renderSessionHeatmapPanel, goals: renderGoalHeatmapPanel,
+    velocity: renderVelocityPanel, goaltypes: renderGoalTypesPanel,
+    planning: renderPlanningPanel, swimlane: renderSwimlane,
+    quality: renderQualityTrendPanel,
+  };
+  Object.entries(heatmapPanels).forEach(([id, fn]) => {
+    const el = document.getElementById('hpanel-' + id);
+    if (el && el.dataset.rendered) { delete el.dataset.rendered; fn(); }
+  });
+
+  const compareEl = document.getElementById('view-compare');
+  if (compareEl) compareEl.innerHTML = renderCompare();
+
+  updateGlobalFilterButton();
+}
+
+function updateGlobalFilterButton() {
+  const countEl = document.getElementById('gfilter-count');
+  if (!countEl) return;
+  countEl.textContent = `(${globalVisibleNames().size}/${NS.length})`;
+}
+
+function renderGlobalFilterList() {
+  const list = document.getElementById('gfilter-list');
+  if (!list) return;
+  const visible = globalVisibleNames();
+  list.innerHTML = NS.slice().sort((a, b) => a.namespace.localeCompare(b.namespace)).map(ns => {
+    const checked = visible.has(ns.namespace) ? ' checked' : '';
+    const col = nsColor(ns.namespace);
+    return `<label class="cmp-ns-label">
+      <input type="checkbox"${checked} onchange="globalToggleNamespace('${ns.namespace}')">
+      <span class="cmp-swatch" style="background:${col}"></span>${esc(ns.namespace)}
+    </label>`;
+  }).join('');
+}
+
+function toggleGlobalFilter() {
+  const panel = document.getElementById('gfilter-panel');
+  const btn   = document.getElementById('gfilter-btn');
+  if (!panel || !btn) return;
+  const opening = !panel.classList.contains('open');
+  if (opening) renderGlobalFilterList();
+  panel.classList.toggle('open', opening);
+  btn.classList.toggle('active', opening);
+}
+
 // ── Priority scoring ──────────────────────────────────────────────────────────
 
 // Namespaces managed by tooling/the compass skill itself — excluded from priority ranking
@@ -1717,8 +1862,10 @@ function _daysSince(timeAgoStr) {
 }
 
 function computePriorities() {
-  return NS.flatMap((ns, idx) => {
+  const visible = globalVisibleNames();
+  return NS.map((ns, idx) => ({ ns, idx })).flatMap(({ ns, idx }) => {
     if (SYSTEM_NS.has(ns.namespace.toLowerCase())) return [];
+    if (!visible.has(ns.namespace)) return [];
     let score = 0;
     const reasons = [];
 
@@ -1812,9 +1959,11 @@ function detectSignals(ns) {
     if (!seen.has(s.detail)) { seen.add(s.detail); signals.push(s); }
   };
 
+  const visible = globalVisibleNames();
   NS.forEach(other => {
     if (other.namespace === ns.namespace) return;
     if (SYSTEM_NS.has(other.namespace.toLowerCase())) return;
+    if (!visible.has(other.namespace)) return;
     const otherLower = other.namespace.toLowerCase();
 
     // Both sessions open — context-switch cost
@@ -2210,7 +2359,17 @@ document.addEventListener('keydown', e => {
   }
 });
 
+document.addEventListener('click', e => {
+  const wrap = document.getElementById('gfilter');
+  if (wrap && !wrap.contains(e.target)) {
+    document.getElementById('gfilter-panel')?.classList.remove('open');
+    document.getElementById('gfilter-btn')?.classList.remove('active');
+  }
+});
+
 initAttentionQueue();
+refreshOverviewVisibility();
+updateGlobalFilterButton();
 
 // ── Decisions registry (E22) ──────────────────────────────────────────────────
 
@@ -2641,7 +2800,7 @@ function renderSessionHeatmapPanel() {
   // Collect all (namespace, YYYY-MM) session counts from full sessionDates
   const periodSet = new Set();
   const nsMap = {};  // namespace -> { 'YYYY-MM': count }
-  NS.forEach(ns => {
+  visibleNS().forEach(ns => {
     nsMap[ns.namespace] = {};
     (ns.sessionDates || []).forEach(d => {
       const period = d.slice(0, 7);  // 'YYYY-MM'
@@ -2656,7 +2815,7 @@ function renderSessionHeatmapPanel() {
     return;
   }
 
-  const nsSorted = NS.slice().sort((a, b) => (b.sessionCount || 0) - (a.sessionCount || 0));
+  const nsSorted = visibleNS().sort((a, b) => (b.sessionCount || 0) - (a.sessionCount || 0));
 
   // Colour levels: 0 = empty, 1–4 scaled to max count in any single cell
   const allCounts = nsSorted.flatMap(ns => periods.map(p => nsMap[ns.namespace][p] || 0));
@@ -3020,43 +3179,14 @@ function _compareCentralityByNsIndex() {
   return degree;
 }
 
-function compareActiveNamespaces() {
-  let stored = null;
-  try { stored = JSON.parse(localStorage.getItem('compass-compare-namespaces')); } catch (e) { stored = null; }
-  const validNames = NS.map(n => n.namespace);
-  if (Array.isArray(stored)) {
-    return new Set(stored.filter(n => validNames.includes(n)));
-  }
-  const top5 = NS.slice().sort((a, b) => urgencyScore(b) - urgencyScore(a)).slice(0, 5).map(n => n.namespace);
-  return new Set(top5);
-}
-
-function compareToggleNamespace(namespace) {
-  const active = compareActiveNamespaces();
-  if (active.has(namespace)) active.delete(namespace);
-  else active.add(namespace);
-  localStorage.setItem('compass-compare-namespaces', JSON.stringify([...active]));
-  const container = document.getElementById('view-compare');
-  if (container) container.innerHTML = renderCompare();
-}
-
 function renderCompare() {
-  const active = compareActiveNamespaces();
-  const activeNs = NS.filter(ns => active.has(ns.namespace));
-
-  const pickerHtml = NS.slice().sort((a, b) => a.namespace.localeCompare(b.namespace)).map(ns => {
-    const checked = active.has(ns.namespace) ? ' checked' : '';
-    const col = nsColor(ns.namespace);
-    return `<label class="cmp-ns-label">
-      <input type="checkbox"${checked} onchange="compareToggleNamespace('${ns.namespace}')">
-      <span class="cmp-swatch" style="background:${col}"></span>${esc(ns.namespace)}
-    </label>`;
-  }).join('');
+  // Namespace visibility is driven by the global header filter (globalVisibleNames()),
+  // shared with Overview/Priorities/Scorecard/DAG/Heatmap — Compare has no picker of its own.
+  const activeNs = visibleNS();
 
   if (activeNs.length === 0) {
     return `<div class="cmp-wrap">
-      <div class="cmp-controls">${pickerHtml}</div>
-      <div class="empty-state">Select at least 1 namespace to compare.</div>
+      <div class="empty-state">No namespaces selected — use the header Filter control to select at least 1.</div>
     </div>`;
   }
 
@@ -3123,7 +3253,6 @@ function renderCompare() {
   svg += '</svg>';
 
   return `<div class="cmp-wrap">
-    <div class="cmp-controls">${pickerHtml}</div>
     <div class="cmp-legend">${legendHtml}</div>
     ${svg}
   </div>`;
@@ -3145,7 +3274,7 @@ function renderScorecard() {
   ];
 
   // Raw scores
-  const rows = NS.map(ns => {
+  const rows = visibleNS().map(ns => {
     const days       = _daysSince(ns.open ? ns.lastOpen : ns.lastClose);
     const recency    = Math.max(0, Math.min(100, 100 - days * (100 / 30)));
     const discipline = (ns.goalRate !== null && ns.goalRate !== undefined) ? ns.goalRate : 50;
@@ -3154,6 +3283,11 @@ function renderScorecard() {
     const focus      = 1 / (1 + (ns.deferred || []).length);
     return { ns, recency, discipline, maturity, learning, focus };
   });
+
+  if (!rows.length) {
+    container.innerHTML = '<div class="empty-state" style="padding:2rem;text-align:center">No namespaces to score — check the global filter.</div>';
+    return;
+  }
 
   // Normalise maturity, learning, focus to 0–100
   ['maturity', 'learning', 'focus'].forEach(k => {
@@ -3278,7 +3412,7 @@ function renderGoalTypesPanel() {
   container.dataset.rendered = '1';
 
   // Collect per-namespace per-session E/X data
-  const rows = NS.filter(ns => (ns.goalTypeBySession || []).length > 0);
+  const rows = visibleNS().filter(ns => (ns.goalTypeBySession || []).length > 0);
   if (!rows.length) {
     container.innerHTML = '<div class="empty-state" style="padding:2rem">No goal type data yet. Use P23 goal type tagging (E/X) during session open to populate this chart.</div>';
     return;
@@ -3346,7 +3480,7 @@ function renderPlanningPanel() {
   if (container.dataset.rendered) return;
   container.dataset.rendered = '1';
 
-  const rows = NS.filter(ns => (ns.carryForwardTrend || []).length > 0);
+  const rows = visibleNS().filter(ns => (ns.carryForwardTrend || []).length > 0);
   if (!rows.length) {
     container.innerHTML = '<div class="empty-state" style="padding:2rem">No session history to analyse yet.</div>';
     return;
@@ -3410,7 +3544,7 @@ function renderSwimlane() {
   container.dataset.rendered = '1';
 
   // Collect all session dates across namespaces
-  const nsList = NS.filter(ns => ns.sessionDates && ns.sessionDates.length > 0);
+  const nsList = visibleNS().filter(ns => ns.sessionDates && ns.sessionDates.length > 0);
   if (!nsList.length) {
     container.innerHTML = '<div style="padding:2rem;color:var(--muted);text-align:center">No session history found.</div>';
     return;
@@ -3509,7 +3643,7 @@ function renderSwimlane() {
 
 function _renderQualityScoreSparklines() {
   // P51 composite quality score (score 0–1) per session, one sparkline per namespace
-  const nsWithHistory = NS.filter(ns => (ns.qualityHistory || []).length > 0);
+  const nsWithHistory = visibleNS().filter(ns => (ns.qualityHistory || []).length > 0);
   if (!nsWithHistory.length) return '';
 
   const COLORS = ['#58a6ff','#3fb950','#d29922','#f85149','#bc8cff','#79c0ff'];
@@ -3520,7 +3654,7 @@ function _renderQualityScoreSparklines() {
     const scores = hist.map(e => e.score || 0);
     const latest = scores[scores.length - 1];
     const weakest = hist[hist.length - 1]?.weakest_component || '';
-    const col = COLORS[NS.indexOf(ns) % COLORS.length];
+    const col = COLORS[ni % COLORS.length];
 
     // mini sparkline
     const pts = scores.map((s, i) => {
@@ -3569,8 +3703,9 @@ function renderQualityTrendPanel() {
   container.dataset.rendered = '1';
 
   // derive trend from goalByMonth (avg hit-rate per month, per namespace)
+  const rows = visibleNS();
   const allMonths = new Set();
-  NS.forEach(ns => Object.keys(ns.goalByMonth || {}).forEach(m => allMonths.add(m)));
+  rows.forEach(ns => Object.keys(ns.goalByMonth || {}).forEach(m => allMonths.add(m)));
   const months = Array.from(allMonths).sort();
 
   if (!months.length) {
@@ -3581,7 +3716,7 @@ function renderQualityTrendPanel() {
 
   const BAR_W = 12, BAR_GAP = 2, NS_GAP = 6;
   const BAR_H = 120, LABEL_H = 50;
-  const nsCount = NS.length;
+  const nsCount = rows.length;
   const groupW  = nsCount * (BAR_W + BAR_GAP) + NS_GAP;
   const W = months.length * groupW + 60;
   const H = BAR_H + LABEL_H + 30;
@@ -3589,14 +3724,14 @@ function renderQualityTrendPanel() {
   const COLORS = ['#58a6ff','#3fb950','#d29922','#f85149','#bc8cff','#79c0ff','#56d364','#f0883e','#e3b341','#38bdf8','#34d399','#a78bfa'];
 
   let bars = '', xLabels = '', legendItems = '';
-  NS.forEach((ns, ni) => {
+  rows.forEach((ns, ni) => {
     legendItems += `<span style="display:inline-flex;align-items:center;gap:.3rem;margin-right:.8rem;font-size:.68rem;color:var(--text-muted)">
       <span style="width:10px;height:10px;border-radius:2px;background:${COLORS[ni % COLORS.length]};display:inline-block"></span>${esc(ns.namespace)}</span>`;
   });
 
   months.forEach((m, mi) => {
     const gx = 40 + mi * groupW;
-    NS.forEach((ns, ni) => {
+    rows.forEach((ns, ni) => {
       const rate = (ns.goalByMonth || {})[m];
       if (rate == null) return;
       const barH = Math.round((rate / 100) * BAR_H);
@@ -3654,14 +3789,15 @@ function renderVelocityPanel() {
 
   // Build month -> { ns: count } from all sessionDates, last 12 months
   const allMonths = new Set();
-  NS.forEach(ns => (ns.sessionDates || []).forEach(d => allMonths.add(d.slice(0, 7))));
+  visibleNS().forEach(ns => (ns.sessionDates || []).forEach(d => allMonths.add(d.slice(0, 7))));
   const months = Array.from(allMonths).sort().slice(-12);
   if (!months.length) {
     container.innerHTML = '<p class="panel-msg">No session data available.</p>';
     return;
   }
 
-  const activeNS = NS.filter(ns => !SYSTEM_NS.has(ns.namespace.toLowerCase()));
+  const globalVisible = globalVisibleNames();
+  const activeNS = NS.filter(ns => !SYSTEM_NS.has(ns.namespace.toLowerCase()) && globalVisible.has(ns.namespace));
 
   // Tally counts per namespace per month
   const counts = {};  // ns.namespace -> [count per month]
@@ -3765,7 +3901,7 @@ function renderGoalHeatmapPanel() {
 
   const periodSet = new Set();
   const nsMap = {};
-  NS.forEach(ns => {
+  visibleNS().forEach(ns => {
     nsMap[ns.namespace] = ns.goalByMonth || {};
     Object.keys(nsMap[ns.namespace]).forEach(m => periodSet.add(m));
   });
@@ -3776,7 +3912,7 @@ function renderGoalHeatmapPanel() {
     return;
   }
 
-  const nsSorted = NS.slice().sort((a, b) => (b.sessionCount || 0) - (a.sessionCount || 0));
+  const nsSorted = visibleNS().sort((a, b) => (b.sessionCount || 0) - (a.sessionCount || 0));
 
   function qlevel(rate) {
     if (rate === undefined || rate === null) return 0;
@@ -4342,8 +4478,10 @@ function renderDAG() {
   }
 
   const container = document.getElementById('view-dag');
+  const visible = globalVisibleNames();
   const nodeData = NS.map((ns, i) => ({ ns, nsIdx: i, x: 0, y: 0, vx: 0, vy: 0, fixed: false }))
-    .filter(n => _dag.showSystem || !SYSTEM_NS.has(n.ns.namespace.toLowerCase()));
+    .filter(n => _dag.showSystem || !SYSTEM_NS.has(n.ns.namespace.toLowerCase()))
+    .filter(n => visible.has(n.ns.namespace));
   if (!nodeData.length) {
     container.innerHTML = '<div class="empty-state" style="padding:2rem;text-align:center">No namespaces to visualise.</div>';
     return;
@@ -4777,7 +4915,8 @@ Object.assign(window, {
   openSearch, closeSearch, closeSearchIfBackdrop, handleSearch, handleSearchKey, handleResultClick,
   toggleDAGSystem, resetDAGLayout, clearDAGFocus,
   mmNodeClick, mmResetView, mmSelectNs, mmToggleBridges, mmRotate,
-  radarToggleAxis, compareToggleNamespace,
+  radarToggleAxis,
+  toggleGlobalFilter, globalToggleNamespace, globalSetAllNamespaces,
 });
 })();
 </script>
