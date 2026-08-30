@@ -37,6 +37,9 @@ def make_ns(name, **overrides):
             {"learning_id": "l2", "text": "Example hypothesis learning", "tags": ["architecture"],
              "weight": 1, "date": "2026-07-15T00:00:00Z", "learning_type": "hypothesis",
              "confidence": "medium", "status": "active"},
+            {"learning_id": "l4", "text": "Example warning-zone learning", "tags": ["process"],
+             "weight": 2, "date": "2026-07-18T00:00:00Z", "learning_type": "fact", "zone": "warning",
+             "confidence": "medium", "status": "active"},
         ],
         "superseded_count": 1, "decisions": [
             {"decision": "Chose approach A", "rationale": "Simpler", "alternatives": "Approach B",
@@ -66,7 +69,23 @@ def make_ns(name, **overrides):
         "watches": [], "watch_signals": {"bootstrapped": False, "signals": [], "total_signals": 0, "empty": True},
         "intent_version": 1, "stale_bullet_count": 0,
         "back_refs_by_text": {}, "conflicts_by_text": {}, "intent_history": [],
-        "corpus_health": {"score": 80, "unvalidatedHypotheses": 1, "lowWeightCount": 1, "totalActive": 2, "supersededCount": 1},
+        "corpus_health": {"score": 80, "unvalidatedHypotheses": 1, "lowWeightCount": 1, "totalActive": 3, "supersededCount": 1},
+        "zone_distribution": {"golden": 1, "warning": 1, "preference": 0, "unclassified": 1},
+        "goal_contracts": [
+            {"goal_hash": "abc123", "goal_text": "Ship the verification-contracts panel",
+             "criteria": [{"text": "coverage chip renders", "met": True}, {"text": "criteria list renders", "met": True}],
+             "evidence_type": "document", "stopping_condition": "n/a",
+             "created_at": "2026-08-01T00:00:00Z", "verified_at": "2026-08-02T00:00:00Z",
+             "criteria_hit_rate": 1.0, "status": "verified"},
+        ],
+        "contract_coverage": 1.0, "criteria_hit_rate": 1.0,
+        "decision_guidance": [
+            {"guidance_id": "g1", "context_summary": "Choosing a sync strategy for the community feed",
+             "preferred_decision_text": "Use event-driven append-to-feed.jsonl",
+             "avoided_decision_text": "Poll feed.jsonl on a fixed interval",
+             "evidence": {"preferred_quality": 0.86, "avoided_quality": 0.61},
+             "status": "active", "created_at": "2026-08-25T09:12:03Z"},
+        ],
         "retrieval_stale_count": 0, "external_signals": [],
         "exploration_ratio": {"ratio": 25.0, "sessionsWithTypes": 4, "explore": 1, "total": 4, "low": False},
         "last_reality_score": 50.0, "outcome_rate": 0.5,
@@ -85,7 +104,10 @@ def make_ns(name, **overrides):
         "sessions_since_skill_opt": 3, "skill_opt_due": False,
         "quality_history": [{"session_id": "s1", "score": 0.7, "components": {}, "recorded_at": "2026-07-01T00:00:00Z"},
                              {"session_id": "s2", "score": 0.75, "components": {}, "recorded_at": "2026-07-15T00:00:00Z"},
-                             {"session_id": "s3", "score": 0.8, "components": {}, "recorded_at": "2026-08-01T00:00:00Z"}],
+                             {"session_id": "s3", "score": 0.8, "weakest_component": "reality_freshness",
+                              "components": {"goal_completion_rate": 0.9, "outcome_rate": 0.8,
+                                             "learnings_density": 0.85, "reality_freshness": 0.6},
+                              "recorded_at": "2026-08-01T00:00:00Z"}],
         "skillopt_holdout_frozen": True, "skillopt_holdout_mean": 0.72,
         "skillopt_rounds_completed": 1, "skillopt_rwi": 0,
         "quality_plateau": {"plateaued": False, "insufficient_sample": False, "sessions_checked": 3, "trend": "improving", "delta": 0.1},
@@ -105,7 +127,8 @@ def build():
         make_ns("example-ns-two", open_session=True, planned_actions=["Do a thing"], learnings=[
             {"learning_id": "l3", "text": "Shared tooling insight", "tags": ["tooling"], "weight": 2,
              "date": "2026-07-20T00:00:00Z", "learning_type": "fact", "status": "active"},
-        ]),
+        ], zone_distribution={"golden": 0, "warning": 0, "preference": 0, "unclassified": 1},
+           goal_contracts=[], contract_coverage=None, criteria_hit_rate=None, decision_guidance=[]),
     ]
 
     for n in ns_list:

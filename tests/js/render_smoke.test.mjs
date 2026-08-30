@@ -212,6 +212,57 @@ test('search (⌘K) open/query/close cycle runs without throwing', () => {
   assert.doesNotThrow(() => sandbox.window.closeSearch(), 'closeSearch() threw');
 });
 
+test('learnings tab (zone distribution, filterLearningZone) renders without throwing', () => {
+  const sandbox = runScriptInSandbox();
+  sandbox.window.selectCard(0);
+  assert.doesNotThrow(() => sandbox.window.switchTab('learnings'), "switchTab('learnings') threw");
+  // Per CLAUDE.md's documented DOM-stub limitation (nested innerHTML isn't parsed into
+  // real child nodes), filterLearningZone's table.querySelectorAll('tbody tr') can't see
+  // any rows here — this only proves the exported function itself runs end-to-end
+  // without throwing, matching every other switchTab() sub-tab test's "does it throw"
+  // convention (see render_smoke's own file-header comment).
+  assert.doesNotThrow(
+    () => sandbox.window.filterLearningZone('ltable-example-ns-one', 'example-ns-one', 'golden'),
+    'filterLearningZone() threw'
+  );
+  // Toggling the same zone again (click-to-clear) must also not throw.
+  assert.doesNotThrow(
+    () => sandbox.window.filterLearningZone('ltable-example-ns-one', 'example-ns-one', 'golden'),
+    'filterLearningZone() toggle-off threw'
+  );
+});
+
+test('decisions tab (decision guidance) renders without throwing', () => {
+  const sandbox = runScriptInSandbox();
+  sandbox.window.selectCard(0);
+  assert.doesNotThrow(() => sandbox.window.switchTab('decisions'), "switchTab('decisions') threw");
+});
+
+test('decisions tab renders without throwing for a namespace with no decision guidance', () => {
+  const sandbox = runScriptInSandbox();
+  // example-ns-two's fixture has decisionGuidance: [] — must render byte-identical to
+  // pre-P65 output (renderDecisionGuidance returns '' for an empty array).
+  sandbox.window.selectCard(1);
+  assert.doesNotThrow(() => sandbox.window.switchTab('decisions'), "switchTab('decisions') threw");
+});
+
+test('global decisions view renders the guidance breadcrumb without throwing', () => {
+  const sandbox = runScriptInSandbox();
+  assert.doesNotThrow(() => sandbox.window.switchView('decisions'), "switchView('decisions') threw");
+});
+
+test('state tab (verification contracts) renders without throwing', () => {
+  const sandbox = runScriptInSandbox();
+  sandbox.window.selectCard(0);
+  assert.doesNotThrow(() => sandbox.window.switchTab('state'), "switchTab('state') threw");
+});
+
+test('heatmap quality panel (component breakdown) renders without throwing', () => {
+  const sandbox = runScriptInSandbox();
+  sandbox.window.switchView('heatmap');
+  assert.doesNotThrow(() => sandbox.window.switchHeatmap('quality'), "switchHeatmap('quality') threw");
+});
+
 test('radarToggleAxis() starting from defaults adds a new axis to the persisted set', () => {
   const sandbox = runScriptInSandbox();
   sandbox.window.selectCard(0);

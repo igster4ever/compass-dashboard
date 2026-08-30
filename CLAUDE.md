@@ -18,13 +18,16 @@ python3 scripts/compass-dashboard.py
 
 ```
 scripts/
-├── compass-dashboard.py   — data layer + generate() + main()   (~1,098 lines)
+├── compass-dashboard.py   — data layer + generate() + main()   (~1,830 lines)
 │   ├── load_namespace()    — reads state.json, *.md, *.jsonl, history/*.md
 │   ├── _js_data()          — serialises NS array as JSON embedded in HTML
 │   └── generate()          — reads template.html, injects [[PLACEHOLDER]] markers
-└── template.html           — HTML + <style> + <script>          (~3,961 lines)
+└── template.html           — HTML + <style> + <script>          (~5,020 lines)
     └── JS                  — all interactivity; operates on const NS = [...]
 ```
+
+(Line counts drift fast — treat these as ballpark, not authoritative; `wc -l` the files
+directly rather than trusting a figure here if it matters for your task.)
 
 All data is baked into `const NS = [...]` at generation time. There is no runtime backend
 and there never will be — static HTML only.
@@ -90,6 +93,17 @@ above, but a different cause. Check both when that error shows up.
 definition site inside `renderDecisionsView()` (closures over local render state), so they
 are deliberately *not* in the `Object.assign` list — don't add them there, it would
 reference an out-of-scope identifier and throw.
+
+**Fifth trap — plain `grep` can silently miss real matches in this file; use `grep -a`.**
+Discovered 2026-08-30 auditing zone/decision CSS: `grep -n 'decision-item' scripts/template.html`
+returned **zero** hits even though the class is used extensively (confirmed by opening the
+file), while `grep -a -n 'decision-item' scripts/template.html` found every occurrence
+immediately. Some byte sequence earlier in the file (candidates: the emoji/Unicode arrows
+used throughout, or the `\xa0` bytes from the third trap above) makes `grep` treat it as a
+binary file, and binary-mode `grep` without `-a`/`--text` reports matches inconsistently
+rather than erroring — so a "no matches" result here is not trustworthy proof of absence.
+**Always pass `-a` (or `--text`) when grepping this file**, and don't conclude a string is
+missing from `template.html` based on a plain `grep` alone.
 
 ---
 
@@ -187,6 +201,9 @@ Covered by two new cases in `tests/js/dashboard_helpers.test.mjs` (`deriveTasks`
 | `goalTypeBySession` | state.json `goal_completions` | `[{date, exploit, explore}]` chronological — computed by `_goal_type_by_session()`; pre-P23 sessions have `explore:0` |
 | `carryForwardTrend` | all history/*.md files | `[{date, carryForward, goalsCompleted}]` — uncapped, chronological; carry-forward = count of `## Incomplete` bullets |
 | `lastRealityScore` | state.json `last_reality_score` | previous session's reality completeness %; subtract from current to get delta |
+| `zoneDistribution` | active `learnings[]`, computed by `_zone_distribution()` | `{golden, warning, preference, unclassified}` counts — P56; top-level sibling to `corpusHealth`, not nested (meaningful even below `corpusHealth`'s 3-learning gate) |
+| `contracts[]` / `contractCoverage` / `criteriaHitRate` | state.json `goal_contracts`, computed by `_parse_goal_contracts()`/`_contract_coverage()` | P55 — see "Verification Contracts" section below |
+| `decisionGuidance[]` | `decision_guidance.jsonl` | P65 — see "Contrastive Decision-Guidance Mining" section below; empty in every namespace as of 2026-08-30 (feature shipped compass-core-side very recently, no adoption yet) |
 
 `history` is capped at 5 for rendering (planned/completed detail). `sessionDates` is the
 full set and must be used for any time-based visualisation.
@@ -201,7 +218,22 @@ full set and must be used for any time-based visualisation.
 
 **`active_learnings` filter — P33/P44 status exclusion (fixed 2026-07-22):** `load_namespace()` now filters via `not l.get("superseded_by") and l.get("status") not in ("archived", "superseded")` — the P33 forward-compat gap noted here previously was live: P44 (episodic learning auto-decay) ships in compass's `_monolith.py` and sets `status: "archived"` on stale episodic learnings, and the old filter only excluded `superseded_by`. Lines 370 and 405 in this file already handled both statuses correctly — only the `load_namespace()` filter (formerly ~line 500) was behind.
 
-**Constants sync:** `_COMPLETION_MARKERS`, `_BACKLOG_HEADERS`, and `_NON_ACHIEVEMENT_HEADERS` in this script are local copies of the same constants in `scripts/compass/reality.py`. They cannot be imported (stdlib-only constraint). If reality.py's constants change, update this script's copies to match. (`_NON_ACHIEVEMENT_HEADERS` was dashboard-local-only until 2026-07-18, when the same fix was ported upstream to `reality.py` — both copies are now in sync, not diverging.)
+**Constants sync:** `_COMPLETION_MARKERS`, `_BACKLOG_HEADERS`, `_NON_ACHIEVEMENT_HEADERS`, and
+now also `_contract_coverage()` (P55) are local copies/mirrors of compass core logic in
+`scripts/compass/reality.py`/`state.py`. They cannot be imported (stdlib-only constraint). If
+the compass-core originals change, update this script's copies to match. (`_NON_ACHIEVEMENT_HEADERS`
+was dashboard-local-only until 2026-07-18, when the same fix was ported upstream to
+`reality.py` — both copies are now in sync, not diverging.)
+
+**2026-08-30 audit found `_COMPLETION_MARKERS`/`_NON_ACHIEVEMENT_HEADERS` had drifted from
+real usage, not just from compass core.** `_COMPLETION_MARKERS` only had `✓` (U+2713); every
+real reality.md file uses `✅` (U+2705) exclusively, which nearly halved reported completeness
+scores in namespaces that only use the emoji (verified: `agentic-loopkit` 25.0% → 53.9% after
+the fix). `_NON_ACHIEVEMENT_HEADERS` was also missing three real headers (`blocked`, `known
+limitations`, `known doc staleness`) that were wrongly counted toward the denominator. Both
+fixed here — **compass core's own `reality.py` has the identical `✓`-only gap** (confirmed by
+reading its source), so it likely under-reports completeness for its own dream/review cadence
+gating too; that's a compass-core bug, out of scope for this repo, flagged for separate fixing.
 
 **Computed-at-read-time vs persisted fields:** before wiring a new compass field into `load_namespace()`, check whether `compass.py`/`_monolith.py` actually *persists* it in `state.json` or only *computes it fresh when compass's own `read()` runs*. Several fields have turned out to be the latter — `dream_due`, `exploration_ratio` (always stored as `None`), `quality_plateau`/`cadence_pull_forward`, and the `skill_opt` friction-gate annotation. For these, this script must replicate compass's own derivation logic rather than reading a value that "should" be there — grep the compass source for how the field is produced before assuming a plain `state.get("field")` will work.
 
@@ -426,6 +458,108 @@ are exported via the `Object.assign(window, {...})` list (the 4th IIFE trap abov
 
 ---
 
+## Verification Contracts, Decision Guidance & Zone distribution (2026-08-30)
+
+A gap audit found compass core had shipped P59 through P76 since this dashboard's last
+documented sync point (P58) — see `~/.claude/skills/compass/docs/roadmap-status.md` for the
+authoritative shipped-feature index if auditing again. Three of those subsystems were wired
+in this pass; several others (Contrastive Decision-Guidance's sibling P64 Gain-Gated Learning
+Promotion, P59 confidence calibration, P69 skill-feedback failure-dimension grouping, etc.)
+remain open gaps for a future session.
+
+**Verification Contracts (P55)** — `state.json["goal_contracts"]` (`{goal_hash: {goal_text,
+criteria, evidence_type, stopping_condition, created_at, verified_at, verified_criteria,
+unmet_criteria}}`) was populated by compass core (confirmed live: `compass` namespace has 7
+logged contracts) but never read by this dashboard. `_parse_goal_contracts(state)`
+(`compass-dashboard.py`, near `_goal_outcomes_breakdown`) flattens it into `ns.contracts[]`,
+merging compass core's separate `criteria`/`verified_criteria`/`unmet_criteria` arrays into a
+single ordered `criteria: [{text, met}]` list — this is a deliberate reshape (not a 1:1 mirror
+of state.json's shape) done to preserve the goal's authored criteria order for rendering,
+avoiding the need to interleave two lists client-side. `_contract_coverage(state, window=20)`
+mirrors compass core's `state.py::_compute_contract_coverage()` exactly (verified: running it
+against real `compass` namespace data produces `{'contract_coverage': 1.0, 'criteria_hit_rate':
+1.0}`, matching compass core's own output) — gated on ≥5 total logged contracts, else both
+stats are `None` (rendered as "not enough verified goals yet", the same null-means-below-
+threshold idiom used elsewhere for `outcomeRate`). `criteria_hit_rate` on an individual
+contract is `None` until that contract has actually been verified (not `0.0`) — a pending
+contract hasn't been evaluated yet, and `0.0` would misleadingly read as "failed evaluation."
+Rendered by `renderStateSection_GoalContracts(ns)` in `template.html`, following
+`renderStateSection_GoalOutcomes`'s exact precedent (empty-array early-return, so a namespace
+below the 5-contract gate — before it, this section didn't exist at all — renders no
+differently than before this feature shipped).
+
+**Contrastive Decision-Guidance Mining (P65)** — new per-namespace `decision_guidance.jsonl`
+(compass core: `cmd_log_decision_guidance`/`cmd_query_decision_guidance` in `_monolith.py`).
+**Zero live namespaces have this file as of 2026-08-30** — it's a write-only-so-far feature
+that shipped in compass core very recently. `load_namespace()` reads it like any other
+per-namespace jsonl (`_read_jsonl` already returns `[]` gracefully when absent), filtering
+out `status == "retired"` entries at read time — mirrors compass core's own query filter and
+this file's existing `_community/feed.jsonl` retraction-filtering precedent (see "Cross-
+namespace jsonl files drift too" above). `_js_data()` reshapes the snake_case persisted
+fields to camelCase (`ns.decisionGuidance[]`: `guidanceId`, `contextSummary`,
+`preferredDecisionText`, `avoidedDecisionText`, `evidence`, `qualityDelta` — the last is
+computed convenience, `preferred_quality - avoided_quality` from the `evidence` dict, `null`
+if either is missing — and `createdAt`). Rendered by `renderDecisionGuidance(ns)` inside
+`renderDecisions(ns)` in `template.html` (not a new sub-tab — it lives where decisions already
+provide context), as a "preferred ✓ / avoided ✗ (struck through)" card with a `qualityDelta`
+badge. Returns `''` when empty, so every live namespace's Decisions tab is currently
+byte-identical to before this feature shipped — **when real guidance data eventually exists,
+re-verify the visual treatment against it**, since everything here was designed against
+compass core's persisted-record shape with no real example to check the rendering against.
+A 3-line discoverability breadcrumb ("`N guidance pairs mined`") was added to the global
+cross-namespace Decisions view header, pointing at the per-namespace tabs — deliberately not a
+second full UI for a feature with no live adoption yet.
+
+**Zone distribution (P56 aggregate)** — per-learning `zone` (`golden`/`warning`/`preference`)
+already flowed through to JS and rendered as a per-row badge before this pass (confirmed via
+`grep -a`, not plain `grep` — see the fifth IIFE trap above); only a namespace-level summary
+was missing. `_zone_distribution(learnings)` (`compass-dashboard.py`, near `_corpus_health`)
+counts active learnings into `ns.zoneDistribution = {golden, warning, preference,
+unclassified}` — any missing/unrecognised zone value counts as `unclassified`, so counts
+always sum to `len(learnings)`. Kept as a **top-level** field, not nested under
+`corpusHealth`, because `corpusHealth` returns `null` below 3 active learnings while a zone
+count is meaningful even at 1–2. `renderZoneDistribution(ns, tableId, nsId)` in
+`template.html` renders it as clickable chips at the top of the Learnings sub-tab (reusing
+`.zone-preference`'s existing `rgba(139,148,158,.12)` colour formula for the "unclassified"
+chip rather than inventing a new one — no `--purple` CSS variable exists in this file, see the
+Tasks sub-tab section above). Click-to-filter required generalising the pre-existing
+`filterLearningType(tableId, nsId, type)` into a shared `applyLearningFilters(table, nsId)`
+that composes **both** an active type filter (`table.dataset.activeType`) and an active zone
+filter (`table.dataset.activeZone`) against each row's `data-ltype`/`data-zone` attributes —
+implementing zone filtering as a second independent function that also touched
+`row.style.display` directly would have let one filter clobber the other's hidden rows.
+`filterLearningZone` is a click-to-toggle (clicking the same active zone chip again clears the
+filter) and **is** in the `Object.assign(window, {...})` export list (invoked via inline
+`onclick`, per the fourth IIFE trap above) — `applyLearningFilters` is internal-only, never
+called from HTML, and correctly is not exported.
+
+**Quality-score component breakdown — smaller than it first looked.** `quality_history[]`
+entries have carried `components: {goal_completion_rate, outcome_rate, learnings_density,
+reality_freshness}` and `weakest_component` since P51 (compass core's `_compute_quality_score()`
+spreads `**qs` into every `state.json["quality_history"]` entry at close time) — and
+`load_namespace()`/`_js_data()` already passed the whole list through raw. `weakest_component`
+was already rendered as a chip. The only missing piece was a per-component visual breakdown,
+added as a collapsed `<details>/<summary>` block (mirroring `renderDecayTimeline()`'s existing
+pattern — native `<details>` needs no `onclick`, so no `Object.assign` change) inside
+`_renderQualityScoreSparklines()`, with the `weakest_component` bar visually distinguished
+(amber vs. blue fill). **Lesson: before scoping a "data layer + UI" task, check whether the
+data layer is already fully wired** — grepping `_js_data()`/`template.html` for the field name
+first would have caught this in minutes instead of designing backend work that turned out to
+be unnecessary.
+
+Test fixture (`tests/js/fixtures/generate_fixture.py`) gained: a third learning with
+`zone: "warning"` (the first two already had `golden` and no-zone, so all three
+`zoneDistribution` buckets are now exercised), a populated `goal_contracts`/`decision_guidance`
+example on `example-ns-one` and an empty/below-gate one on `example-ns-two` (exercising both
+branches), and non-empty `quality_history[].components`/`weakest_component` on the latest
+session. `tests/js/render_smoke.test.mjs`'s new tests for these features are "does it throw"
+only, not content assertions — confirmed by testing that `filterLearningZone`'s
+`table.querySelectorAll('tbody tr')` returns `[]` against this DOM stub for the same reason
+documented in the Radar chart section above (nested `innerHTML` isn't parsed into real child
+nodes); the feature was instead verified by hand against a real browser render of live data.
+
+---
+
 ## Security
 
 Use `esc(str)` (already defined in the JS) for any user-controlled string going into
@@ -452,8 +586,8 @@ count as user-controlled.
 
 | File | What it covers |
 |------|----------------|
-| `test_data_loading.py` | 62 unit tests for `_reality_completeness`, `_corpus_health`, `_goal_stats`, `_stale_bullet_count`, `_retrieval_stale_texts` (P58), and more — no filesystem deps |
-| `test_generate.py` | 55 smoke tests for `generate()` — structural markers, `const NS = [` embedding, script-tag injection escaping, community/mindmap/P51-P53/P56-P58 wiring |
+| `test_data_loading.py` | 101 unit tests for `_reality_completeness`, `_corpus_health`, `_goal_stats`, `_stale_bullet_count`, `_retrieval_stale_texts` (P58), `_normalize_confidence`, `_zone_distribution` (P56), `_contract_coverage`/`_parse_goal_contracts` (P55), and more — no filesystem deps (plus a small number of tempdir-based `load_namespace()` tests, e.g. P65 decision-guidance filtering) |
+| `test_generate.py` | 71 smoke tests for `generate()` — structural markers, `const NS = [` embedding, script-tag injection escaping, community/mindmap/P51-P53/P55/P56/P58/P65 wiring |
 | `js/dashboard_helpers.test.mjs` | Node-native (`node --test`, no deps) smoke tests for pure JS helpers in `template.html` — `esc`, `fmtYM`, `_daysSince`, `urgencyScore`, `scoreItem`, `scaleLinear`, `renderYAxisGridlines`. Extracts function source directly from the file text (brace-matched) since the script is wrapped in an IIFE with no module exports — see `extractFunction()` for the brace-matching approach and its default-parameter gotcha. Run: `node --test tests/js/dashboard_helpers.test.mjs` |
 | `js/render_smoke.test.mjs` | Node-native (`node --test`, no deps — hand-rolled DOM stub, not jsdom) smoke tests for the ~46 `render*` functions that touch `document`/`window` and so can't be extracted in isolation like the pure helpers above. Runs the *entire* `<script>` IIFE in a `node:vm` sandbox against `js/fixtures/dashboard_fixture.json` (synthetic data only — regenerate via `python3 tests/js/fixtures/generate_fixture.py`, which builds it from the real `load_namespace()`/`_js_data()` field shapes so it can't drift from production shape), then calls `switchView()` for all 10 tabs, `selectCard()`+`switchTab()` for the detail panel, and the mind-map/search/DAG-resume entrypoints — asserting only "does it throw," not output content. This is exactly the safety net CLAUDE.md's four documented `<script>`-IIFE traps call for: it would have caught the historical `mmRotate is not defined` regression and would catch a broken template-literal quote before a `javascript_tool` debugging session is needed. Run: `node --test tests/js/render_smoke.test.mjs` |
 

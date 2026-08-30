@@ -26,6 +26,10 @@ _goal_stats            = _mod._goal_stats
 _stale_bullet_count    = _mod._stale_bullet_count
 _retrieval_stale_texts = _mod._retrieval_stale_texts
 _load_watch_signals    = _mod._load_watch_signals
+_normalize_confidence  = _mod._normalize_confidence
+_zone_distribution     = _mod._zone_distribution
+_contract_coverage     = _mod._contract_coverage
+_parse_goal_contracts  = _mod._parse_goal_contracts
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -91,6 +95,22 @@ class TestRealityCompleteness(unittest.TestCase):
     def test_checkmark_marker(self):
         md = "## What exists\n- ✓ deployed\n"
         self.assertEqual(_reality_completeness(md), 100.0)
+
+    def test_check_mark_emoji_marker(self):
+        # Real reality.md files use ✅ (U+2705), not ✓ (U+2713) — 2026-08-30 audit found
+        # this halved reported scores in namespaces that only use the emoji.
+        md = "## What exists\n- ✅ deployed\n"
+        self.assertEqual(_reality_completeness(md), 100.0)
+
+    def test_mixed_ascii_and_emoji_checkmarks(self):
+        md = "## What exists\n- ✓ thing one\n- ✅ thing two\n- thing three\n"
+        self.assertAlmostEqual(_reality_completeness(md), 66.7, places=1)
+
+    def test_non_achievement_keyword_variants(self):
+        for header in ("## What is blocked", "## Known limitations", "## Known doc staleness"):
+            md = f"## What exists\n- Done thing exists and works\n{header}\n- Excluded item\n"
+            score = _reality_completeness(md)
+            self.assertEqual(score, 100.0, msg=f"Failed for header: {header!r}")
 
     def test_subsection_header_under_backlog_does_not_reset_in_backlog(self):
         # ### headers inside a backlog section should NOT reset in_backlog=False.
@@ -749,6 +769,193 @@ class TestLoadCommunity(unittest.TestCase):
         ])
         result = _mod.load_community()
         self.assertEqual(len(result["feed"]), 1)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# _normalize_confidence
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestNormalizeConfidence(unittest.TestCase):
+
+    def test_string_passthrough(self):
+        self.assertEqual(_normalize_confidence("high"), "high")
+        self.assertEqual(_normalize_confidence("medium"), "medium")
+
+    def test_none_passthrough(self):
+        self.assertIsNone(_normalize_confidence(None))
+
+    def test_high_bucket(self):
+        self.assertEqual(_normalize_confidence(0.95), "high")
+
+    def test_medium_bucket(self):
+        self.assertEqual(_normalize_confidence(0.7), "medium")
+
+    def test_low_bucket(self):
+        self.assertEqual(_normalize_confidence(0.3), "low")
+
+    def test_boundary_085_is_high(self):
+        self.assertEqual(_normalize_confidence(0.85), "high")
+
+    def test_boundary_06_is_medium(self):
+        self.assertEqual(_normalize_confidence(0.6), "medium")
+
+    def test_int_confidence_coerced(self):
+        self.assertEqual(_normalize_confidence(1), "high")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# _zone_distribution (P56)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestZoneDistribution(unittest.TestCase):
+
+    def test_empty_list(self):
+        self.assertEqual(
+            _zone_distribution([]),
+            {"golden": 0, "warning": 0, "preference": 0, "unclassified": 0},
+        )
+
+    def test_mixed_zones(self):
+        ls = [{"zone": "golden"}, {"zone": "golden"}, {"zone": "warning"}, {"zone": "preference"}, {}]
+        self.assertEqual(
+            _zone_distribution(ls),
+            {"golden": 2, "warning": 1, "preference": 1, "unclassified": 1},
+        )
+
+    def test_unknown_zone_value_counts_as_unclassified(self):
+        self.assertEqual(_zone_distribution([{"zone": "bogus"}])["unclassified"], 1)
+
+    def test_counts_sum_to_total(self):
+        ls = [{"zone": z} for z in ("golden", "warning", "preference")] + [{}] * 3
+        d = _zone_distribution(ls)
+        self.assertEqual(sum(d.values()), len(ls))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# _contract_coverage / _parse_goal_contracts (P55)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _contract(goal_text, criteria, verified_criteria=None, verified_at=None, created_at="2026-08-01T00:00:00Z"):
+    return {
+        "goal_text": goal_text,
+        "criteria": criteria,
+        "verified_criteria": verified_criteria or [],
+        "unmet_criteria": [c for c in criteria if c not in (verified_criteria or [])],
+        "evidence_type": "document",
+        "stopping_condition": "n/a",
+        "created_at": created_at,
+        "verified_at": verified_at,
+    }
+
+
+class TestContractCoverage(unittest.TestCase):
+
+    def test_below_gate_returns_none(self):
+        state = {"goal_contracts": {f"h{i}": _contract(f"g{i}", ["a"]) for i in range(4)}}
+        self.assertEqual(
+            _contract_coverage(state),
+            {"contract_coverage": None, "criteria_hit_rate": None},
+        )
+
+    def test_at_gate_with_no_relevant_completions_returns_none(self):
+        state = {
+            "goal_contracts": {f"h{i}": _contract(f"g{i}", ["a"]) for i in range(5)},
+            "goal_completions": {},
+        }
+        self.assertEqual(
+            _contract_coverage(state),
+            {"contract_coverage": None, "criteria_hit_rate": None},
+        )
+
+    def test_full_round_trip_matches_expected_output(self):
+        # 5 contracts, all verified with all criteria met, all linked via goal_completions —
+        # mirrors the real `compass` namespace's live shape (7 contracts, coverage=1.0,
+        # criteria_hit_rate=1.0), reduced to the minimum sample size for a fast unit test.
+        contracts = {
+            f"h{i}": _contract(f"g{i}", ["a", "b"], verified_criteria=["a", "b"], verified_at="2026-08-02T00:00:00Z")
+            for i in range(5)
+        }
+        state = {
+            "goal_contracts": contracts,
+            "goal_completions": {
+                "2026-08-02": {"completed_hashes": list(contracts.keys())},
+            },
+        }
+        self.assertEqual(
+            _contract_coverage(state),
+            {"contract_coverage": 1.0, "criteria_hit_rate": 1.0},
+        )
+
+
+class TestParseGoalContracts(unittest.TestCase):
+
+    def test_empty_dict_returns_empty_list(self):
+        self.assertEqual(_parse_goal_contracts({"goal_contracts": {}}), [])
+
+    def test_unverified_contract_is_pending(self):
+        state = {"goal_contracts": {"h1": _contract("g1", ["a", "b"])}}
+        out = _parse_goal_contracts(state)
+        self.assertEqual(out[0]["status"], "pending")
+        self.assertIsNone(out[0]["criteria_hit_rate"])
+        self.assertEqual(out[0]["criteria"], [{"text": "a", "met": False}, {"text": "b", "met": False}])
+
+    def test_partially_verified_contract(self):
+        state = {"goal_contracts": {
+            "h1": _contract("g1", ["a", "b"], verified_criteria=["a"], verified_at="2026-08-02T00:00:00Z"),
+        }}
+        out = _parse_goal_contracts(state)
+        self.assertEqual(out[0]["status"], "partially_verified")
+        self.assertEqual(out[0]["criteria_hit_rate"], 0.5)
+        self.assertEqual(out[0]["criteria"], [{"text": "a", "met": True}, {"text": "b", "met": False}])
+
+    def test_fully_verified_contract(self):
+        state = {"goal_contracts": {
+            "h1": _contract("g1", ["a"], verified_criteria=["a"], verified_at="2026-08-02T00:00:00Z"),
+        }}
+        out = _parse_goal_contracts(state)
+        self.assertEqual(out[0]["status"], "verified")
+        self.assertEqual(out[0]["criteria_hit_rate"], 1.0)
+
+    def test_sorted_newest_created_first(self):
+        state = {"goal_contracts": {
+            "h1": _contract("g1", ["a"], created_at="2026-08-01T00:00:00Z"),
+            "h2": _contract("g2", ["a"], created_at="2026-08-05T00:00:00Z"),
+        }}
+        out = _parse_goal_contracts(state)
+        self.assertEqual([c["goal_text"] for c in out], ["g2", "g1"])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# load_namespace() — decision_guidance (P65) retired-entry filtering
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestLoadNamespaceDecisionGuidance(unittest.TestCase):
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.ns_dir = Path(self._tmpdir.name) / "myns"
+        self.ns_dir.mkdir(parents=True)
+
+    def tearDown(self):
+        self._tmpdir.cleanup()
+
+    def _write_jsonl(self, filename, items):
+        with open(self.ns_dir / filename, "w", encoding="utf-8") as f:
+            for item in items:
+                f.write(json.dumps(item) + "\n")
+
+    def test_no_file_returns_empty_list(self):
+        result = _mod.load_namespace(self.ns_dir)
+        self.assertEqual(result["decision_guidance"], [])
+
+    def test_retired_entries_filtered_out(self):
+        self._write_jsonl("decision_guidance.jsonl", [
+            {"guidance_id": "g1", "status": "active", "preferred_decision_text": "A"},
+            {"guidance_id": "g2", "status": "retired", "preferred_decision_text": "B"},
+        ])
+        result = _mod.load_namespace(self.ns_dir)
+        self.assertEqual(len(result["decision_guidance"]), 1)
+        self.assertEqual(result["decision_guidance"][0]["guidance_id"], "g1")
 
 
 if __name__ == "__main__":

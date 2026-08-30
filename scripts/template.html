@@ -433,6 +433,51 @@
     .decision-date { font-size: .68rem; color: var(--subtle); white-space: nowrap; }
     .decision-alts { font-size: .72rem; color: var(--subtle); font-style: italic; margin-top: .25rem; }
 
+    /* ── Verification contracts (P55) ── */
+    .contract-list { list-style: none; padding: 0; display: flex; flex-direction: column; gap: .5rem; }
+    .contract-item { border: 1px solid var(--border); border-radius: 6px; padding: .6rem .75rem; background: var(--surface2); }
+    .contract-goal { font-size: .82rem; color: var(--text); margin-bottom: .3rem; line-height: 1.4; }
+    .contract-meta { display: flex; gap: .5rem; align-items: baseline; }
+    .contract-chip { font-size: .66rem; padding: .1em .5em; border-radius: 999px; font-weight: 600; margin-left: .4rem; }
+    .cc-coverage { background: var(--blue-bg); color: var(--blue); }
+    .cc-hitrate  { background: var(--green-bg); color: var(--green); }
+    .evidence-badge { font-size: .62rem; padding: .1em .45em; border-radius: 4px; background: var(--surface); border: 1px solid var(--border); color: var(--muted); }
+    .contract-criteria { list-style: none; padding: 0; margin: .3rem 0 0; font-size: .72rem; }
+    .crit-met::before   { content: "✓ "; color: var(--green); }
+    .crit-unmet::before { content: "✗ "; color: var(--red); }
+    .crit-unmet { color: var(--muted); }
+
+    /* ── Decision guidance (P65) ── */
+    .guidance-list { display: flex; flex-direction: column; gap: .6rem; margin-bottom: .75rem; }
+    .guidance-item { border: 1px solid var(--border); border-radius: 6px; padding: .6rem .75rem; background: var(--surface2); }
+    .guidance-row { display: flex; gap: .4rem; align-items: flex-start; font-size: .8rem; }
+    .guidance-preferred .guidance-icon { color: var(--green); }
+    .guidance-dispreferred .guidance-icon { color: var(--red); }
+    .guidance-dispreferred .guidance-text { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--red); }
+    .guidance-vs { font-size: .62rem; color: var(--subtle); text-transform: uppercase; margin: .2rem 0 .2rem 1.3rem; }
+    .guidance-meta { display: flex; gap: .5rem; align-items: baseline; margin-top: .3rem; }
+    .guidance-delta { font-size: .68rem; font-weight: 700; color: var(--blue); background: var(--blue-bg); padding: .1em .5em; border-radius: 999px; }
+
+    /* ── Zone distribution (P56) ── */
+    .zone-dist { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .6rem; }
+    .zd-chip { font-size: .68rem; padding: .15rem .55rem; border-radius: 999px; cursor: pointer; border: 1px solid transparent; }
+    .zd-golden     { background: var(--green-bg); color: var(--green); }
+    .zd-warning    { background: var(--amber-bg); color: var(--amber); }
+    .zd-preference { background: rgba(139,148,158,.12); color: var(--muted); }
+    .zd-none       { background: var(--surface); color: var(--subtle); border-color: var(--border); }
+    .zd-chip.active { border-color: currentColor; }
+
+    /* ── Quality-score component breakdown ── */
+    .quality-breakdown { margin-left: .4rem; }
+    .quality-breakdown summary { list-style: none; cursor: pointer; font-size: .65rem; color: var(--muted); }
+    .qb-bars { display: flex; flex-direction: column; gap: .2rem; margin-top: .3rem; }
+    .qb-bar { display: flex; align-items: center; gap: .4rem; font-size: .66rem; }
+    .qb-label { width: 7rem; color: var(--muted); white-space: nowrap; }
+    .qb-track { flex: 1; height: 5px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
+    .qb-fill { height: 100%; background: var(--blue); }
+    .qb-fill.weakest { background: var(--amber); }
+    .qb-val { width: 2rem; text-align: right; color: var(--text); }
+
     /* ── Code context / next session block ── */
     .context-block {
       background: var(--surface2); border-left: 2px solid var(--blue);
@@ -1245,6 +1290,32 @@ function renderStateSection_GoalOutcomes(ns) {
   </div>`;
 }
 
+function renderStateSection_GoalContracts(ns) {
+  const contracts = ns.contracts || [];
+  if (!contracts.length) return '';
+  const coverage = ns.contractCoverage;
+  const hitRate  = ns.criteriaHitRate;
+  const chips = coverage != null
+    ? `<span class="contract-chip cc-coverage">${Math.round(coverage * 100)}% coverage</span>` +
+      (hitRate != null ? `<span class="contract-chip cc-hitrate">${Math.round(hitRate * 100)}% criteria hit</span>` : '')
+    : `<span style="color:var(--muted);font-size:.68rem;font-weight:normal"> — not enough verified goals yet</span>`;
+  const rows = contracts.slice(0, 10).map(c => {
+    const criteriaHtml = (c.criteria || []).map(crit =>
+      `<li class="${crit.met ? 'crit-met' : 'crit-unmet'}">${esc(crit.text)}</li>`
+    ).join('');
+    const evidence = c.evidence_type ? `<span class="evidence-badge">${esc(c.evidence_type)}</span>` : '';
+    const date = c.created_at ? `<span class="decision-date">${esc(c.created_at.slice(0, 10))}</span>` : '';
+    return `<li class="contract-item">
+      <div class="contract-goal">${esc(c.goal_text)}</div>
+      <div class="contract-meta">${evidence}${date}</div>
+      <ul class="contract-criteria">${criteriaHtml}</ul>
+    </li>`;
+  }).join('');
+  return `<div class="md-section"><h3>Verification contracts (P55)${chips}</h3>
+    <ul class="contract-list">${rows}</ul>
+  </div>`;
+}
+
 function renderStateSection_WatchFeed(ns) {
   if (!ns.watches || ns.watches.length === 0) return '';
   const ws = ns.watchSignals || {signals: [], empty: true, bootstrapped: false};
@@ -1380,6 +1451,7 @@ function renderState(ns) {
     renderStateSection_Decisions(ns),
     renderStateSection_Deferred(ns),
     renderStateSection_GoalOutcomes(ns),
+    renderStateSection_GoalContracts(ns),
     renderStateSection_WatchFeed(ns),
     renderStateSection_CycleSparkline(ns),
     renderStateSection_DreamStatus(ns),
@@ -1388,10 +1460,30 @@ function renderState(ns) {
   ].join('');
 }
 
+function renderZoneDistribution(ns, tableId, nsId) {
+  const zd = ns.zoneDistribution;
+  if (!zd) return '';
+  const total = zd.golden + zd.warning + zd.preference + zd.unclassified;
+  if (!total) return '';
+  const chip = (zone, cls, label) => zd[zone] > 0
+    ? `<span class="zd-chip ${cls}" data-zone="${zone}" onclick="filterLearningZone('${tableId}','${nsId}','${zone}')">${zd[zone]} ${label}</span>`
+    : '';
+  return `<div class="zone-dist">
+    ${chip('golden', 'zd-golden', 'golden')}
+    ${chip('warning', 'zd-warning', 'warning')}
+    ${chip('preference', 'zd-preference', 'preference')}
+    ${chip('unclassified', 'zd-none', 'unclassified')}
+  </div>`;
+}
+
 function renderLearnings(ns) {
   if (!ns.learnings.length) {
     return '<div class="empty-state">No learnings recorded yet.</div>';
   }
+
+  const nsIdEarly    = (ns.namespace || 'ns').replace(/[^a-z0-9-]/gi, '-');
+  const tableIdEarly = `ltable-${nsIdEarly}`;
+  const zoneDistHtml = renderZoneDistribution(ns, tableIdEarly, nsIdEarly);
 
   const supersededNote = (ns.supersededCount || 0) > 0
     ? `<div style="font-size:.72rem;color:var(--muted);margin-bottom:.5rem">
@@ -1459,7 +1551,7 @@ function renderLearnings(ns) {
       linkHtml += `<div class="link-ref">\u2b07 adopted from <code>${esc(l.adopted_from.source_loop_id)}</code></div>`;
     }
     return `
-      <tr data-idx="${lIdx}" data-ltype="${type}" data-stale="${l.retrievalStale ? 'true' : 'false'}"${lidTitle}>
+      <tr data-idx="${lIdx}" data-ltype="${type}" data-stale="${l.retrievalStale ? 'true' : 'false'}" data-zone="${l.zone && zoneLabels[l.zone] ? l.zone : 'unclassified'}"${lidTitle}>
         <td><span class="weight-dot"><span class="wdot ${wCls}"></span><span class="wnum">${w}</span></span></td>
         <td class="learning-text">${esc(l.text || '')}${linkHtml}</td>
         <td><div class="tags-cell">${tags}</div></td>
@@ -1469,8 +1561,8 @@ function renderLearnings(ns) {
       </tr>`;
   }).join('');
 
-  const nsId    = (ns.namespace || 'ns').replace(/[^a-z0-9-]/gi, '-');
-  const tableId = `ltable-${nsId}`;
+  const nsId    = nsIdEarly;
+  const tableId = tableIdEarly;
   const hypCount   = ns.learnings.filter(l => l.learning_type === 'hypothesis').length;
   const staleCount = ns.retrievalStaleCount || 0;
   const filterButtons = [
@@ -1484,7 +1576,7 @@ function renderLearnings(ns) {
     </div>` : '';
 
   const decayHtml = renderDecayTimeline(ns);
-  return corpusHealthHtml + supersededNote + filterBar + `
+  return zoneDistHtml + corpusHealthHtml + supersededNote + filterBar + `
     <table class="learnings-table" id="${tableId}">
       <thead>
         <tr><th>Wt</th><th>Learning</th><th>Tags</th><th>Type</th><th>Zone</th><th>Date</th></tr>
@@ -1493,17 +1585,37 @@ function renderLearnings(ns) {
     </table>` + decayHtml;
 }
 
+function applyLearningFilters(table, nsId) {
+  const type = table.dataset.activeType || 'all';
+  const zone = table.dataset.activeZone || '';
+  table.querySelectorAll('tbody tr').forEach(row => {
+    const typeOk = type === 'all'
+      || (type === 'stale' ? row.dataset.stale === 'true' : row.dataset.ltype === type);
+    const zoneOk = !zone || row.dataset.zone === zone;
+    row.style.display = (typeOk && zoneOk) ? '' : 'none';
+  });
+}
+
 function filterLearningType(tableId, nsId, type) {
   const table = document.getElementById(tableId);
   if (!table) return;
-  table.querySelectorAll('tbody tr').forEach(row => {
-    const matches = type === 'all'
-      || (type === 'stale' ? row.dataset.stale === 'true' : row.dataset.ltype === type);
-    row.style.display = matches ? '' : 'none';
-  });
+  table.dataset.activeType = type;
+  applyLearningFilters(table, nsId);
   ['all', 'hypothesis', 'stale'].forEach(t => {
     const btn = document.getElementById(`lfbtn-${t}-${nsId}`);
     if (btn) btn.classList.toggle('active', t === type);
+  });
+}
+
+function filterLearningZone(tableId, nsId, zone) {
+  const table = document.getElementById(tableId);
+  if (!table) return;
+  const current = table.dataset.activeZone || '';
+  table.dataset.activeZone = current === zone ? '' : zone;
+  applyLearningFilters(table, nsId);
+  const wrap = table.closest('.tab-content') || document;
+  wrap.querySelectorAll('.zd-chip').forEach(c => {
+    c.classList.toggle('active', c.dataset.zone === table.dataset.activeZone);
   });
 }
 
@@ -1535,10 +1647,32 @@ function renderDecayTimeline(ns) {
 
 // ── Decisions ─────────────────────────────────────────────────────────────────
 
+function renderDecisionGuidance(ns) {
+  const guidance = ns.decisionGuidance || [];
+  if (!guidance.length) return '';
+  const items = guidance.map(g => {
+    const deltaHtml = g.qualityDelta != null
+      ? `<span class="guidance-delta">Δ${g.qualityDelta > 0 ? '+' : ''}${Math.round(g.qualityDelta * 100)}%</span>`
+      : '';
+    const date = g.createdAt ? `<span class="decision-date">${esc(g.createdAt.slice(0, 10))}</span>` : '';
+    const rationale = g.contextSummary
+      ? `<div class="decision-rationale">${esc(g.contextSummary)}</div>` : '';
+    return `<div class="guidance-item">
+      <div class="guidance-row guidance-preferred"><span class="guidance-icon">✓</span><span class="guidance-text">${esc(g.preferredDecisionText || '')}</span></div>
+      <div class="guidance-vs">vs</div>
+      <div class="guidance-row guidance-dispreferred"><span class="guidance-icon">✗</span><span class="guidance-text">${esc(g.avoidedDecisionText || '')}</span></div>
+      <div class="guidance-meta">${deltaHtml}${date}</div>
+      ${rationale}
+    </div>`;
+  }).join('');
+  return `<div class="guidance-list">${items}</div>`;
+}
+
 function renderDecisions(ns) {
   if (!ns.decisions || !ns.decisions.length) {
     return '<div class="empty-state">No decisions logged for this namespace yet.<br>Use <code>compass log-decision</code> mid-session to capture them.</div>';
   }
+  const guidanceHtml = renderDecisionGuidance(ns);
   const items = [...ns.decisions].reverse().map((d, dIdx) => {
     const date = (d.timestamp || d.logged_at || '').slice(0, 10) || '—';
     const ratHtml = d.rationale
@@ -1555,7 +1689,7 @@ function renderDecisions(ns) {
         ${altHtml}
       </div>`;
   }).join('');
-  return `<div class="decision-list">${items}</div>`;
+  return guidanceHtml + `<div class="decision-list">${items}</div>`;
 }
 
 // ── External signals ──────────────────────────────────────────────────────────
@@ -2386,6 +2520,10 @@ function renderDecisionsView() {
     (ns.complexityClusteringSignals || []).map(s => ({ ...s, namespace: ns.namespace }))
   );
 
+  // P65 — discoverability breadcrumb pointing at the per-namespace Decisions tabs,
+  // where the actual guidance cards render (see renderDecisionGuidance()).
+  const guidanceCount = NS.reduce((sum, ns) => sum + (ns.decisionGuidance || []).length, 0);
+
   let sortKey = 'date';
   let sortDir = -1;
   let filterNs = '';
@@ -2424,6 +2562,7 @@ function renderDecisionsView() {
       <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem;flex-wrap:wrap">
         <h2 style="margin:0;font-size:1.1rem">All Decisions</h2>
         <span style="color:var(--muted);font-size:.8rem">${sorted.length} / ${allDecisions.length}</span>
+        ${guidanceCount > 0 ? `<span style="color:var(--muted);font-size:.75rem">· ${guidanceCount} guidance pair${guidanceCount !== 1 ? 's' : ''} mined</span>` : ''}
         <select id="dec-ns-filter" style="padding:.25rem .5rem;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:.8rem">
           <option value="">All namespaces</option>
           ${nsOptions.map(ns => `<option value="${esc(ns)}" ${filterNs === ns ? 'selected' : ''}>${esc(ns)}</option>`).join('')}
@@ -3673,6 +3812,24 @@ function _renderQualityScoreSparklines() {
       ? `<span style="font-size:.66rem;color:var(--amber);white-space:nowrap" title="${plateau.sessions_checked} sessions checked, trend: ${plateau.trend}, delta: ${plateau.delta}">⚠ plateaued</span>`
       : '';
 
+    const components = hist[hist.length - 1]?.components || {};
+    const compKeys = ['goal_completion_rate', 'outcome_rate', 'learnings_density', 'reality_freshness'];
+    const breakdownHtml = compKeys.some(k => components[k] != null) ? `
+      <details class="quality-breakdown">
+        <summary>components</summary>
+        <div class="qb-bars">
+          ${compKeys.filter(k => components[k] != null).map(k => {
+            const pct = Math.round(components[k] * 100);
+            const isWeakest = k === weakest;
+            return `<div class="qb-bar">
+              <span class="qb-label">${esc(k.replace(/_/g, ' '))}</span>
+              <div class="qb-track"><div class="qb-fill${isWeakest ? ' weakest' : ''}" style="width:${pct}%"></div></div>
+              <span class="qb-val">${pct}%</span>
+            </div>`;
+          }).join('')}
+        </div>
+      </details>` : '';
+
     return `<div style="display:flex;align-items:center;gap:.8rem;padding:.3rem 0;border-bottom:1px solid var(--border)">
       <div style="width:7rem;font-size:.72rem;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(ns.namespace)}</div>
       <svg width="${W}" height="${H}" style="flex-shrink:0">
@@ -3687,6 +3844,7 @@ function _renderQualityScoreSparklines() {
       <div style="font-size:.72rem;color:${trendCol};width:1rem">${trendIcon}</div>
       ${weakest ? `<div style="font-size:.68rem;color:var(--muted)">↓ ${esc(weakest.replace(/_/g, ' '))}</div>` : ''}
       ${plateauBadge}
+      ${breakdownHtml}
     </div>`;
   }).join('');
 
@@ -4911,7 +5069,7 @@ if (NS.length === 1) selectCard(0);
 // definition site inside renderDecisionsView() (closures over local render state).
 Object.assign(window, {
   switchView, switchTab, switchHeatmap, selectCard, setFilter,
-  toggleSession, filterLearningType,
+  toggleSession, filterLearningType, filterLearningZone,
   openSearch, closeSearch, closeSearchIfBackdrop, handleSearch, handleSearchKey, handleResultClick,
   toggleDAGSystem, resetDAGLayout, clearDAGFocus,
   mmNodeClick, mmResetView, mmSelectNs, mmToggleBridges, mmRotate,

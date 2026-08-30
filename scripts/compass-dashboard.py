@@ -93,8 +93,12 @@ def _e(s):
 
 
 # Local copies — keep in sync with scripts/compass/reality.py (can't import; stdlib-only constraint)
+# 2026-08-30 audit: real reality.md files use "✅" (U+2705) exclusively, never the bare
+# "✓" (U+2713) this set originally shipped with — that halved reported completeness scores
+# in namespaces that only use the emoji (e.g. agentic-loopkit: 25.0% -> 56.2%). compass
+# core's own reality.py has the identical ✓-only gap; flagged upstream, not fixed here.
 _COMPLETION_MARKERS = frozenset({
-    "complete", "live", "exists and works", "shipped", "passing", "done", "✓", "operational",
+    "complete", "live", "exists and works", "shipped", "passing", "done", "✓", "✅", "operational",
 })
 _BACKLOG_HEADERS = frozenset({
     "backlog", "planned", "missing", "next", "todo", "debt", "pending", "phase",
@@ -106,8 +110,11 @@ _BACKLOG_HEADERS = frozenset({
 # neither achieved nor backlog, so they shouldn't enter the completeness denominator at
 # all. Originally a dashboard-local-only fix (2026-07-11); ported upstream to
 # compass/reality.py 2026-07-18 — this copy must now be kept in sync with that one.
+# 2026-08-30 audit: real reality.md files also use "## What is blocked", "## Known
+# limitations", and "## Known doc staleness" headers — none of these are shippable
+# achievements either, so they're added here too (flagged for the same upstream sync).
 _NON_ACHIEVEMENT_HEADERS = frozenset({
-    "external signals",
+    "external signals", "blocked", "known limitations", "known doc staleness",
 })
 
 
@@ -172,6 +179,26 @@ def _corpus_health(active_learnings, superseded_count):
     }
 
 
+_ZONE_LABELS = ("golden", "warning", "preference")  # P56 — mirrors template.html's zoneLabels map
+
+
+def _zone_distribution(learnings):
+    """Count active learnings by P56 zone classification (golden/warning/preference).
+
+    A learning with no `zone` key (pre-P56 entries) or a value outside the three known
+    labels is counted as 'unclassified' — matches template.html's per-row zone badge
+    guard, which silently renders no badge for those cases. Counts always sum to
+    len(learnings). Kept as a top-level sibling to corpus_health rather than nested
+    under it, since corpus_health returns None below 3 active learnings but a zone
+    count is meaningful even at 1-2.
+    """
+    counts = {"golden": 0, "warning": 0, "preference": 0, "unclassified": 0}
+    for l in learnings:
+        z = l.get("zone")
+        counts[z if z in _ZONE_LABELS else "unclassified"] += 1
+    return counts
+
+
 _RETRIEVAL_STALE_SURFACED_THRESHOLD = 10  # P58: local copy of compass's retrieval_stale_surfaced_threshold
 _MINDMAP_CROSS_NS_GATE = 50  # E25e: min active-learning corpus size for a namespace to qualify as a bridge target
 
@@ -191,6 +218,29 @@ def _retrieval_stale_texts(active_learnings, surfaced_threshold=_RETRIEVAL_STALE
         if l.get("times_surfaced", 0) >= surfaced_threshold:
             texts.add(l.get("text", ""))
     return texts
+
+
+def _normalize_confidence(value):
+    """Bucket a raw numeric confidence (0.0-1.0) to compass's canonical high/medium/low
+    label. Learnings normally carry confidence as one of these three strings — compass
+    core's _CONFIDENCE_MULTIPLIER (learnings.py) and _compute_confidence_calibration only
+    recognise them — but a handful of live entries instead have a raw float from some
+    other write path. Bucketed rather than dropped so every consumer (assumption-audit
+    candidates, mindmap tooltip) keeps working identically to an author-supplied string.
+    Thresholds are this dashboard's own heuristic (compass core has no float scale to
+    mirror here, unlike other local-mirror helpers in this file).
+    """
+    if isinstance(value, str) or value is None:
+        return value
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return value
+    if v >= 0.85:
+        return "high"
+    if v >= 0.6:
+        return "medium"
+    return "low"
 
 
 def _stale_bullet_count(reality_md, state, days=30):
@@ -531,6 +581,86 @@ def _goal_outcomes_breakdown(ns_dir, state, reality_md, limit=20):
     return breakdown
 
 
+_CONTRACT_COVERAGE_MIN_CONTRACTS = 5  # mirrors compass/state.py's _compute_contract_coverage() gate
+
+
+def _contract_coverage(state, window=20):
+    """P55 — rolling contract-verification coverage + criteria hit rate.
+
+    Mirrors compass/state.py's _compute_contract_coverage() (read directly to confirm
+    the algorithm, not guessed): gated on at least _CONTRACT_COVERAGE_MIN_CONTRACTS total
+    logged contracts, else both stats are None. Otherwise walks goal_completions newest
+    first collecting completed_hashes up to `window`, intersects with goal_contracts'
+    keys to find the contracts relevant to that window, and reports what fraction of
+    those were verified plus the mean per-contract criteria-met fraction.
+    """
+    contracts = state.get("goal_contracts", {})
+    if len(contracts) < _CONTRACT_COVERAGE_MIN_CONTRACTS:
+        return {"contract_coverage": None, "criteria_hit_rate": None}
+
+    completions = state.get("goal_completions", {})
+    hashes = []
+    for _, entry in sorted(completions.items(), reverse=True):
+        if isinstance(entry, dict):
+            hashes.extend(entry.get("completed_hashes", []))
+        if len(hashes) >= window:
+            break
+    hashes = hashes[:window]
+
+    relevant = [h for h in hashes if h in contracts]
+    if not relevant:
+        return {"contract_coverage": None, "criteria_hit_rate": None}
+
+    verified = [h for h in relevant if contracts[h].get("verified_at")]
+    coverage = round(len(verified) / len(relevant), 3)
+
+    scores = [
+        len(contracts[h].get("verified_criteria", [])) / len(contracts[h]["criteria"])
+        for h in verified if contracts[h].get("criteria")
+    ]
+    hit_rate = round(sum(scores) / len(scores), 3) if scores else None
+    return {"contract_coverage": coverage, "criteria_hit_rate": hit_rate}
+
+
+def _parse_goal_contracts(state):
+    """P55 — flatten state.json's goal_contracts ({goal_hash: {...}}) into a JS-ready
+    array, newest-created first. Merges compass core's separate `criteria`/
+    `verified_criteria`/`unmet_criteria` arrays into a single ordered
+    `criteria: [{text, met}]` list — preserves the goal's authored criteria order for
+    rendering, rather than making the frontend interleave two lists to reconstruct it.
+    """
+    out = []
+    for goal_hash, c in state.get("goal_contracts", {}).items():
+        criteria = c.get("criteria", [])
+        verified_criteria = set(c.get("verified_criteria", []))
+        merged_criteria = [{"text": t, "met": t in verified_criteria} for t in criteria]
+
+        if not c.get("verified_at"):
+            status = "pending"
+        elif criteria and len(verified_criteria) == len(criteria):
+            status = "verified"
+        elif verified_criteria:
+            status = "partially_verified"
+        else:
+            status = "unmet"
+
+        out.append({
+            "goal_hash":          goal_hash,
+            "goal_text":          c.get("goal_text", ""),
+            "criteria":           merged_criteria,
+            "evidence_type":      c.get("evidence_type"),
+            "stopping_condition": c.get("stopping_condition"),
+            "created_at":         c.get("created_at"),
+            "verified_at":        c.get("verified_at"),
+            # None until the contract has actually been through verification — a pending
+            # contract hasn't been evaluated yet, so 0.0 would misleadingly read as "failed".
+            "criteria_hit_rate":  round(len(verified_criteria) / len(criteria), 3) if criteria and c.get("verified_at") else None,
+            "status":             status,
+        })
+    out.sort(key=lambda c: c.get("created_at") or "", reverse=True)
+    return out
+
+
 def _goal_stats(state):
     completions = state.get("goal_completions", {})
     if not completions:
@@ -830,6 +960,9 @@ def load_namespace(ns_dir):
     intent       = _read_file(ns_dir / "intent.md")
     reality      = _read_file(ns_dir / "reality.md")
     learnings    = _read_jsonl(ns_dir / "learnings.jsonl")
+    for _l in learnings:
+        if "confidence" in _l:
+            _l["confidence"] = _normalize_confidence(_l["confidence"])
     decisions    = _read_jsonl(ns_dir / "decisions.jsonl")
     code_context = _read_file(ns_dir / "code_context.md")
 
@@ -908,11 +1041,14 @@ def load_namespace(ns_dir):
     intent_version     = state.get("intent_versions", 1)
     stale_bullet_count = _stale_bullet_count(reality, state)
     corpus_health      = _corpus_health(active_learnings, superseded_count)
+    zone_distribution  = _zone_distribution(active_learnings)
 
     exploration_ratio    = _compute_exploration_ratio(state)
     last_reality_score   = state.get("last_reality_score")
     outcome_rate         = state.get("outcome_rate")
     goal_outcomes        = _goal_outcomes_breakdown(ns_dir, state, reality)
+    goal_contracts       = _parse_goal_contracts(state)
+    contract_stats       = _contract_coverage(state)
     goal_type_by_session = _goal_type_by_session(state)
     # Carry-forward trend + quality distribution: all history files (uncapped) — sorted chronologically
     carry_forward_trend = []
@@ -998,6 +1134,17 @@ def load_namespace(ns_dir):
             _ac["abs_file"] = None
         artefacts.append(_ac)
 
+    # P65 — contrastive decision-guidance cards ("prefer A over B"). New per-namespace
+    # file, not present in any live namespace yet as of this writing (shipped late Aug
+    # 2026) — _read_jsonl already returns [] gracefully when the file is absent. Retired
+    # entries filtered at read time, mirroring compass core's own query-decision-guidance
+    # command and this file's existing _community/feed.jsonl retraction-filtering
+    # precedent (load_community(), above).
+    decision_guidance = [
+        g for g in _read_jsonl(ns_dir / "decision_guidance.jsonl")
+        if g.get("status") != "retired"
+    ]
+
     # Cross-namespace learning links
     back_refs_raw = _read_jsonl(ns_dir / "back_references.jsonl")
     conflicts_raw = _read_jsonl(ns_dir / "conflict_resolutions.jsonl")
@@ -1061,12 +1208,17 @@ def load_namespace(ns_dir):
         "conflicts_by_text":         conflicts_by_text,
         "intent_history":            intent_history,
         "corpus_health":             corpus_health,
+        "zone_distribution":         zone_distribution,
         "retrieval_stale_count":     retrieval_stale_count,
         "external_signals":          external_signals,
         "exploration_ratio":         exploration_ratio,
         "last_reality_score":        last_reality_score,
         "outcome_rate":              outcome_rate,
         "goal_outcomes":             goal_outcomes,
+        "goal_contracts":            goal_contracts,
+        "contract_coverage":         contract_stats["contract_coverage"],
+        "criteria_hit_rate":         contract_stats["criteria_hit_rate"],
+        "decision_guidance":         decision_guidance,
         "goal_type_by_session":      goal_type_by_session,
         "carry_forward_trend":       carry_forward_trend,
         "quality_dist":              quality_dist,
@@ -1608,12 +1760,34 @@ def _js_data(namespaces):
             "conflictsByText":         n["conflicts_by_text"],
             "intentHistory":           n["intent_history"],
             "corpusHealth":            n["corpus_health"],
+            "zoneDistribution":        n.get("zone_distribution", {"golden": 0, "warning": 0, "preference": 0, "unclassified": 0}),
             "retrievalStaleCount":     n["retrieval_stale_count"],
             "externalSignals":         n["external_signals"],
             "explorationRatio":        n["exploration_ratio"],
             "lastRealityScore":        n["last_reality_score"],
             "outcomeRate":             n.get("outcome_rate"),
             "goalOutcomes":            n.get("goal_outcomes", []),
+            "contracts":               n.get("goal_contracts", []),
+            "contractCoverage":        n.get("contract_coverage"),
+            "criteriaHitRate":         n.get("criteria_hit_rate"),
+            "decisionGuidance":        [
+                {
+                    "guidanceId":            g.get("guidance_id"),
+                    "contextSummary":        g.get("context_summary"),
+                    "preferredDecisionText": g.get("preferred_decision_text"),
+                    "avoidedDecisionText":   g.get("avoided_decision_text"),
+                    "evidence":              g.get("evidence", {}),
+                    "qualityDelta": (
+                        g["evidence"]["preferred_quality"] - g["evidence"]["avoided_quality"]
+                        if isinstance(g.get("evidence"), dict)
+                        and "preferred_quality" in g["evidence"]
+                        and "avoided_quality" in g["evidence"]
+                        else None
+                    ),
+                    "createdAt": g.get("created_at"),
+                }
+                for g in n.get("decision_guidance", [])
+            ],
             "goalTypeBySession":       n["goal_type_by_session"],
             "carryForwardTrend":       n["carry_forward_trend"],
             "qualityDist":             n["quality_dist"],

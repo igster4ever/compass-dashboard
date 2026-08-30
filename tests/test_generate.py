@@ -450,6 +450,75 @@ class TestZoneAndRetrievalStale(unittest.TestCase):
         template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
         self.assertIn("row.dataset.stale === 'true'", template)
 
+    def test_zone_distribution_embedded_in_ns_json(self):
+        ns = _minimal_ns({"zone_distribution": {"golden": 2, "warning": 1, "preference": 0, "unclassified": 0}})
+        html = render_html([ns])
+        self.assertIn("zoneDistribution", html)
+        self.assertIn('"golden": 2', html.replace("'", '"'))
+
+    def test_zone_distribution_defaults_when_absent(self):
+        # _minimal_ns() has no zone_distribution key — must not crash the .get() default path.
+        html = render_html([_minimal_ns()])
+        self.assertIn("zoneDistribution", html)
+
+
+class TestVerificationContracts(unittest.TestCase):
+    """P55 — Verification Contracts."""
+
+    def _contract(self, goal_text="Ship the thing", criteria=None, verified_at=None):
+        return {
+            "goal_hash": "abc123",
+            "goal_text": goal_text,
+            "criteria": [{"text": c, "met": True} for c in (criteria or ["a", "b"])],
+            "evidence_type": "document",
+            "stopping_condition": "n/a",
+            "created_at": "2026-08-01T00:00:00Z",
+            "verified_at": verified_at,
+            "criteria_hit_rate": 1.0 if verified_at else None,
+            "status": "verified" if verified_at else "pending",
+        }
+
+    def test_contracts_embedded_in_ns_json(self):
+        ns = _minimal_ns({
+            "goal_contracts": [self._contract(verified_at="2026-08-02T00:00:00Z")],
+            "contract_coverage": 1.0,
+            "criteria_hit_rate": 1.0,
+        })
+        html = render_html([ns])
+        self.assertIn("Ship the thing", html)
+        self.assertIn("contractCoverage", html)
+        self.assertIn("criteriaHitRate", html)
+
+    def test_defaults_when_absent(self):
+        # _minimal_ns() has no goal_contracts/contract_coverage — must not crash .get() defaults.
+        html = render_html([_minimal_ns()])
+        self.assertIn('"contracts": []', html.replace("'", '"'))
+
+
+class TestDecisionGuidance(unittest.TestCase):
+    """P65 — Contrastive Decision-Guidance Mining."""
+
+    def test_decision_guidance_embedded_in_ns_json(self):
+        ns = _minimal_ns({
+            "decision_guidance": [{
+                "guidance_id": "g1",
+                "context_summary": "Sync strategy",
+                "preferred_decision_text": "Use event-driven append",
+                "avoided_decision_text": "Poll on a fixed interval",
+                "evidence": {"preferred_quality": 0.86, "avoided_quality": 0.61},
+                "status": "active",
+                "created_at": "2026-08-25T09:12:03Z",
+            }],
+        })
+        html = render_html([ns])
+        self.assertIn("Use event-driven append", html)
+        self.assertIn("decisionGuidance", html)
+
+    def test_defaults_when_absent(self):
+        # _minimal_ns() has no decision_guidance key — must not crash the .get() default path.
+        html = render_html([_minimal_ns()])
+        self.assertIn('"decisionGuidance": []', html.replace("'", '"'))
+
 
 class TestMindMap(unittest.TestCase):
     """E25b — Mind Map tab wiring and data layer."""
