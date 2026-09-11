@@ -99,6 +99,10 @@ def make_ns(name, **overrides):
         "skill_feedback": [
             {"text": "Something was slow", "step_ref": "ooda:orient", "weight": 2, "status": "open",
              "failure_dimension": "cadence-timing"},
+            {"text": "Another cadence complaint", "step_ref": "ooda:decide", "weight": 1, "status": "open",
+             "failure_dimension": "cadence-timing"},
+            {"text": "A schema mismatch", "step_ref": "general", "weight": 1, "status": "open",
+             "failure_dimension": "api-schema-gap"},
             {"text": "Something else", "step_ref": "general", "weight": 1, "status": "open"},
         ],
         "sessions_since_skill_opt": 3, "skill_opt_due": False,
@@ -116,8 +120,21 @@ def make_ns(name, **overrides):
         "assumption_audit_due": False, "assumption_audit_candidates": [],
         "claude_review_due": False, "dream_defer_count": 0,
         "complexity_clustering_signals": [],
+        "confidence_calibration": {
+            "sufficient_sample": True, "resolved_count": 10, "min_required": 8,
+            "buckets": {
+                "low": {"n": 3, "confirmed": 0, "confirm_rate": 0.0},
+                "medium": {"n": 4, "confirmed": 2, "confirm_rate": 0.5},
+                "high": {"n": 3, "confirmed": 3, "confirm_rate": 1.0},
+            },
+            "monotonic": True, "low_high_delta": 1.0, "miscalibrated": False,
+        },
     }
     base.update(overrides)
+    # Computed rather than hand-typed so it can never drift from the real function's
+    # actual output — same lesson as the confidence-calibration test math error this
+    # session (hand-derived expected values are a bug risk of their own).
+    base["failure_dimension_distribution"] = mod._failure_dimension_distribution(base["skill_feedback"])
     return base
 
 
@@ -128,7 +145,9 @@ def build():
             {"learning_id": "l3", "text": "Shared tooling insight", "tags": ["tooling"], "weight": 2,
              "date": "2026-07-20T00:00:00Z", "learning_type": "fact", "status": "active"},
         ], zone_distribution={"golden": 0, "warning": 0, "preference": 0, "unclassified": 1},
-           goal_contracts=[], contract_coverage=None, criteria_hit_rate=None, decision_guidance=[]),
+           goal_contracts=[], contract_coverage=None, criteria_hit_rate=None, decision_guidance=[],
+           confidence_calibration={"sufficient_sample": False, "resolved_count": 2, "min_required": 8,
+                                    "buckets": {}, "miscalibrated": None}),
     ]
 
     for n in ns_list:

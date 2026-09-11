@@ -30,6 +30,8 @@ _normalize_confidence  = _mod._normalize_confidence
 _zone_distribution     = _mod._zone_distribution
 _contract_coverage     = _mod._contract_coverage
 _parse_goal_contracts  = _mod._parse_goal_contracts
+_compute_confidence_calibration = _mod._compute_confidence_calibration
+_failure_dimension_distribution = _mod._failure_dimension_distribution
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -83,10 +85,21 @@ class TestRealityCompleteness(unittest.TestCase):
             score = _reality_completeness(md)
             self.assertEqual(score, 100.0, msg=f"Failed for header: {header!r}")
 
-    def test_blank_and_underscore_bullets_excluded(self):
-        md = "## What exists\n- \n- _italic note_\n- Real bullet live\n"
-        # blank and underscore skipped; only "Real bullet live" counted
+    def test_blank_bullet_excluded_underscore_bullet_counted(self):
+        # 2026-09-11 fix (mirrors compass core's da6a012, 2026-09-07): the old
+        # `startswith("_")` check was dead code intended to filter cmd_init's stub
+        # reality.md, but that stub line has no "- "/"* " prefix at all, so it never
+        # reached this branch — the check only ever matched a *real* bullet that
+        # happens to start with an underscore (e.g. naming a private Python function),
+        # silently excluding it from the completeness denominator.
+        md = "## What exists\n- \n- _private_helper is complete and shipped\n- Real bullet live\n"
+        # blank still skipped; both real bullets now counted, both carry a marker
         self.assertEqual(_reality_completeness(md), 100.0)
+
+    def test_underscore_bullet_without_marker_lowers_score(self):
+        md = "## What exists\n- _private_helper does a thing\n- Real bullet live\n"
+        # underscore-prefixed bullet now counted but has no completion marker
+        self.assertEqual(_reality_completeness(md), 50.0)
 
     def test_completion_marker_case_insensitive(self):
         md = "## What exists\n- Feature Shipped\n- Another COMPLETE\n"
@@ -380,11 +393,13 @@ class TestStaleBulletCount(unittest.TestCase):
         with patch.object(_mod, "_now_utc", return_value=_NOW):
             self.assertEqual(_stale_bullet_count(md, state, days=30), 2)
 
-    def test_blank_and_underscore_bullets_excluded(self):
-        md = "## What exists\n- \n- _italic_\n- Real bullet\n"
-        state = self._make_state([("Real bullet", None)])
+    def test_blank_bullet_excluded_underscore_bullet_counted(self):
+        # 2026-09-11 fix (mirrors compass core's da6a012): underscore-prefixed bullets
+        # are real bullets, not stub placeholders — only blank lines are skipped.
+        md = "## What exists\n- \n- _private_helper\n- Real bullet\n"
+        state = self._make_state([("Real bullet", None), ("_private_helper", None)])
         with patch.object(_mod, "_now_utc", return_value=_NOW):
-            self.assertEqual(_stale_bullet_count(md, state, days=30), 1)
+            self.assertEqual(_stale_bullet_count(md, state, days=30), 2)
 
     def test_custom_days_threshold(self):
         # With days=1, the "fresh" timestamp (2 days ago) becomes stale
@@ -956,6 +971,138 @@ class TestLoadNamespaceDecisionGuidance(unittest.TestCase):
         result = _mod.load_namespace(self.ns_dir)
         self.assertEqual(len(result["decision_guidance"]), 1)
         self.assertEqual(result["decision_guidance"][0]["guidance_id"], "g1")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# _compute_confidence_calibration (P59) — mirrors compass core's
+# compass/learnings.py::_compute_confidence_calibration exactly (_MIN_RESOLVED_HYPOTHESES=8,
+# _CONFIDENCE_ORDER=("low","medium","high"))
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _hyp(confidence, result):
+    return {"learning_type": "hypothesis", "confidence": confidence, "validation_result": result}
+
+
+class TestConfidenceCalibration(unittest.TestCase):
+    def test_below_sample_size_threshold(self):
+        learnings = [_hyp("high", "confirmed")] * 7
+        result = _compute_confidence_calibration(learnings)
+        self.assertFalse(result["sufficient_sample"])
+        self.assertEqual(result["resolved_count"], 7)
+        self.assertEqual(result["min_required"], 8)
+        self.assertEqual(result["buckets"], {})
+        self.assertIsNone(result["miscalibrated"])
+
+    def test_non_hypothesis_and_unresolved_learnings_excluded_from_count(self):
+        learnings = (
+            [_hyp("high", "confirmed")] * 7
+            + [{"learning_type": "fact", "confidence": "high"}]
+            + [_hyp("high", None)]
+            + [{"learning_type": "hypothesis", "confidence": "high", "validation_result": "pending"}]
+        )
+        result = _compute_confidence_calibration(learnings)
+        self.assertFalse(result["sufficient_sample"])
+        self.assertEqual(result["resolved_count"], 7)
+
+    def test_well_calibrated_monotonic_strong_discrimination(self):
+        learnings = (
+            [_hyp("low", "disproven")] * 3
+            + [_hyp("medium", "confirmed")] * 2 + [_hyp("medium", "disproven")] * 2
+            + [_hyp("high", "confirmed")] * 3
+        )
+        result = _compute_confidence_calibration(learnings)
+        self.assertTrue(result["sufficient_sample"])
+        self.assertEqual(result["resolved_count"], 10)
+        self.assertEqual(result["buckets"]["low"], {"n": 3, "confirmed": 0, "confirm_rate": 0.0})
+        self.assertEqual(result["buckets"]["medium"], {"n": 4, "confirmed": 2, "confirm_rate": 0.5})
+        self.assertEqual(result["buckets"]["high"], {"n": 3, "confirmed": 3, "confirm_rate": 1.0})
+        self.assertTrue(result["monotonic"])
+        self.assertEqual(result["low_high_delta"], 1.0)
+        self.assertFalse(result["miscalibrated"])
+
+    def test_non_monotonic_is_miscalibrated(self):
+        # high bucket confirms LESS often than low — inverted calibration
+        learnings = (
+            [_hyp("low", "confirmed")] * 4
+            + [_hyp("medium", "confirmed")] * 2 + [_hyp("medium", "disproven")] * 2
+            + [_hyp("high", "disproven")] * 4
+        )
+        result = _compute_confidence_calibration(learnings)
+        self.assertTrue(result["sufficient_sample"])
+        self.assertFalse(result["monotonic"])
+        self.assertTrue(result["miscalibrated"])
+
+    def test_monotonic_but_weak_discrimination_is_miscalibrated(self):
+        # low=0.50, medium=0.60, high=0.60 — monotonic but delta 0.10 < 0.20 threshold
+        learnings = (
+            [_hyp("low", "confirmed")] * 2 + [_hyp("low", "disproven")] * 2
+            + [_hyp("medium", "confirmed")] * 3 + [_hyp("medium", "disproven")] * 2
+            + [_hyp("high", "confirmed")] * 3 + [_hyp("high", "disproven")] * 2
+        )
+        result = _compute_confidence_calibration(learnings)
+        self.assertTrue(result["sufficient_sample"])
+        self.assertEqual(result["buckets"]["low"]["confirm_rate"], 0.5)
+        self.assertEqual(result["buckets"]["high"]["confirm_rate"], 0.6)
+        self.assertTrue(result["monotonic"])
+        self.assertTrue(result["miscalibrated"])
+
+    def test_empty_bucket_confirm_rate_is_null_not_excluded_from_monotonic_check(self):
+        # no "medium" entries at all; low/high still compared directly
+        learnings = [_hyp("low", "disproven")] * 4 + [_hyp("high", "confirmed")] * 4
+        result = _compute_confidence_calibration(learnings)
+        self.assertTrue(result["sufficient_sample"])
+        self.assertIsNone(result["buckets"]["medium"]["confirm_rate"])
+        self.assertEqual(result["buckets"]["medium"]["n"], 0)
+        self.assertTrue(result["monotonic"])
+        self.assertEqual(result["low_high_delta"], 1.0)
+        self.assertFalse(result["miscalibrated"])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# _failure_dimension_distribution (P69) — dashboard-only aggregation; compass core
+# only added the per-entry closed-enum field + a single-value filter, no grouping.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestFailureDimensionDistribution(unittest.TestCase):
+    def test_empty_feedback_returns_zero_total(self):
+        result = _failure_dimension_distribution([])
+        self.assertEqual(result["total"], 0)
+        self.assertEqual(result["counts"], {
+            "cadence-timing": 0, "api-schema-gap": 0, "step-sequencing": 0,
+            "cross-namespace-scope": 0, "unclassified": 0,
+        })
+        self.assertIsNone(result["dominant"])
+
+    def test_counts_by_known_dimension(self):
+        feedback = (
+            [{"failure_dimension": "cadence-timing"}] * 3
+            + [{"failure_dimension": "api-schema-gap"}] * 1
+            + [{"failure_dimension": "step-sequencing"}] * 2
+        )
+        result = _failure_dimension_distribution(feedback)
+        self.assertEqual(result["total"], 6)
+        self.assertEqual(result["counts"]["cadence-timing"], 3)
+        self.assertEqual(result["counts"]["api-schema-gap"], 1)
+        self.assertEqual(result["counts"]["step-sequencing"], 2)
+        self.assertEqual(result["counts"]["cross-namespace-scope"], 0)
+        self.assertEqual(result["dominant"], "cadence-timing")
+
+    def test_missing_or_unknown_dimension_counted_as_unclassified(self):
+        feedback = [
+            {"text": "no dimension field"},
+            {"failure_dimension": None},
+            {"failure_dimension": "some-future-category-not-yet-in-the-enum"},
+        ]
+        result = _failure_dimension_distribution(feedback)
+        self.assertEqual(result["total"], 3)
+        self.assertEqual(result["counts"]["unclassified"], 3)
+        self.assertEqual(result["dominant"], "unclassified")
+
+    def test_tie_breaks_by_enum_order(self):
+        # cadence-timing comes first in the closed enum — ties should favour it
+        feedback = [{"failure_dimension": "cadence-timing"}, {"failure_dimension": "api-schema-gap"}]
+        result = _failure_dimension_distribution(feedback)
+        self.assertEqual(result["dominant"], "cadence-timing")
 
 
 if __name__ == "__main__":

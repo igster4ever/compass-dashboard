@@ -134,7 +134,13 @@ def _iter_reality_bullets(reality_md):
                 excluded = any(k in header for k in _BACKLOG_HEADERS | _NON_ACHIEVEMENT_HEADERS)
         elif s.startswith("- ") or s.startswith("* "):
             text = s[2:].strip()
-            if not text or text.startswith("_"):
+            # A stub-skip check here (text.startswith("_")) was dead code: cmd_init's
+            # stub reality.md ("_Not yet defined..._") has no "- "/"* " prefix at all, so
+            # it never reaches this branch — the check only ever matched a *real* bullet
+            # starting with a literal underscore, silently excluding it from completeness/
+            # staleness/goal-outcome scans. Same bug fixed upstream in compass/reality.py
+            # 2026-09-07 (da6a012); mirrored here.
+            if not text:
                 continue
             yield text, excluded
 
@@ -197,6 +203,91 @@ def _zone_distribution(learnings):
         z = l.get("zone")
         counts[z if z in _ZONE_LABELS else "unclassified"] += 1
     return counts
+
+
+_FAILURE_DIMENSIONS = ("cadence-timing", "api-schema-gap", "step-sequencing", "cross-namespace-scope")
+
+
+def _failure_dimension_distribution(skill_feedback):
+    """P69 — dashboard-only aggregation of skill_feedback[] by failure_dimension.
+
+    compass core (feedback.py) only added the per-entry closed-enum field plus a
+    single-value exact-match filter on cmd_get_skill_feedback — no grouping/counting
+    exists upstream, this is purely a dashboard-side rollup on top of the raw entries
+    already loaded by load_namespace(). Entries with no failure_dimension (pre-P69) or
+    a value outside the closed enum count as "unclassified", so counts always sum to
+    len(skill_feedback) — mirrors _zone_distribution's same convention. `dominant` is
+    the highest-count bucket (enum order breaks ties, "unclassified" last), or None
+    when skill_feedback is empty.
+    """
+    counts = {k: 0 for k in _FAILURE_DIMENSIONS}
+    counts["unclassified"] = 0
+    for f in skill_feedback:
+        dim = f.get("failure_dimension")
+        counts[dim if dim in counts else "unclassified"] += 1
+    total = sum(counts.values())
+    dominant = max(counts, key=lambda k: counts[k]) if total else None
+    return {"counts": counts, "total": total, "dominant": dominant}
+
+
+_CONFIDENCE_ORDER = ("low", "medium", "high")  # P59: local copy of compass/learnings.py's constant
+_MIN_RESOLVED_HYPOTHESES = 8  # P59: sample-size guard — below this, bucket percentages are noise
+
+
+def _compute_confidence_calibration(learnings):
+    """P59 — mirrors compass core's compass/learnings.py::_compute_confidence_calibration exactly.
+
+    Groups resolved hypothesis learnings (learning_type == "hypothesis" with
+    validation_result in ("confirmed", "disproven")) by stated confidence and computes a
+    confirm_rate per bucket, then flags miscalibration: either a non-monotonic ordering
+    (a higher stated confidence should never confirm less often than a lower one) or weak
+    discrimination (low/high buckets differ by less than 0.20). Purely observational —
+    never mutates a learning or feeds back into ranking/priority. Takes the *unfiltered*
+    learnings list (all_learnings, not active_learnings) to match compass core reading
+    learnings.jsonl raw — an archived/superseded hypothesis is still a resolved data point.
+    """
+    resolved = [
+        l for l in learnings
+        if l.get("learning_type") == "hypothesis" and l.get("validation_result") in ("confirmed", "disproven")
+    ]
+    if len(resolved) < _MIN_RESOLVED_HYPOTHESES:
+        return {
+            "sufficient_sample": False,
+            "resolved_count": len(resolved),
+            "min_required": _MIN_RESOLVED_HYPOTHESES,
+            "buckets": {},
+            "miscalibrated": None,
+        }
+
+    buckets = {}
+    for level in _CONFIDENCE_ORDER:
+        bucket_learnings = [l for l in resolved if l.get("confidence") == level]
+        confirmed = sum(1 for l in bucket_learnings if l["validation_result"] == "confirmed")
+        n = len(bucket_learnings)
+        buckets[level] = {
+            "n": n,
+            "confirmed": confirmed,
+            "confirm_rate": round(confirmed / n, 3) if n else None,
+        }
+
+    rates = [buckets[level]["confirm_rate"] for level in _CONFIDENCE_ORDER if buckets[level]["confirm_rate"] is not None]
+    monotonic = all(rates[i] <= rates[i + 1] for i in range(len(rates) - 1))
+
+    low_rate, high_rate = buckets["low"]["confirm_rate"], buckets["high"]["confirm_rate"]
+    low_high_delta = (high_rate - low_rate) if (low_rate is not None and high_rate is not None) else None
+    weak_discrimination = low_high_delta is not None and low_high_delta < 0.20
+
+    miscalibrated = (not monotonic) or weak_discrimination
+
+    return {
+        "sufficient_sample": True,
+        "resolved_count": len(resolved),
+        "min_required": _MIN_RESOLVED_HYPOTHESES,
+        "buckets": buckets,
+        "monotonic": monotonic,
+        "low_high_delta": round(low_high_delta, 3) if low_high_delta is not None else None,
+        "miscalibrated": miscalibrated,
+    }
 
 
 _RETRIEVAL_STALE_SURFACED_THRESHOLD = 10  # P58: local copy of compass's retrieval_stale_surfaced_threshold
@@ -1042,6 +1133,7 @@ def load_namespace(ns_dir):
     stale_bullet_count = _stale_bullet_count(reality, state)
     corpus_health      = _corpus_health(active_learnings, superseded_count)
     zone_distribution  = _zone_distribution(active_learnings)
+    confidence_calibration = _compute_confidence_calibration(all_learnings)
 
     exploration_ratio    = _compute_exploration_ratio(state)
     last_reality_score   = state.get("last_reality_score")
@@ -1095,6 +1187,7 @@ def load_namespace(ns_dir):
 
     # P51–P53: skill feedback + skillopt cadence + quality history + holdout state
     skill_feedback           = _read_jsonl(ns_dir / "skill_feedback.jsonl")
+    failure_dimension_distribution = _failure_dimension_distribution(skill_feedback)
     sessions_since_skill_opt = state.get("sessions_since_skill_opt", 0)
     skill_opt_due            = sessions_since_skill_opt >= 10
 
@@ -1209,6 +1302,7 @@ def load_namespace(ns_dir):
         "intent_history":            intent_history,
         "corpus_health":             corpus_health,
         "zone_distribution":         zone_distribution,
+        "confidence_calibration":    confidence_calibration,
         "retrieval_stale_count":     retrieval_stale_count,
         "external_signals":          external_signals,
         "exploration_ratio":         exploration_ratio,
@@ -1228,6 +1322,7 @@ def load_namespace(ns_dir):
         "artefacts":                  artefacts,
         "all_incomplete_items":       all_incomplete_items,
         "skill_feedback":             skill_feedback,
+        "failure_dimension_distribution": failure_dimension_distribution,
         "sessions_since_skill_opt":   sessions_since_skill_opt,
         "skill_opt_due":              skill_opt_due,
         "quality_history":            quality_history,
@@ -1761,6 +1856,7 @@ def _js_data(namespaces):
             "intentHistory":           n["intent_history"],
             "corpusHealth":            n["corpus_health"],
             "zoneDistribution":        n.get("zone_distribution", {"golden": 0, "warning": 0, "preference": 0, "unclassified": 0}),
+            "confidenceCalibration":   n.get("confidence_calibration", {"sufficient_sample": False, "resolved_count": 0, "min_required": 8, "buckets": {}, "miscalibrated": None}),
             "retrievalStaleCount":     n["retrieval_stale_count"],
             "externalSignals":         n["external_signals"],
             "explorationRatio":        n["exploration_ratio"],
@@ -1796,6 +1892,11 @@ def _js_data(namespaces):
             "researchDeferCount":      n["research_defer_count"],
             "artefacts":               n["artefacts"],
             "skillFeedback":           n["skill_feedback"],
+            "failureDimensionDistribution": n.get("failure_dimension_distribution", {
+                "counts": {"cadence-timing": 0, "api-schema-gap": 0, "step-sequencing": 0,
+                           "cross-namespace-scope": 0, "unclassified": 0},
+                "total": 0, "dominant": None,
+            }),
             "sessionsSinceSkillOpt":   n["sessions_since_skill_opt"],
             "skillOptDue":             n["skill_opt_due"],
             "qualityHistory":          n["quality_history"],

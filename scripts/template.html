@@ -247,6 +247,30 @@
     .empty-state { font-size: .82rem; color: var(--subtle); font-style: italic; padding: .5rem 0; }
     .panel-msg   { padding: 1rem; color: var(--muted); }
 
+    /* ── State tab collapsible groups (headline visible, detail on demand) ── */
+    .state-group {
+      border: 1px solid var(--border); border-radius: 6px; margin-bottom: .75rem; overflow: hidden;
+    }
+    .state-group > summary {
+      list-style: none; cursor: pointer; user-select: none; padding: .55rem .75rem;
+      font-size: .78rem; font-weight: 600; color: var(--text); background: var(--surface2, transparent);
+      display: flex; align-items: center; gap: .4rem;
+    }
+    .state-group > summary::-webkit-details-marker { display: none; }
+    .state-group > summary::before {
+      content: '▸'; color: var(--muted); display: inline-block; transition: transform .12s;
+    }
+    .state-group[open] > summary::before { transform: rotate(90deg); }
+    .state-group-headline { font-weight: 400; color: var(--muted); font-size: .75rem; }
+    .state-group-body { padding: .25rem .9rem .75rem; }
+    .state-group-body .md-section:last-child { margin-bottom: 0; }
+    .state-snapshot { margin-bottom: .75rem; }
+    .state-health-strip {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: .75rem;
+      margin-bottom: 1rem; padding: .75rem; border: 1px solid var(--border); border-radius: 6px;
+    }
+    .state-health-strip .md-section { margin-bottom: 0; }
+
     /* ── Goals list ── */
     .goals-list { list-style: none; padding: 0; }
     .goals-list li {
@@ -1413,6 +1437,31 @@ function renderStateSection_SkillOptStatus(ns) {
   </div>`;
 }
 
+function renderStateSection_ConfidenceCalibration(ns) {
+  const cc = ns.confidenceCalibration;
+  if (!cc) return '';
+  if (!cc.sufficient_sample) {
+    return `<div class="md-section"><h3>Confidence calibration (P59)</h3>
+      <div style="font-size:.75rem;color:var(--muted);font-style:italic">${cc.resolved_count}/${cc.min_required} resolved hypotheses — not enough data yet</div>
+    </div>`;
+  }
+  const order = ['low', 'medium', 'high'];
+  const chips = order.map(level => {
+    const b = cc.buckets[level] || {};
+    const rate = b.confirm_rate != null ? Math.round(b.confirm_rate * 100) + '%' : '—';
+    return `<span class="contract-chip" style="margin-right:.4rem">${level}: ${rate} <span style="color:var(--subtle)">(n=${b.n || 0})</span></span>`;
+  }).join('');
+  const icon = cc.miscalibrated ? '⚠' : '✓';
+  const col  = cc.miscalibrated ? 'var(--amber)' : 'var(--muted)';
+  const verdict = cc.miscalibrated
+    ? (cc.monotonic ? 'weak discrimination (low/high < 20pp apart)' : 'non-monotonic — higher confidence confirming less often')
+    : 'well calibrated';
+  return `<div class="md-section"><h3>Confidence calibration (P59)</h3>
+    <div style="margin-bottom:.3rem">${chips}</div>
+    <div style="font-size:.75rem;color:${col}">${icon} ${esc(verdict)}</div>
+  </div>`;
+}
+
 function renderStateSection_SkillFeedback(ns) {
   const fb = ns.skillFeedback || [];
   if (!fb.length) {
@@ -1440,24 +1489,105 @@ function renderStateSection_SkillFeedback(ns) {
   </div>`;
 }
 
+function renderStateSection_FailureDimensions(ns) {
+  const fd = ns.failureDimensionDistribution;
+  if (!fd || !fd.total) return '';
+  const order = ['cadence-timing', 'api-schema-gap', 'step-sequencing', 'cross-namespace-scope', 'unclassified'];
+  const maxN = Math.max(...order.map(k => fd.counts[k] || 0), 1);
+  const rows = order.filter(k => fd.counts[k] > 0).map(k => {
+    const n = fd.counts[k];
+    const w = Math.round(n / maxN * 100);
+    const dominant = k === fd.dominant ? ' style="font-weight:600;color:var(--text)"' : ' style="color:var(--muted)"';
+    return `<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.25rem;font-size:.75rem">
+      <span${dominant} style="min-width:150px">${esc(k)}</span>
+      <span style="flex:1;height:6px;background:var(--surface2,rgba(255,255,255,.06));border-radius:3px;overflow:hidden">
+        <span style="display:block;height:100%;width:${w}%;background:${k === fd.dominant ? 'var(--amber)' : 'var(--blue)'}"></span>
+      </span>
+      <span style="color:var(--subtle);min-width:1.5rem;text-align:right">${n}</span>
+    </div>`;
+  }).join('');
+  return `<div class="md-section"><h3>Failure dimensions (P69) — ${fd.total} classified</h3>
+    ${rows}
+  </div>`;
+}
+
+function stateGroup(title, headline, bodyHtml, opts) {
+  // bodyHtml may be made of several renderStateSection_* pieces already concatenated —
+  // an empty combined body means every section inside opted out (returned ''), so the
+  // whole group is skipped rather than rendering an empty shell.
+  if (!bodyHtml) return '';
+  const open = opts && opts.open ? ' open' : '';
+  return `<details class="state-group"${open}>
+    <summary>${esc(title)}${headline ? `<span class="state-group-headline">${esc(headline)}</span>` : ''}</summary>
+    <div class="state-group-body">${bodyHtml}</div>
+  </details>`;
+}
+
 function renderState(ns) {
-  return [
+  const snapshot = [
     renderStateSection_Intent(ns),
-    renderStateSection_IntentHistory(ns),
     renderStateSection_Goals(ns),
     renderStateSection_NextSession(ns),
     renderStateSection_CodeContext(ns),
-    renderStateSection_Reality(ns),
-    renderStateSection_Decisions(ns),
-    renderStateSection_Deferred(ns),
-    renderStateSection_GoalOutcomes(ns),
-    renderStateSection_GoalContracts(ns),
-    renderStateSection_WatchFeed(ns),
+  ].join('');
+
+  const healthStrip = [
     renderStateSection_CycleSparkline(ns),
     renderStateSection_DreamStatus(ns),
     renderStateSection_SkillOptStatus(ns),
-    renderStateSection_SkillFeedback(ns),
+    renderStateSection_ConfidenceCalibration(ns),
   ].join('');
+
+  const realityHeadline = ns.realityCompletenessScore != null
+    ? `${ns.realityCompletenessScore}% complete${ns.staleBulletCount > 0 ? `, ${ns.staleBulletCount} unverified ⚠` : ''}`
+    : '';
+  const reality = stateGroup('Reality', realityHeadline, renderStateSection_Reality(ns));
+
+  const decisionsCount = (ns.decisions || []).length;
+  const deferredCount  = (ns.deferred || []).length;
+  const decisionsHeadlineParts = [];
+  if (decisionsCount) decisionsHeadlineParts.push(`${decisionsCount} recent decision${decisionsCount !== 1 ? 's' : ''}`);
+  if (deferredCount)  decisionsHeadlineParts.push(`${deferredCount} deferred`);
+  const decisionsBacklog = stateGroup(
+    'Decisions & backlog', decisionsHeadlineParts.join(', '),
+    renderStateSection_Decisions(ns) + renderStateSection_Deferred(ns)
+  );
+
+  const goalTrackingHeadlineParts = [];
+  if (ns.outcomeRate != null) goalTrackingHeadlineParts.push(`${Math.round(ns.outcomeRate * 100)}% outcome-linked`);
+  if (ns.contractCoverage != null) goalTrackingHeadlineParts.push(`${Math.round(ns.contractCoverage * 100)}% contract coverage`);
+  const goalTracking = stateGroup(
+    'Goal tracking', goalTrackingHeadlineParts.join(', '),
+    renderStateSection_GoalOutcomes(ns) + renderStateSection_GoalContracts(ns)
+  );
+
+  const ws = ns.watchSignals || {};
+  const crossNsHeadline = (ns.watches || []).length
+    ? `watching ${ns.watches.length} namespace${ns.watches.length !== 1 ? 's' : ''}${ws.total_signals ? `, ${ws.total_signals} signal${ws.total_signals !== 1 ? 's' : ''}` : ''}`
+    : '';
+  const crossNamespace = stateGroup('Cross-namespace signals', crossNsHeadline, renderStateSection_WatchFeed(ns));
+
+  const fbCount = (ns.skillFeedback || []).length;
+  const fd = ns.failureDimensionDistribution;
+  const fbHeadlineParts = [];
+  if (fbCount) fbHeadlineParts.push(`${fbCount} entr${fbCount !== 1 ? 'ies' : 'y'}`);
+  if (fd && fd.dominant) fbHeadlineParts.push(`dominant: ${fd.dominant}`);
+  const feedback = stateGroup(
+    'Feedback & failure analysis',
+    fbHeadlineParts.join(', '),
+    renderStateSection_FailureDimensions(ns) + renderStateSection_SkillFeedback(ns)
+  );
+
+  const historyCount = (ns.intentHistory || []).length;
+  const intentHistory = stateGroup(
+    'Intent history', historyCount > 1 ? `v${historyCount}` : '',
+    renderStateSection_IntentHistory(ns)
+  );
+
+  const healthStripHtml = healthStrip ? `<div class="state-health-strip">${healthStrip}</div>` : '';
+  return `<div class="state-snapshot">${snapshot}</div>` +
+    healthStripHtml +
+    reality + decisionsBacklog + goalTracking + crossNamespace + feedback + intentHistory;
 }
 
 function renderZoneDistribution(ns, tableId, nsId) {
@@ -2479,6 +2609,10 @@ function navigateToResult(nsIdx, section, subIdx, field) {
       }
     }
     if (target) {
+      // Reality/Decisions/etc. now live inside collapsible <details> state-groups —
+      // a closed ancestor has no layout box, so open it before scrolling/highlighting.
+      let anc = target.closest('details');
+      while (anc) { anc.open = true; anc = anc.parentElement && anc.parentElement.closest('details'); }
       target.scrollIntoView({behavior: 'smooth', block: 'nearest'});
       target.classList.add('highlight-flash');
       setTimeout(() => target.classList.remove('highlight-flash'), 1800);

@@ -204,6 +204,8 @@ Covered by two new cases in `tests/js/dashboard_helpers.test.mjs` (`deriveTasks`
 | `zoneDistribution` | active `learnings[]`, computed by `_zone_distribution()` | `{golden, warning, preference, unclassified}` counts — P56; top-level sibling to `corpusHealth`, not nested (meaningful even below `corpusHealth`'s 3-learning gate) |
 | `contracts[]` / `contractCoverage` / `criteriaHitRate` | state.json `goal_contracts`, computed by `_parse_goal_contracts()`/`_contract_coverage()` | P55 — see "Verification Contracts" section below |
 | `decisionGuidance[]` | `decision_guidance.jsonl` | P65 — see "Contrastive Decision-Guidance Mining" section below; empty in every namespace as of 2026-08-30 (feature shipped compass-core-side very recently, no adoption yet) |
+| `confidenceCalibration` | `learnings.jsonl` (all, unfiltered), computed by `_compute_confidence_calibration()` | P59 — see "State sub-tab redesign" section below |
+| `failureDimensionDistribution` | `skill_feedback.jsonl`, computed by `_failure_dimension_distribution()` | P69 — dashboard-only aggregation, see "State sub-tab redesign" section below |
 
 `history` is capped at 5 for rendering (planned/completed detail). `sessionDates` is the
 full set and must be used for any time-based visualisation.
@@ -234,6 +236,18 @@ limitations`, `known doc staleness`) that were wrongly counted toward the denomi
 fixed here — **compass core's own `reality.py` has the identical `✓`-only gap** (confirmed by
 reading its source), so it likely under-reports completeness for its own dream/review cadence
 gating too; that's a compass-core bug, out of scope for this repo, flagged for separate fixing.
+
+**2026-09-11: dead "stub-skip" bug in `_iter_reality_bullets()`, mirrored from an upstream fix.**
+compass core fixed a bug in `reality.py` on 2026-09-07 (`da6a012`): a `text.startswith("_")`
+check meant to filter `cmd_init`'s stub reality.md ("_Not yet defined..._") was dead code — that
+stub line has no `"- "`/`"* "` bullet prefix at all, so it never reached the branch the check
+lived in. The check only ever matched a *real* bullet that happens to start with a literal
+underscore (e.g. naming a private Python function, common in this very codebase), silently
+excluding it from completeness/staleness/goal-outcome scans. This dashboard's own
+`_iter_reality_bullets()` (`compass-dashboard.py:121`) had the identical bug, feeding
+`_reality_completeness()`, `_stale_bullet_count()`, and the goal-outcome bullet-hash lookup —
+fixed the same way, same session. If compass core patches another shared parsing quirk like
+this again, check this file's mirror first rather than assuming it's already in sync.
 
 **Computed-at-read-time vs persisted fields:** before wiring a new compass field into `load_namespace()`, check whether `compass.py`/`_monolith.py` actually *persists* it in `state.json` or only *computes it fresh when compass's own `read()` runs*. Several fields have turned out to be the latter — `dream_due`, `exploration_ratio` (always stored as `None`), `quality_plateau`/`cadence_pull_forward`, and the `skill_opt` friction-gate annotation. For these, this script must replicate compass's own derivation logic rather than reading a value that "should" be there — grep the compass source for how the field is produced before assuming a plain `state.get("field")` will work.
 
@@ -458,6 +472,62 @@ are exported via the `Object.assign(window, {...})` list (the 4th IIFE trap abov
 
 ---
 
+## State sub-tab redesign, P59 confidence calibration, P69 failure dimensions (2026-09-11)
+
+**Doom-scroll fix.** The State sub-tab (`renderState()`, `template.html`) used to be a flat
+`.join('')` of 15 independently-toggled `renderStateSection_*()` functions — high-value info
+like "Session cycle time" sat 12 sections deep, well past the single biggest section (the
+entire raw `reality.md` markdown, ~34KB for this namespace, inlined via
+`renderStateSection_Reality()`). Restructured into:
+
+- **3 always-visible items** at the top: Intent; Active goals/Next-session entry point; a new
+  **"Health & cadence" strip** (`.state-health-strip`, a responsive grid) holding Session cycle
+  time, Dream status, SkillOpt status, and the new P59 confidence-calibration panel.
+- **6 collapsible `<details class="state-group">` groups**, each with a one-line headline in
+  its `<summary>` computed from data already in `ns` (e.g. `Reality — 53% complete, 5
+  unverified ⚠`) so nothing needs opening just to see whether it's worth opening: Reality;
+  Decisions & backlog (merges Decisions + Deferred); Goal tracking (merges Goal Outcomes P49 +
+  Goal Contracts P55); Cross-namespace signals (Watch feed); Feedback & failure analysis
+  (merges Skill Feedback P52 + the new P69 grouping, headline names the dominant failure
+  dimension); Intent history.
+
+Native `<details>/<summary>` — no new `Object.assign(window, {...})` export needed (same
+precedent as the Quality Trend breakdown). The `stateGroup(title, headline, bodyHtml)` helper
+skips rendering entirely when every section inside it returned `''` — an empty collapsed shell
+is worse than no group at all. **Trap avoided:** `navigateToResult()`'s search "jump to
+section" feature (Reality/Decisions text matched by `<h3>` text, `.closest('.md-section')`)
+now opens every ancestor `<details>` before calling `scrollIntoView()` — an element inside a
+*closed* `<details>` has no layout box, same as `display:none`, so scrolling to it silently
+does nothing without this fix.
+
+**P59 — Confidence calibration** (`renderStateSection_ConfidenceCalibration`, Health & cadence
+strip): `_compute_confidence_calibration()` (`compass-dashboard.py`, near `_zone_distribution`)
+is a verbatim port of compass core's `learnings.py::_compute_confidence_calibration` — groups
+resolved hypothesis learnings (`validation_result` in confirmed/disproven) by stated confidence
+(low/medium/high), computes a confirm-rate per bucket, gated at ≥8 resolved hypotheses (same
+null-below-threshold idiom as `outcomeRate`/`contractCoverage`). Flags miscalibration on either
+a non-monotonic ordering or weak low/high discrimination (<20pp). **Takes the unfiltered
+`all_learnings` list, not `active_learnings`** — matches compass core reading `learnings.jsonl`
+raw; an archived/superseded hypothesis is still a resolved data point for calibration purposes.
+
+**P69 — Failure-dimension grouping** (`renderStateSection_FailureDimensions`, Feedback &
+failure analysis group): `_failure_dimension_distribution()` is dashboard-only — compass core's
+P69 only added the per-entry closed-enum `failure_dimension` field plus a single-value exact
+filter on `cmd_get_skill_feedback`, no grouping/aggregation exists upstream. Counts
+`skill_feedback[]` by dimension (missing/unrecognised → `unclassified`, so counts always sum to
+the total, mirroring `_zone_distribution`'s convention), rendered as a small bar chart with the
+dominant bucket (ties broken by enum order) highlighted amber.
+
+Both new functions were built TDD-first (10 new Python tests total) and are exercised by
+`render_smoke.test.mjs` via `tests/js/fixtures/generate_fixture.py`, which now computes
+`failure_dimension_distribution` by calling the real function on the fixture's `skill_feedback`
+list rather than hand-typing the expected counts — the same math-error risk this session hit
+once already with a hand-typed `confidence_calibration` test case (fixed by correcting the test
+data, not the ported algorithm, since the port is byte-for-byte verified against the
+already-tested upstream source).
+
+---
+
 ## Verification Contracts, Decision Guidance & Zone distribution (2026-08-30)
 
 A gap audit found compass core had shipped P59 through P76 since this dashboard's last
@@ -586,7 +656,7 @@ count as user-controlled.
 
 | File | What it covers |
 |------|----------------|
-| `test_data_loading.py` | 101 unit tests for `_reality_completeness`, `_corpus_health`, `_goal_stats`, `_stale_bullet_count`, `_retrieval_stale_texts` (P58), `_normalize_confidence`, `_zone_distribution` (P56), `_contract_coverage`/`_parse_goal_contracts` (P55), and more — no filesystem deps (plus a small number of tempdir-based `load_namespace()` tests, e.g. P65 decision-guidance filtering) |
+| `test_data_loading.py` | 112 unit tests for `_reality_completeness`, `_corpus_health`, `_goal_stats`, `_stale_bullet_count`, `_retrieval_stale_texts` (P58), `_normalize_confidence`, `_zone_distribution` (P56), `_contract_coverage`/`_parse_goal_contracts` (P55), `_compute_confidence_calibration` (P59), `_failure_dimension_distribution` (P69), and more — no filesystem deps (plus a small number of tempdir-based `load_namespace()` tests, e.g. P65 decision-guidance filtering) |
 | `test_generate.py` | 71 smoke tests for `generate()` — structural markers, `const NS = [` embedding, script-tag injection escaping, community/mindmap/P51-P53/P55/P56/P58/P65 wiring |
 | `js/dashboard_helpers.test.mjs` | Node-native (`node --test`, no deps) smoke tests for pure JS helpers in `template.html` — `esc`, `fmtYM`, `_daysSince`, `urgencyScore`, `scoreItem`, `scaleLinear`, `renderYAxisGridlines`. Extracts function source directly from the file text (brace-matched) since the script is wrapped in an IIFE with no module exports — see `extractFunction()` for the brace-matching approach and its default-parameter gotcha. Run: `node --test tests/js/dashboard_helpers.test.mjs` |
 | `js/render_smoke.test.mjs` | Node-native (`node --test`, no deps — hand-rolled DOM stub, not jsdom) smoke tests for the ~46 `render*` functions that touch `document`/`window` and so can't be extracted in isolation like the pure helpers above. Runs the *entire* `<script>` IIFE in a `node:vm` sandbox against `js/fixtures/dashboard_fixture.json` (synthetic data only — regenerate via `python3 tests/js/fixtures/generate_fixture.py`, which builds it from the real `load_namespace()`/`_js_data()` field shapes so it can't drift from production shape), then calls `switchView()` for all 10 tabs, `selectCard()`+`switchTab()` for the detail panel, and the mind-map/search/DAG-resume entrypoints — asserting only "does it throw," not output content. This is exactly the safety net CLAUDE.md's four documented `<script>`-IIFE traps call for: it would have caught the historical `mmRotate is not defined` regression and would catch a broken template-literal quote before a `javascript_tool` debugging session is needed. Run: `node --test tests/js/render_smoke.test.mjs` |
