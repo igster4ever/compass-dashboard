@@ -1177,6 +1177,29 @@ function deriveTasks(ns) {
   // 'What is next' section bullets, '## Backlog' → 'Tactical'/'Strategic' subsections,
   // and inline 'Next session:' lines in reality.md
   const realityLines = (ns.reality || '').split('\n');
+
+  // Pre-count each backlog bucket so later fixes can rank recency within the bucket
+  // rather than leaving every bullet tied on one flat score — append-reality-bullet
+  // always inserts at the end of its section, so higher position = more recently
+  // added. Without this, once a bucket exceeds ~8-10 entries the stable sort's tie
+  // order (file order = oldest-first) permanently buries anything added afterward,
+  // no matter how relevant — confirmed live 2026-09-22: a Strategic bullet added as
+  // the 31st entry in that section never appeared in the top-10 Tasks view.
+  let tacticalTotal = 0, strategicTotal = 0;
+  {
+    let _inBacklog = false, _bucket = null;
+    realityLines.forEach(line => {
+      if (/^##\s+backlog/i.test(line)) { _inBacklog = true; _bucket = null; return; }
+      if (_inBacklog && /^###\s+tactical/i.test(line)) { _bucket = 'tactical'; return; }
+      if (_inBacklog && /^###\s+strategic/i.test(line)) { _bucket = 'strategic'; return; }
+      if (/^#{1,4}\s/.test(line) && !/^###\s+(tactical|strategic)/i.test(line)) { _inBacklog = false; _bucket = null; }
+      if (_inBacklog && _bucket && /^\s*[-*]\s+/.test(line)) {
+        if (_bucket === 'tactical') tacticalTotal++; else strategicTotal++;
+      }
+    });
+  }
+  let tacticalSeen = 0, strategicSeen = 0;
+
   let inNextSection = false;
   let inBacklogSection = false;
   let backlogBucket = null; // 'tactical' | 'strategic' | null
@@ -1205,7 +1228,12 @@ function deriveTasks(ns) {
       const raw = bullet[1].trim();
       const key = raw.toLowerCase().trim();
       const src = backlogBucket === 'tactical' ? 'backlog-tactical' : 'backlog-strategic';
-      const score = backlogBucket === 'tactical' ? N + 3 : N + 1;
+      const base  = backlogBucket === 'tactical' ? N + 3 : N + 1;
+      const total = backlogBucket === 'tactical' ? tacticalTotal : strategicTotal;
+      const seen  = backlogBucket === 'tactical' ? tacticalSeen++ : strategicSeen++;
+      // Fractional recency bonus in [0, 1) keeps bucket ordering intact (tactical
+      // always outranks strategic) while breaking the within-bucket tie by position.
+      const score = base + (total > 1 ? seen / total : 0);
       if (raw.length > 2 && !candidates.has(key))
         candidates.set(key, { text: raw, score, sessions: 1, src });
       return;
