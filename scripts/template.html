@@ -1122,14 +1122,51 @@ function renderTab(tab, ns) {
 
 // Derive and rank up to 10 pending tasks from incomplete history, reality.md next-session
 // bullets, plannedActions, and deferred opportunities.
+// Tokenize for cross-session resolution matching (mirrors compass core's match-backlog
+// ratio-overlap fix, 2026-09-22) — lowercase alnum/hyphen runs of 3+ chars, stopwords out.
+const _TASK_STOPWORDS = new Set(['and','the','for','with','that','this','into','from','when',
+  'then','than','have','has','will','not','are','was','were','been','its','a','an','of','to',
+  'in','on','at','is','be','as','by','or','via']);
+function _taskTokens(text) {
+  return new Set((text.toLowerCase().match(/[a-z0-9_-]{3,}/g) || []).filter(w => !_TASK_STOPWORDS.has(w)));
+}
+
+// An incomplete item from an older session is "resolved" if a MORE RECENT session's
+// completed list is substantially about the same thing — carry-forward goals are usually
+// reworded at DECIDE time, not copied verbatim, so exact-text matching would miss this.
+// Ratio is against the smaller of the two token sets (not just the incomplete item's own
+// count) since a terser completed-goal restatement should still count as a strong match.
+function _resolvedByLaterSession(incompleteText, laterCompletedTexts) {
+  const itemTokens = _taskTokens(incompleteText);
+  if (itemTokens.size === 0) return false;
+  for (const completedText of laterCompletedTexts) {
+    const compTokens = _taskTokens(completedText);
+    if (compTokens.size === 0) continue;
+    let overlap = 0;
+    itemTokens.forEach(t => { if (compTokens.has(t)) overlap++; });
+    const denom = Math.min(itemTokens.size, compTokens.size);
+    if (overlap >= 2 && overlap / denom >= 0.4) return true;
+  }
+  return false;
+}
+
 function deriveTasks(ns) {
   const candidates = new Map();
   const N = (ns.history || []).length;
 
-  // Incomplete items: scored by recency (most recent session = highest) + recurrence bonus
+  // Incomplete items: scored by recency (most recent session = highest) + recurrence bonus.
+  // ns.history is newest-first (lower hi = more recent), so an item from session hi is
+  // checked against every session with index < hi for a later resolution before being
+  // added — otherwise a carry-forward goal that a later session actually completed
+  // (usually under reworded text) shows up as perpetually-open backlog forever.
   (ns.history || []).forEach((h, hi) => {
     const recency = (N - hi);
+    const laterCompleted = [];
+    for (let j = 0; j < hi; j++) {
+      (ns.history[j].completed || []).forEach(c => laterCompleted.push(c));
+    }
     (h.incomplete || []).filter(r => !r.toLowerCase().startsWith('(none')).forEach(raw => {
+      if (laterCompleted.length && _resolvedByLaterSession(raw, laterCompleted)) return;
       const key = raw.toLowerCase().trim().replace(/^[✓✗-] */, '').trim();
       const ex = candidates.get(key);
       if (ex) { ex.score += recency; ex.sessions++; }
