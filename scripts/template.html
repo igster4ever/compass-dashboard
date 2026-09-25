@@ -1502,6 +1502,30 @@ function renderStateSection_SkillOptStatus(ns) {
   </div>`;
 }
 
+function _cadenceLine(label, due, status, pulledForwardTitle) {
+  const icon      = due ? '⚠' : '✓';
+  const col       = due ? 'var(--amber)' : 'var(--muted)';
+  const pf        = !!(due && status && status.pulled_forward_by_complexity);
+  const bolt      = pf ? ' ⚡' : '';
+  const titleAttr = pf ? ` title="${esc(pulledForwardTitle)}"` : '';
+  const msg       = due ? 'due' : 'on schedule';
+  return `<div style="font-size:.82rem;color:${col}"${titleAttr}>${icon} ${esc(label)} ${msg}${bolt}</div>`;
+}
+
+// P68 gap fix (2026-09-25, Strategic backlog gap-review-2026-09-11): `codeReviewStatus`/
+// `researchStatus`'s `pulled_forward_by_complexity` flag was fully computed by the Python
+// data layer and already rendered on the Overview card chip (⚡ + tooltip, compass-dashboard.py
+// _card_html()) but never surfaced in the per-namespace State tab's own Health & cadence
+// strip — a user already inside a namespace's detail panel had no way to tell a due chip
+// apart from a normal cadence one. Mirrors the Overview card's exact tooltip wording so the
+// two surfaces read consistently.
+function renderStateSection_CadenceStatus(ns) {
+  return `<div class="md-section"><h3>Cadence</h3>
+    ${_cadenceLine('Research', ns.researchDue, ns.researchStatus, 'Pulled forward by complex/chaotic decision clustering, not session cadence')}
+    ${_cadenceLine('Code review', ns.codeReviewDue, ns.codeReviewStatus, 'Pulled forward by code-change complexity, not session cadence')}
+  </div>`;
+}
+
 function renderStateSection_ConfidenceCalibration(ns) {
   const cc = ns.confidenceCalibration;
   if (!cc) return '';
@@ -1598,6 +1622,7 @@ function renderState(ns) {
 
   const healthStrip = [
     renderStateSection_CycleSparkline(ns),
+    renderStateSection_CadenceStatus(ns),
     renderStateSection_DreamStatus(ns),
     renderStateSection_SkillOptStatus(ns),
     renderStateSection_ConfidenceCalibration(ns),
@@ -1771,13 +1796,28 @@ function renderLearnings(ns) {
     </div>` : '';
 
   const decayHtml = renderDecayTimeline(ns);
-  return zoneDistHtml + corpusHealthHtml + supersededNote + filterBar + `
+
+  // Doom-scroll fix (2026-09-25): the table used to render flat and unbounded —
+  // a namespace with dozens of learnings dominated the whole tab. Fold it into a
+  // collapsible drawer (stateGroup(), already generic — this is its 2nd consumer
+  // after the State tab, exactly the "extract on the second consumer" precedent).
+  // Small namespaces still see it open by default; larger ones start collapsed,
+  // with the headline giving the count so nothing is hidden without a hint.
+  const tableHtml = filterBar + `
     <table class="learnings-table" id="${tableId}">
       <thead>
         <tr><th>Wt</th><th>Learning</th><th>Tags</th><th>Type</th><th>Zone</th><th>Date</th></tr>
       </thead>
       <tbody>${rows}</tbody>
-    </table>` + decayHtml;
+    </table>`;
+  const learningsHeadline = [
+    `${ns.learnings.length} total`,
+    hypCount > 0 ? `${hypCount} hypotheses` : null,
+    staleCount > 0 ? `${staleCount} stale` : null,
+  ].filter(Boolean).join(' · ');
+  const learningsGroup = stateGroup('Learnings', learningsHeadline, tableHtml, {open: ns.learnings.length <= 12});
+
+  return zoneDistHtml + corpusHealthHtml + supersededNote + learningsGroup + decayHtml;
 }
 
 function applyLearningFilters(table, nsId) {
@@ -1789,6 +1829,12 @@ function applyLearningFilters(table, nsId) {
     const zoneOk = !zone || row.dataset.zone === zone;
     row.style.display = (typeOk && zoneOk) ? '' : 'none';
   });
+  // The Learnings table now lives inside a collapsible drawer (2026-09-25 doom-scroll
+  // fix) — a zone-chip filter click comes from OUTSIDE it, so a collapsed drawer would
+  // otherwise filter rows invisibly. Same ancestor-<details>-opening idiom as
+  // navigateToResult()'s search jump-to-section.
+  let anc = table.closest('details');
+  while (anc) { anc.open = true; anc = anc.parentElement && anc.parentElement.closest('details'); }
 }
 
 function filterLearningType(tableId, nsId, type) {
@@ -1889,35 +1935,58 @@ function renderDecisions(ns) {
 
 // ── External signals ──────────────────────────────────────────────────────────
 
+function _signalEntryHtml(s) {
+  const date    = (s.date || '').slice(0, 10) || '\u2014';
+  const tags    = (s.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('');
+  const remit   = s.research_remit || {};
+  let remitHtml = '';
+  if (remit.focus_area) {
+    remitHtml += `<div class="signal-remit">Focus: ${esc(remit.focus_area)}</div>`;
+  }
+  if (remit.hypothesis) {
+    remitHtml += `<div class="signal-remit">Hypothesis: ${esc(remit.hypothesis)}</div>`;
+  }
+  return `<div class="signal-entry">
+    <div class="signal-header">
+      <span class="signal-date">${esc(date)}</span>
+      <span class="signal-source">${esc(s.source || 'research')}</span>
+      <div class="tags-cell" style="display:inline-flex">${tags}</div>
+    </div>
+    <div class="signal-text">${esc(s.text || '')}</div>
+    ${remitHtml}
+  </div>`;
+}
+
 function renderExternalSignals(ns) {
-  const signals = ns.externalSignals || [];
+  const signals = ns.externalSignals || []; // already newest-first (load_namespace() reverses on read)
   if (!signals.length) {
     return '<div class="empty-state">No external research signals recorded yet.<br>Use the compass research pass (P11) to capture findings.</div>';
   }
 
-  const items = signals.map(s => {
-    const date    = (s.date || '').slice(0, 10) || '\u2014';
-    const tags    = (s.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('');
-    const remit   = s.research_remit || {};
-    let remitHtml = '';
-    if (remit.focus_area) {
-      remitHtml += `<div class="signal-remit">Focus: ${esc(remit.focus_area)}</div>`;
+  // Doom-scroll fix (2026-09-25): every signal from one record-research call shares
+  // the exact same `date` timestamp and `remit` (compass core's cmd_record_research
+  // calls _now() once per batch, before its findings loop) \u2014 so grouping consecutive
+  // same-date signals is exactly grouping by research cycle, no extra bookkeeping
+  // needed. Each past cycle folds into its own drawer (stateGroup(), 3rd consumer
+  // now \u2014 State tab, then Learnings, now here); only the most recent stays open.
+  const cycles = [];
+  for (const s of signals) {
+    const key = s.date || '';
+    const last = cycles[cycles.length - 1];
+    if (last && last.key === key) {
+      last.items.push(s);
+    } else {
+      cycles.push({ key, remit: s.research_remit || {}, items: [s] });
     }
-    if (remit.hypothesis) {
-      remitHtml += `<div class="signal-remit">Hypothesis: ${esc(remit.hypothesis)}</div>`;
-    }
-    return `<div class="signal-entry">
-      <div class="signal-header">
-        <span class="signal-date">${esc(date)}</span>
-        <span class="signal-source">${esc(s.source || 'research')}</span>
-        <div class="tags-cell" style="display:inline-flex">${tags}</div>
-      </div>
-      <div class="signal-text">${esc(s.text || '')}</div>
-      ${remitHtml}
-    </div>`;
-  }).join('');
+  }
 
-  return `<div class="signals-list">${items}</div>`;
+  return cycles.map((cycle, cIdx) => {
+    const dateLabel = (cycle.key || '').slice(0, 10) || 'Unknown date';
+    const focusSuffix = cycle.remit.focus_area ? ` \u2014 ${esc(cycle.remit.focus_area)}` : '';
+    const headline = `${cycle.items.length} signal${cycle.items.length !== 1 ? 's' : ''}${focusSuffix}`;
+    const itemsHtml = cycle.items.map(_signalEntryHtml).join('');
+    return stateGroup(dateLabel, headline, `<div class="signals-list">${itemsHtml}</div>`, {open: cIdx === 0});
+  }).join('');
 }
 
 // ── History timeline ──────────────────────────────────────────────────────────
