@@ -7,6 +7,7 @@ Usage:
     python3 compass-dashboard.py [--namespace <ns>] [--output <path>] [--no-open]
 """
 
+import copy
 import hashlib
 import json
 import sys
@@ -1046,7 +1047,15 @@ def _check_cadence_pull_forward(quality_plateau, repo_path, code_review_due, sta
     return pull_forward
 
 
-def load_namespace(ns_dir):
+def _read_namespace_files(ns_dir):
+    """File-reading/parsing phase of load_namespace() — every disk read this
+    namespace needs, with only the trivial per-record parsing that belongs with
+    the read itself (confidence normalisation, abs_file resolution, retired-entry
+    filtering). No derived/computed fields live here — those belong to
+    `_assemble_namespace_dict()`, the dict-assembly phase. Split out 2026-09-25
+    (Tactical backlog, code-review-2026-09-11) so the two concerns — I/O vs.
+    derived-value computation — can be read, tested, and changed independently.
+    """
     state        = _read_json(ns_dir / "state.json")
     intent       = _read_file(ns_dir / "intent.md")
     reality      = _read_file(ns_dir / "reality.md")
@@ -1056,6 +1065,7 @@ def load_namespace(ns_dir):
             _l["confidence"] = _normalize_confidence(_l["confidence"])
     decisions    = _read_jsonl(ns_dir / "decisions.jsonl")
     code_context = _read_file(ns_dir / "code_context.md")
+    config       = _read_json(ns_dir / "config.json")
 
     history_dir   = ns_dir / "history"
     history_files = []
@@ -1070,6 +1080,96 @@ def load_namespace(ns_dir):
         f.stem[:10] for f in history_dir.glob("*.md")
         if len(f.stem) >= 10
     ) if history_dir.exists() else []
+
+    # Intent drift timeline
+    intent_history = _read_jsonl(ns_dir / "intent_history.jsonl")
+
+    # Decay history — corpus maintenance events (newest first)
+    decay_history = list(reversed(_read_jsonl(ns_dir / "decay_history.jsonl")))
+
+    # Deferral escalation counts (used in Priorities scoring)
+    code_review_defer_count = len(_read_jsonl(ns_dir / "code_review_deferrals.jsonl"))
+    research_defer_count    = len(_read_jsonl(ns_dir / "research_deferrals.jsonl"))
+
+    # External research signals
+    external_signals = list(reversed(_read_jsonl(ns_dir / "external_signals.jsonl")))
+
+    # P51–P53: skill feedback (skillopt cadence/quality-history fields are read
+    # straight off `state` in the assembly phase — no separate file for those)
+    skill_feedback = _read_jsonl(ns_dir / "skill_feedback.jsonl")
+
+    # Session artefacts (P41) — resolve abs_file so JS can open/preview via file://
+    artefacts = []
+    for _a in _read_jsonl(ns_dir / "artefacts.jsonl"):
+        _ac = dict(_a)
+        _rel = _a.get("file", "")
+        if _rel:
+            _abs = ns_dir / _rel
+            _ac["abs_file"] = str(_abs) if _abs.exists() else None
+        else:
+            _ac["abs_file"] = None
+        artefacts.append(_ac)
+
+    # P65 — contrastive decision-guidance cards ("prefer A over B"). New per-namespace
+    # file, not present in any live namespace yet as of this writing (shipped late Aug
+    # 2026) — _read_jsonl already returns [] gracefully when the file is absent. Retired
+    # entries filtered at read time, mirroring compass core's own query-decision-guidance
+    # command and this file's existing _community/feed.jsonl retraction-filtering
+    # precedent (load_community(), above).
+    decision_guidance = [
+        g for g in _read_jsonl(ns_dir / "decision_guidance.jsonl")
+        if g.get("status") != "retired"
+    ]
+
+    # Cross-namespace learning links — raw records only; the text-keyed lookup
+    # dicts consumers actually want are built in the assembly phase.
+    back_refs_raw = _read_jsonl(ns_dir / "back_references.jsonl")
+    conflicts_raw = _read_jsonl(ns_dir / "conflict_resolutions.jsonl")
+
+    return {
+        "state":                   state,
+        "intent":                  intent,
+        "reality":                 reality,
+        "learnings":               learnings,
+        "decisions":               decisions,
+        "code_context":            code_context,
+        "config":                  config,
+        "history_dir":             history_dir,
+        "history_files":           history_files,
+        "session_count":           session_count,
+        "session_dates":           session_dates,
+        "intent_history":          intent_history,
+        "decay_history":           decay_history,
+        "code_review_defer_count": code_review_defer_count,
+        "research_defer_count":    research_defer_count,
+        "external_signals":        external_signals,
+        "skill_feedback":          skill_feedback,
+        "artefacts":               artefacts,
+        "decision_guidance":       decision_guidance,
+        "back_refs_raw":           back_refs_raw,
+        "conflicts_raw":           conflicts_raw,
+    }
+
+
+def _assemble_namespace_dict(ns_dir, raw):
+    """Dict-assembly phase of load_namespace() — every derived/computed field,
+    consuming the raw file contents `_read_namespace_files()` already loaded.
+    No new disk reads of its own (the handful of existing helpers called here —
+    `_load_watch_signals()`, `_check_code_review_due()`, `_goal_outcomes_breakdown()`,
+    etc. — already encapsulated their own I/O before this split and are out of its
+    scope; only load_namespace()'s own inline reads moved).
+    """
+    state         = raw["state"]
+    intent        = raw["intent"]
+    reality       = raw["reality"]
+    learnings     = raw["learnings"]
+    decisions     = raw["decisions"]
+    code_context  = raw["code_context"]
+    config        = raw["config"]
+    history_dir   = raw["history_dir"]
+    history_files = raw["history_files"]
+    session_count = raw["session_count"]
+    session_dates = raw["session_dates"]
 
     open_session = state.get("open_session", False)
     last_close   = _parse_iso(state.get("last_close"))
@@ -1091,8 +1191,6 @@ def load_namespace(ns_dir):
 
     cycle_history      = state.get("cycle_history", [])
     last_cycle_minutes = state.get("last_cycle_minutes")
-
-    config = _read_json(ns_dir / "config.json")
 
     corpus_size               = len(active_learnings)
     dream_due, _dream_status  = _check_dream_due(state, corpus_size)
@@ -1172,21 +1270,14 @@ def load_namespace(ns_dir):
                 _seen_items.add(_item)
                 all_incomplete_items.append(_item)
 
-    # Intent drift timeline
-    intent_history = _read_jsonl(ns_dir / "intent_history.jsonl")
-
-    # Decay history — corpus maintenance events (newest first)
-    decay_history = list(reversed(_read_jsonl(ns_dir / "decay_history.jsonl")))
-
-    # Deferral escalation counts (used in Priorities scoring)
-    code_review_defer_count  = len(_read_jsonl(ns_dir / "code_review_deferrals.jsonl"))
-    research_defer_count     = len(_read_jsonl(ns_dir / "research_deferrals.jsonl"))
-
-    # External research signals
-    external_signals = list(reversed(_read_jsonl(ns_dir / "external_signals.jsonl")))
+    intent_history          = raw["intent_history"]
+    decay_history           = raw["decay_history"]
+    code_review_defer_count = raw["code_review_defer_count"]
+    research_defer_count    = raw["research_defer_count"]
+    external_signals        = raw["external_signals"]
 
     # P51–P53: skill feedback + skillopt cadence + quality history + holdout state
-    skill_feedback           = _read_jsonl(ns_dir / "skill_feedback.jsonl")
+    skill_feedback                  = raw["skill_feedback"]
     failure_dimension_distribution = _failure_dimension_distribution(skill_feedback)
     sessions_since_skill_opt = state.get("sessions_since_skill_opt", 0)
     skill_opt_due            = sessions_since_skill_opt >= 10
@@ -1215,32 +1306,13 @@ def load_namespace(ns_dir):
         review_interval, skill_opt_due, sessions_since_skill_opt,
     )
 
-    # Session artefacts (P41) — resolve abs_file so JS can open/preview via file://
-    artefacts = []
-    for _a in _read_jsonl(ns_dir / "artefacts.jsonl"):
-        _ac = dict(_a)
-        _rel = _a.get("file", "")
-        if _rel:
-            _abs = ns_dir / _rel
-            _ac["abs_file"] = str(_abs) if _abs.exists() else None
-        else:
-            _ac["abs_file"] = None
-        artefacts.append(_ac)
+    artefacts          = raw["artefacts"]
+    decision_guidance  = raw["decision_guidance"]
 
-    # P65 — contrastive decision-guidance cards ("prefer A over B"). New per-namespace
-    # file, not present in any live namespace yet as of this writing (shipped late Aug
-    # 2026) — _read_jsonl already returns [] gracefully when the file is absent. Retired
-    # entries filtered at read time, mirroring compass core's own query-decision-guidance
-    # command and this file's existing _community/feed.jsonl retraction-filtering
-    # precedent (load_community(), above).
-    decision_guidance = [
-        g for g in _read_jsonl(ns_dir / "decision_guidance.jsonl")
-        if g.get("status") != "retired"
-    ]
-
-    # Cross-namespace learning links
-    back_refs_raw = _read_jsonl(ns_dir / "back_references.jsonl")
-    conflicts_raw = _read_jsonl(ns_dir / "conflict_resolutions.jsonl")
+    # Cross-namespace learning links — the raw records were already read in the
+    # file-reading phase; only the text-keyed lookup dicts are built here.
+    back_refs_raw = raw["back_refs_raw"]
+    conflicts_raw = raw["conflicts_raw"]
     back_refs_by_text = {
         r["learning_text"]: {"sourceNamespace": r.get("source_namespace", ""), "recordedAt": r.get("recorded_at", "")}
         for r in back_refs_raw if r.get("learning_text")
@@ -1339,6 +1411,11 @@ def load_namespace(ns_dir):
         "dream_defer_count":          dream_defer_count,
         "complexity_clustering_signals": complexity_clustering_signals,
     }
+
+
+def load_namespace(ns_dir):
+    raw = _read_namespace_files(ns_dir)
+    return _assemble_namespace_dict(ns_dir, raw)
 
 
 _COMMUNITY_LEARNING_RETRACTED = "community.learning_retracted"
@@ -1803,69 +1880,139 @@ def _add_mindmap_bridges(data: list) -> None:
 # JS data serialisation
 # ─────────────────────────────────────────────────────────────────────────────
 
+_MISSING = object()
+
+# Pure snake_case -> camelCase renames in _js_data()'s per-namespace dict — a plain
+# key rename with no reshape/transform, optionally with a default for a newer,
+# not-always-populated field. Extracted 2026-09-25 (Tactical backlog,
+# code-review-2026-09-11) to collapse the ~85% of _js_data() fields that were
+# pure boilerplate rename lines into one data-driven table. The remaining
+# fields stay hand-written in _js_data() itself: `deferred`/`decisionGuidance`
+# are genuine reshapes (comprehensions), `lastClose`/`lastOpen`/`intentSummary`
+# apply a transform (_time_ago()/slicing), `mindmap` is a function call, and
+# `researchStatus`/`codeReviewStatus` have a *dynamic* default that reads
+# another field of `n` at call time — none of those fit a static table.
+#
+# Each entry is (camelCaseKey, snakeCaseKey, default). `default` is the
+# `_MISSING` sentinel for an established field load_namespace() always sets —
+# bracket access (`n[key]`), so a KeyError here surfaces a real shape-drift bug
+# loudly rather than masking it. Any other value is the fallback for a newer/
+# optional field (`n.get(key, default)`), matching CLAUDE.md's convention that
+# new _js_data() fields must use `.get()`, never bracket-indexing.
+_JS_DATA_RENAME_FIELDS = [
+    ("namespace",                 "namespace",                 _MISSING),
+    ("open",                      "open_session",               _MISSING),
+    ("intent",                    "intent",                     _MISSING),
+    ("reality",                   "reality",                    _MISSING),
+    ("learnings",                 "learnings",                  _MISSING),
+    ("decisions",                 "decisions",                  _MISSING),
+    ("codeContext",                "code_context",              _MISSING),
+    ("history",                   "history",                    _MISSING),
+    ("sessionDates",               "session_dates",             _MISSING),
+    ("goalRate",                  "goal_rate",                  _MISSING),
+    ("goalDots",                  "goal_dots",                  _MISSING),
+    ("topTags",                   "top_tags",                   _MISSING),
+    ("goalByMonth",                "goal_by_month",              _MISSING),
+    ("sessionCount",               "session_count",             _MISSING),
+    ("plannedActions",             "planned_actions",           _MISSING),
+    ("supersededCount",            "superseded_count",          _MISSING),
+    ("cycleHistory",               "cycle_history",             _MISSING),
+    ("lastCycleMinutes",           "last_cycle_minutes",        _MISSING),
+    ("sessionsSinceDream",         "sessions_since_dream",      _MISSING),
+    ("dreamDue",                   "dream_due",                 _MISSING),
+    ("realityCompletenessScore",   "reality_completeness_score", _MISSING),
+    ("suggestedGoalCount",         "suggested_goal_count",      _MISSING),
+    ("researchDue",                "research_due",              _MISSING),
+    ("codeReviewDue",              "code_review_due",           _MISSING),
+    ("watches",                    "watches",                   []),
+    ("watchSignals",               "watch_signals",              {"bootstrapped": False, "signals": [], "total_signals": 0, "empty": True}),
+    ("intentVersion",              "intent_version",            _MISSING),
+    ("staleBulletCount",           "stale_bullet_count",        _MISSING),
+    ("backRefsByText",             "back_refs_by_text",         _MISSING),
+    ("conflictsByText",            "conflicts_by_text",         _MISSING),
+    ("intentHistory",              "intent_history",            _MISSING),
+    ("corpusHealth",               "corpus_health",             _MISSING),
+    ("zoneDistribution",           "zone_distribution",          {"golden": 0, "warning": 0, "preference": 0, "unclassified": 0}),
+    ("confidenceCalibration",      "confidence_calibration",     {"sufficient_sample": False, "resolved_count": 0, "min_required": 8, "buckets": {}, "miscalibrated": None}),
+    ("retrievalStaleCount",        "retrieval_stale_count",     _MISSING),
+    ("externalSignals",            "external_signals",          _MISSING),
+    ("explorationRatio",           "exploration_ratio",         _MISSING),
+    ("lastRealityScore",           "last_reality_score",        _MISSING),
+    ("outcomeRate",                "outcome_rate",               None),
+    ("goalOutcomes",               "goal_outcomes",              []),
+    ("contracts",                  "goal_contracts",             []),
+    ("contractCoverage",           "contract_coverage",          None),
+    ("criteriaHitRate",            "criteria_hit_rate",          None),
+    ("goalTypeBySession",          "goal_type_by_session",      _MISSING),
+    ("carryForwardTrend",          "carry_forward_trend",       _MISSING),
+    ("qualityDist",                "quality_dist",              _MISSING),
+    ("decayHistory",               "decay_history",             _MISSING),
+    ("codeReviewDeferCount",       "code_review_defer_count",   _MISSING),
+    ("researchDeferCount",         "research_defer_count",      _MISSING),
+    ("artefacts",                  "artefacts",                 _MISSING),
+    ("skillFeedback",              "skill_feedback",            _MISSING),
+    ("failureDimensionDistribution", "failure_dimension_distribution", {
+        "counts": {"cadence-timing": 0, "api-schema-gap": 0, "step-sequencing": 0,
+                   "cross-namespace-scope": 0, "unclassified": 0},
+        "total": 0, "dominant": None,
+    }),
+    ("sessionsSinceSkillOpt",      "sessions_since_skill_opt",  _MISSING),
+    ("skillOptDue",                "skill_opt_due",             _MISSING),
+    ("qualityHistory",             "quality_history",           _MISSING),
+    ("skilloptHoldoutFrozen",      "skillopt_holdout_frozen",   _MISSING),
+    ("skilloptHoldoutMean",        "skillopt_holdout_mean",     _MISSING),
+    ("skilloptRoundsCompleted",    "skillopt_rounds_completed", _MISSING),
+    ("skilloptRwi",                "skillopt_rwi",              _MISSING),
+    ("qualityPlateau",             "quality_plateau",            None),
+    ("cadencePullForward",         "cadence_pull_forward",       None),
+    ("skillOptFrictionGate",       "skill_opt_friction_gate",    None),
+    ("assumptionAuditDue",         "assumption_audit_due",       False),
+    ("assumptionAuditCandidates",  "assumption_audit_candidates", []),
+    ("claudeReviewDue",            "claude_review_due",          False),
+    ("dreamDeferCount",            "dream_defer_count",          0),
+    ("complexityClusteringSignals", "complexity_clustering_signals", []),
+]
+
+
+def _apply_camel_case_renames(n, mapping):
+    """Apply _JS_DATA_RENAME_FIELDS-style (camelKey, snakeKey, default) tuples
+    against a load_namespace() dict. A mutable (dict/list) default is deep-copied
+    per call so namespaces missing the same optional field never share one
+    dict/list instance — matching the original inline code, where each dict/list
+    default literal was re-evaluated fresh on every loop iteration.
+    """
+    out = {}
+    for camel_key, snake_key, default in mapping:
+        if default is _MISSING:
+            out[camel_key] = n[snake_key]
+        elif isinstance(default, (dict, list)):
+            out[camel_key] = n.get(snake_key, copy.deepcopy(default))
+        else:
+            out[camel_key] = n.get(snake_key, default)
+    return out
+
+
 def _js_data(namespaces):
     data = []
     for n in namespaces:
-        data.append({
-            "namespace":      n["namespace"],
-            "open":           n["open_session"],
+        entry = _apply_camel_case_renames(n, _JS_DATA_RENAME_FIELDS)
+        entry.update({
             "lastClose":      _time_ago(n["last_close"]),
             "lastOpen":       _time_ago(n["last_open"]),
             "intentSummary":  n["intent_summary"][:150],
-            "intent":         n["intent"],
-            "reality":        n["reality"],
-            "learnings":      n["learnings"],
-            "decisions":      n["decisions"],
-            "codeContext":    n["code_context"],
-            "history":        n["history"],
-            "sessionDates":   n["session_dates"],
-            "goalRate":       n["goal_rate"],
-            "goalDots":       n["goal_dots"],
-            "topTags":        n["top_tags"],
             "deferred":       [
                 {"key": k, "escalated": v.get("defer_count", 0) >= 2, **v}
                 for k, v in n["deferred"].items()
             ],
-            "goalByMonth":        n["goal_by_month"],
-            "sessionCount":       n["session_count"],
-            "plannedActions":     n["planned_actions"],
-            "supersededCount":    n["superseded_count"],
-            "cycleHistory":       n["cycle_history"],
-            "lastCycleMinutes":   n["last_cycle_minutes"],
-            "sessionsSinceDream":       n["sessions_since_dream"],
-            "dreamDue":                n["dream_due"],
-            "realityCompletenessScore": n["reality_completeness_score"],
-            "suggestedGoalCount":       n["suggested_goal_count"],
-            "researchDue":             n["research_due"],
             "researchStatus":          n.get("research_status", {
                 "due": n["research_due"], "pulled_forward_by_complexity": False,
             }),
-            "codeReviewDue":           n["code_review_due"],
             "codeReviewStatus":        n.get("code_review_status", {
                 "due": n["code_review_due"], "pulled_forward_by_complexity": False,
                 "complexity_signal": {"lines_changed": 0, "new_files": 0,
                                       "new_design_docs": 0, "complex_decisions": 0,
                                       "score": 0.0, "high": False},
             }),
-            "watches":                 n.get("watches", []),
-            "watchSignals":            n.get("watch_signals", {"bootstrapped": False, "signals": [], "total_signals": 0, "empty": True}),
-            "intentVersion":           n["intent_version"],
-            "staleBulletCount":        n["stale_bullet_count"],
-            "backRefsByText":          n["back_refs_by_text"],
-            "conflictsByText":         n["conflicts_by_text"],
-            "intentHistory":           n["intent_history"],
-            "corpusHealth":            n["corpus_health"],
-            "zoneDistribution":        n.get("zone_distribution", {"golden": 0, "warning": 0, "preference": 0, "unclassified": 0}),
-            "confidenceCalibration":   n.get("confidence_calibration", {"sufficient_sample": False, "resolved_count": 0, "min_required": 8, "buckets": {}, "miscalibrated": None}),
-            "retrievalStaleCount":     n["retrieval_stale_count"],
-            "externalSignals":         n["external_signals"],
-            "explorationRatio":        n["exploration_ratio"],
-            "lastRealityScore":        n["last_reality_score"],
-            "outcomeRate":             n.get("outcome_rate"),
-            "goalOutcomes":            n.get("goal_outcomes", []),
-            "contracts":               n.get("goal_contracts", []),
-            "contractCoverage":        n.get("contract_coverage"),
-            "criteriaHitRate":         n.get("criteria_hit_rate"),
             "decisionGuidance":        [
                 {
                     "guidanceId":            g.get("guidance_id"),
@@ -1884,36 +2031,9 @@ def _js_data(namespaces):
                 }
                 for g in n.get("decision_guidance", [])
             ],
-            "goalTypeBySession":       n["goal_type_by_session"],
-            "carryForwardTrend":       n["carry_forward_trend"],
-            "qualityDist":             n["quality_dist"],
-            "decayHistory":            n["decay_history"],
-            "codeReviewDeferCount":    n["code_review_defer_count"],
-            "researchDeferCount":      n["research_defer_count"],
-            "artefacts":               n["artefacts"],
-            "skillFeedback":           n["skill_feedback"],
-            "failureDimensionDistribution": n.get("failure_dimension_distribution", {
-                "counts": {"cadence-timing": 0, "api-schema-gap": 0, "step-sequencing": 0,
-                           "cross-namespace-scope": 0, "unclassified": 0},
-                "total": 0, "dominant": None,
-            }),
-            "sessionsSinceSkillOpt":   n["sessions_since_skill_opt"],
-            "skillOptDue":             n["skill_opt_due"],
-            "qualityHistory":          n["quality_history"],
-            "skilloptHoldoutFrozen":   n["skillopt_holdout_frozen"],
-            "skilloptHoldoutMean":     n["skillopt_holdout_mean"],
-            "skilloptRoundsCompleted": n["skillopt_rounds_completed"],
-            "skilloptRwi":             n["skillopt_rwi"],
-            "qualityPlateau":          n.get("quality_plateau"),
-            "cadencePullForward":      n.get("cadence_pull_forward"),
-            "skillOptFrictionGate":    n.get("skill_opt_friction_gate"),
-            "assumptionAuditDue":        n.get("assumption_audit_due", False),
-            "assumptionAuditCandidates": n.get("assumption_audit_candidates", []),
-            "claudeReviewDue":         n.get("claude_review_due", False),
-            "dreamDeferCount":         n.get("dream_defer_count", 0),
-            "complexityClusteringSignals": n.get("complexity_clustering_signals", []),
             "mindmap":                 _mindmap_data(n),
         })
+        data.append(entry)
     _add_mindmap_bridges(data)  # E25e: cross-namespace tag-cluster bridges — needs the
                                 # already-built mindmap trees, so this runs here, not in generate()
     raw = json.dumps(data, ensure_ascii=False, default=str)

@@ -19,7 +19,9 @@ python3 scripts/compass-dashboard.py
 ```
 scripts/
 ├── compass-dashboard.py   — data layer + generate() + main()   (~1,830 lines)
-│   ├── load_namespace()    — reads state.json, *.md, *.jsonl, history/*.md
+│   ├── load_namespace()    — thin composition: _read_namespace_files() -> _assemble_namespace_dict()
+│   │   ├── _read_namespace_files()    — file-reading/parsing phase (I/O only, no derived fields)
+│   │   └── _assemble_namespace_dict() — dict-assembly phase (derived/computed fields + final return dict)
 │   ├── _js_data()          — serialises NS array as JSON embedded in HTML
 │   └── generate()          — reads template.html, injects [[PLACEHOLDER]] markers
 └── template.html           — HTML + <style> + <script>          (~5,020 lines)
