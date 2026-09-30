@@ -301,6 +301,27 @@ class TestBlockingEdges(unittest.TestCase):
         self.assertIn("const BLOCKING_EDGES = []", html)
 
 
+class TestClaudeReviewChip(unittest.TestCase):
+    """CLAUDE.md review chip — size-gate pull-forward mirrors compass core (2026-09-30)."""
+
+    def _html(self, **over):
+        return _mod._card_html(_minimal_ns(over), 0, {})
+
+    def test_size_pulled_forward_chip_shows_bolt_and_size(self):
+        html = self._html(claude_review_due=True, claude_review_status={
+            "due": True, "pulled_forward_by_size": True,
+            "claude_md_bytes": 39_700, "size_budget_bytes": 20_000})
+        self.assertIn("📋 CLAUDE.md review due ⚡</span>", html)
+        self.assertIn("(39KB, over the 20KB budget)", html)
+
+    def test_cadence_due_chip_has_no_bolt(self):
+        html = self._html(claude_review_due=True)
+        self.assertIn("📋 CLAUDE.md review due</span>", html)
+
+    def test_not_due_renders_no_chip(self):
+        self.assertNotIn("CLAUDE.md review due", self._html(claude_review_due=False))
+
+
 class TestCommunityChips(unittest.TestCase):
     """P40-D Phase 2 — community health chip rendering."""
 

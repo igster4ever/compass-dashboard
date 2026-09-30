@@ -1128,8 +1128,11 @@ function renderTab(tab, ns) {
 
 // Derive and rank up to 10 pending tasks from incomplete history, reality.md next-session
 // bullets, plannedActions, and deferred opportunities.
-// Tokenize for cross-session resolution matching (mirrors compass core's match-backlog
-// ratio-overlap fix, 2026-09-22) — lowercase alnum/hyphen runs of 3+ chars, stopwords out.
+// Tokenize for cross-session resolution matching — lowercase alnum/hyphen runs of 3+
+// chars, stopwords out. Inspired by compass core's match-backlog but deliberately NOT a
+// mirror: this uses a 0.4 ratio against the smaller token set (terse restatements should
+// match), core uses 0.3 against the item's own tokens plus an identifier-anchor gate
+// (3f2124c). Don't "sync" the two without checking deriveTasks()'s tests.
 const _TASK_STOPWORDS = new Set(['and','the','for','with','that','this','into','from','when',
   'then','than','have','has','will','not','are','was','were','been','its','a','an','of','to',
   'in','on','at','is','be','as','by','or','via']);
@@ -1508,10 +1511,10 @@ function renderStateSection_SkillOptStatus(ns) {
   </div>`;
 }
 
-function _cadenceLine(label, due, status, pulledForwardTitle) {
+function _cadenceLine(label, due, status, pulledForwardTitle, pfKey = 'pulled_forward_by_complexity') {
   const icon      = due ? '⚠' : '✓';
   const col       = due ? 'var(--amber)' : 'var(--muted)';
-  const pf        = !!(due && status && status.pulled_forward_by_complexity);
+  const pf        = !!(due && status && status[pfKey]);
   const bolt      = pf ? ' ⚡' : '';
   const titleAttr = pf ? ` title="${esc(pulledForwardTitle)}"` : '';
   const msg       = due ? 'due' : 'on schedule';
@@ -1529,6 +1532,7 @@ function renderStateSection_CadenceStatus(ns) {
   return `<div class="md-section"><h3>Cadence</h3>
     ${_cadenceLine('Research', ns.researchDue, ns.researchStatus, 'Pulled forward by complex/chaotic decision clustering, not session cadence')}
     ${_cadenceLine('Code review', ns.codeReviewDue, ns.codeReviewStatus, 'Pulled forward by code-change complexity, not session cadence')}
+    ${_cadenceLine('CLAUDE.md review', ns.claudeReviewDue, ns.claudeReviewStatus, 'Pulled forward by CLAUDE.md size (over its byte budget), not session cadence', 'pulled_forward_by_size')}
   </div>`;
 }
 

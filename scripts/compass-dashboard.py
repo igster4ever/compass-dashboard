@@ -353,7 +353,9 @@ def _stale_bullet_count(reality_md, state, days=30):
         else:
             ts = entry.get("verified_at") if isinstance(entry, dict) else entry
             dt = _parse_iso(ts)
-            if dt and (now - dt) > timedelta(days=days):
+            # Whole days, matching core's _get_stale_bullets: its confidence decays on
+            # (now - verified_at).days, so 30 days + some hours is still "day 30".
+            if dt and (now - dt).days > days:
                 stale += 1
     return stale
 
@@ -902,14 +904,17 @@ def _goal_type_by_session(state):
     return result
 
 
-def _check_dream_due(state, corpus_size):
+def _check_dream_due(state, config):
     """Whether an inter-loop dream consolidation pass is due (P12.1). Mirrors
-    compass/dream.py's _check_dream_due(): OR gate across session cadence, absolute
-    corpus size, and corpus growth since the last pass.
+    compass/dream.py's _check_dream_due(): OR gate of session cadence
+    (`dream_interval_sessions`, default 5) and corpus growth since the last pass
+    (`corpus_delta_threshold`, default 10). No absolute corpus-size gate upstream.
     """
     sessions_since_dream = state.get("sessions_since_dream", 0)
     corpus_delta = state.get("corpus_delta", 0) or 0
-    due = sessions_since_dream >= 5 or corpus_size >= 15 or corpus_delta >= 10
+    interval = int(config.get("dream_interval_sessions", 5))
+    delta_threshold = int(config.get("corpus_delta_threshold", 10))
+    due = sessions_since_dream >= interval or corpus_delta >= delta_threshold
     return due, {"sessions_since_dream": sessions_since_dream, "corpus_delta": corpus_delta}
 
 
@@ -947,21 +952,32 @@ def _check_research_due(state, config, complexity_signal=None):
 
 
 def _check_claude_review_due(ns_dir, state, config, repo_path):
-    """Whether a periodic CLAUDE.md hygiene review is due. Mirrors compass/_monolith.py's
-    _check_claude_review_due(): sessions-only gate (default interval 15), gated on
-    repo_path configured AND a CLAUDE.md actually existing there (falls back to
-    ~/.claude/skills/<namespace>/CLAUDE.md).
+    """CLAUDE.md hygiene review status. Mirrors compass/orient.py's
+    _check_claude_review_due() + _resolve_claude_md_path(): the CLAUDE.md is
+    `repo_path/CLAUDE.md`, else ~/.claude/skills/<namespace>/CLAUDE.md only when repo_path
+    is unset. Due on the session cadence (`claude_review_interval_sessions`, default 15),
+    or pulled forward once the file exceeds `claude_md_size_budget_bytes` (default 20000)
+    and at least `claude_review_size_min_sessions` (default 2) sessions have passed.
+    Never due when no CLAUDE.md exists (the skill resets the counter and skips).
     """
-    claude_review_interval = config.get("claude_review_interval_sessions", 15)
-    claude_md_path = (Path(repo_path) / "CLAUDE.md") if repo_path else None
-    claude_md_exists = bool(claude_md_path and claude_md_path.is_file())
-    if not claude_md_exists:
-        fallback_claude_md = Path.home() / ".claude" / "skills" / ns_dir.name / "CLAUDE.md"
-        claude_md_exists = fallback_claude_md.is_file()
-    return (
-        claude_md_exists
-        and state.get("sessions_since_claude_review", 0) >= claude_review_interval
+    base = Path(repo_path).expanduser() if repo_path else Path.home() / ".claude" / "skills" / ns_dir.name
+    try:
+        size = (base / "CLAUDE.md").stat().st_size
+    except OSError:
+        size = None
+    sessions_since = state.get("sessions_since_claude_review", 0)
+    cadence_due = sessions_since >= int(config.get("claude_review_interval_sessions", 15))
+    budget = int(config.get("claude_md_size_budget_bytes", 20000))
+    min_sessions = int(config.get("claude_review_size_min_sessions", 2))
+    pulled_forward = bool(
+        size is not None and size > budget and not cadence_due and sessions_since >= min_sessions
     )
+    return {
+        "due": size is not None and (cadence_due or pulled_forward),
+        "pulled_forward_by_size": pulled_forward,
+        "claude_md_bytes": size,
+        "size_budget_bytes": budget,
+    }
 
 
 def _check_assumption_audit_due(state, config, learnings):
@@ -1025,7 +1041,8 @@ def _check_quality_plateau(quality_history):
 
 
 def _check_cadence_pull_forward(quality_plateau, repo_path, code_review_due, state,
-                                 review_interval, skill_opt_due, sessions_since_skill_opt):
+                                 review_interval, skill_opt_due, sessions_since_skill_opt,
+                                 skill_opt_interval=10):
     """P61b cadence pull-forward advisory — mirrors compass/_monolith.py's
     cadence_pull_forward gating (~line 1200-1215). Advisory only — never mutates
     sessions_since_review/sessions_since_skill_opt.
@@ -1041,7 +1058,7 @@ def _check_cadence_pull_forward(quality_plateau, repo_path, code_review_due, sta
         pull_forward["review"] = True
     if (
         not skill_opt_due
-        and sessions_since_skill_opt >= max(10 - 2, 1)
+        and sessions_since_skill_opt >= max(skill_opt_interval - 2, 1)
     ):
         pull_forward["skill_opt"] = True
     return pull_forward
@@ -1192,8 +1209,7 @@ def _assemble_namespace_dict(ns_dir, raw):
     cycle_history      = state.get("cycle_history", [])
     last_cycle_minutes = state.get("last_cycle_minutes")
 
-    corpus_size               = len(active_learnings)
-    dream_due, _dream_status  = _check_dream_due(state, corpus_size)
+    dream_due, _dream_status  = _check_dream_due(state, config)
     sessions_since_dream      = _dream_status["sessions_since_dream"]
     reality_completeness_score = _reality_completeness(reality)
     suggested_goal_count      = _suggested_goal_count(state)
@@ -1216,7 +1232,8 @@ def _assemble_namespace_dict(ns_dir, raw):
 
     # CLAUDE.md hygiene review due chip — gated the same way the skill itself gates
     # Step 2b.3b: repo_path configured AND a CLAUDE.md actually exists there.
-    claude_review_due = _check_claude_review_due(ns_dir, state, config, repo_path)
+    claude_review_status = _check_claude_review_due(ns_dir, state, config, repo_path)
+    claude_review_due    = claude_review_status["due"]
 
     # dream_defer_count — a scalar in state.json (set by compass/dream.py's cmd_defer_dream),
     # NOT a *_deferrals.jsonl file like code_review_defer_count/research_defer_count above.
@@ -1280,7 +1297,8 @@ def _assemble_namespace_dict(ns_dir, raw):
     skill_feedback                  = raw["skill_feedback"]
     failure_dimension_distribution = _failure_dimension_distribution(skill_feedback)
     sessions_since_skill_opt = state.get("sessions_since_skill_opt", 0)
-    skill_opt_due            = sessions_since_skill_opt >= 10
+    skill_opt_interval       = int(config.get("skill_opt_interval_sessions", 10))
+    skill_opt_due            = sessions_since_skill_opt >= skill_opt_interval
 
     # P61c: friction-count gate — mirrors compass/skillopt.py's
     # _check_skill_opt_friction_gate(). Advisory only; never suppresses skill_opt_due.
@@ -1303,7 +1321,7 @@ def _assemble_namespace_dict(ns_dir, raw):
     quality_plateau = _check_quality_plateau(quality_history)
     cadence_pull_forward = _check_cadence_pull_forward(
         quality_plateau, repo_path, code_review_due, state,
-        review_interval, skill_opt_due, sessions_since_skill_opt,
+        review_interval, skill_opt_due, sessions_since_skill_opt, skill_opt_interval,
     )
 
     artefacts          = raw["artefacts"]
@@ -1408,6 +1426,7 @@ def _assemble_namespace_dict(ns_dir, raw):
         "assumption_audit_due":         assumption_audit_due,
         "assumption_audit_candidates": assumption_audit_candidates,
         "claude_review_due":          claude_review_due,
+        "claude_review_status":       claude_review_status,
         "dream_defer_count":          dream_defer_count,
         "complexity_clustering_signals": complexity_clustering_signals,
     }
@@ -1528,8 +1547,17 @@ def _card_html(n, i, community_published=None):
         review_html = ""
     assumption_html = ('<span class="cadence-chip assumption">🧪 assumption audit due</span>'
                         if n.get("assumption_audit_due") else "")
-    claude_review_html = ('<span class="cadence-chip claude">📋 CLAUDE.md review due</span>'
-                           if n.get("claude_review_due") else "")
+    if not n.get("claude_review_due"):
+        claude_review_html = ""
+    elif n.get("claude_review_status", {}).get("pulled_forward_by_size"):
+        crs = n["claude_review_status"]
+        claude_review_html = (
+            '<span class="cadence-chip claude" title="Pulled forward by CLAUDE.md size '
+            f'({(crs.get("claude_md_bytes") or 0) // 1000}KB, over the '
+            f'{crs.get("size_budget_bytes", 20000) // 1000}KB budget), not session cadence">'
+            '📋 CLAUDE.md review due ⚡</span>')
+    else:
+        claude_review_html = '<span class="cadence-chip claude">📋 CLAUDE.md review due</span>'
 
     dream_defer_html = ""
     ddc = n.get("dream_defer_count", 0)
@@ -1969,6 +1997,10 @@ _JS_DATA_RENAME_FIELDS = [
     ("assumptionAuditDue",         "assumption_audit_due",       False),
     ("assumptionAuditCandidates",  "assumption_audit_candidates", []),
     ("claudeReviewDue",            "claude_review_due",          False),
+    ("claudeReviewStatus",         "claude_review_status",       {
+        "due": False, "pulled_forward_by_size": False,
+        "claude_md_bytes": None, "size_budget_bytes": 20000,
+    }),
     ("dreamDeferCount",            "dream_defer_count",          0),
     ("complexityClusteringSignals", "complexity_clustering_signals", []),
 ]

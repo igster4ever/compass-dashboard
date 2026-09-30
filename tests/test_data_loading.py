@@ -413,6 +413,24 @@ class TestStaleBulletCount(unittest.TestCase):
         with patch.object(_mod, "_now_utc", return_value=_NOW):
             self.assertEqual(_stale_bullet_count(md, {}, days=30), 2)
 
+    def test_partial_day_past_threshold_not_stale(self):
+        # compass core's _get_stale_bullets decays confidence on whole days
+        # ((now - verified_at).days), so 30 days + a few hours is still day 30 -> not
+        # stale. A raw timedelta comparison wrongly flagged these (24 bullets verified
+        # in one batch on compass, 2026-09-30).
+        md = self._make_md(["Edge feature"])
+        ts = (_NOW - timedelta(days=30, hours=5)).isoformat()
+        state = self._make_state([("Edge feature", ts)])
+        with patch.object(_mod, "_now_utc", return_value=_NOW):
+            self.assertEqual(_stale_bullet_count(md, state, days=30), 0)
+
+    def test_thirty_one_whole_days_is_stale(self):
+        md = self._make_md(["Old feature"])
+        ts = (_NOW - timedelta(days=31, minutes=1)).isoformat()
+        state = self._make_state([("Old feature", ts)])
+        with patch.object(_mod, "_now_utc", return_value=_NOW):
+            self.assertEqual(_stale_bullet_count(md, state, days=30), 1)
+
 
 class TestMindmapData(unittest.TestCase):
     """E25a — _mindmap_data() hierarchy builder."""
@@ -1103,6 +1121,102 @@ class TestFailureDimensionDistribution(unittest.TestCase):
         feedback = [{"failure_dimension": "cadence-timing"}, {"failure_dimension": "api-schema-gap"}]
         result = _failure_dimension_distribution(feedback)
         self.assertEqual(result["dominant"], "cadence-timing")
+
+
+# ---------------------------------------------------------------------------
+# Cadence mirrors of compass core (2026-09-30 drift audit)
+# ---------------------------------------------------------------------------
+
+class TestCheckDreamDue(unittest.TestCase):
+    """Mirrors compass/dream.py::_check_dream_due -- sessions OR corpus_delta, both
+    thresholds from config. There is no absolute corpus-size gate upstream."""
+
+    def test_large_corpus_alone_is_not_due(self):
+        due, _ = _mod._check_dream_due({"sessions_since_dream": 0, "corpus_delta": 0}, {})
+        self.assertFalse(due)
+
+    def test_sessions_gate(self):
+        due, _ = _mod._check_dream_due({"sessions_since_dream": 5}, {})
+        self.assertTrue(due)
+
+    def test_corpus_delta_gate(self):
+        due, _ = _mod._check_dream_due({"sessions_since_dream": 0, "corpus_delta": 10}, {})
+        self.assertTrue(due)
+
+    def test_thresholds_read_from_config(self):
+        cfg = {"dream_interval_sessions": 8, "corpus_delta_threshold": 20}
+        due, _ = _mod._check_dream_due({"sessions_since_dream": 7, "corpus_delta": 19}, cfg)
+        self.assertFalse(due)
+        due, _ = _mod._check_dream_due({"sessions_since_dream": 8, "corpus_delta": 0}, cfg)
+        self.assertTrue(due)
+
+
+class TestCheckClaudeReviewDue(unittest.TestCase):
+    """Mirrors compass/orient.py::_check_claude_review_due + _resolve_claude_md_path:
+    session cadence (default 15) OR, once >= 2 sessions have passed, the CLAUDE.md being
+    over claude_md_size_budget_bytes (default 20000)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name)
+        self.ns_dir = self.repo / "ns"
+        self.ns_dir.mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write(self, size):
+        (self.repo / "CLAUDE.md").write_text("x" * size)
+
+    def test_cadence_gate(self):
+        self._write(100)
+        r = _mod._check_claude_review_due(self.ns_dir, {"sessions_since_claude_review": 15}, {}, str(self.repo))
+        self.assertTrue(r["due"])
+        self.assertFalse(r["pulled_forward_by_size"])
+
+    def test_size_gate_pulls_forward(self):
+        self._write(20_001)
+        r = _mod._check_claude_review_due(self.ns_dir, {"sessions_since_claude_review": 2}, {}, str(self.repo))
+        self.assertTrue(r["due"])
+        self.assertTrue(r["pulled_forward_by_size"])
+        self.assertEqual(r["claude_md_bytes"], 20_001)
+
+    def test_size_gate_waits_for_min_sessions(self):
+        self._write(50_000)
+        r = _mod._check_claude_review_due(self.ns_dir, {"sessions_since_claude_review": 1}, {}, str(self.repo))
+        self.assertFalse(r["due"])
+
+    def test_size_budget_from_config(self):
+        self._write(15_000)
+        cfg = {"claude_md_size_budget_bytes": 10_000, "claude_review_size_min_sessions": 1}
+        r = _mod._check_claude_review_due(self.ns_dir, {"sessions_since_claude_review": 1}, cfg, str(self.repo))
+        self.assertTrue(r["pulled_forward_by_size"])
+
+    def test_no_claude_md_never_due(self):
+        r = _mod._check_claude_review_due(self.ns_dir, {"sessions_since_claude_review": 99}, {}, str(self.repo))
+        self.assertFalse(r["due"])
+
+    def test_repo_path_set_does_not_fall_back_to_skill_dir(self):
+        # Core only falls back to ~/.claude/skills/<ns>/CLAUDE.md when repo_path is unset.
+        with patch.object(_mod.Path, "home", return_value=self.repo):
+            skill_dir = self.repo / ".claude" / "skills" / "ns"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "CLAUDE.md").write_text("x")
+            r = _mod._check_claude_review_due(self.ns_dir, {"sessions_since_claude_review": 99}, {}, str(self.repo / "elsewhere"))
+            self.assertFalse(r["due"])
+            r = _mod._check_claude_review_due(self.ns_dir, {"sessions_since_claude_review": 99}, {}, "")
+            self.assertTrue(r["due"])
+
+
+class TestSkillOptInterval(unittest.TestCase):
+    """compass/skillopt.py reads skill_opt_interval_sessions (default 10) from config."""
+
+    def test_pull_forward_uses_configured_interval(self):
+        plateau = {"plateaued": True}
+        pf = _mod._check_cadence_pull_forward(plateau, "", False, {}, 5, False, 4, skill_opt_interval=6)
+        self.assertTrue(pf["skill_opt"])
+        pf = _mod._check_cadence_pull_forward(plateau, "", False, {}, 5, False, 4)
+        self.assertFalse(pf["skill_opt"])
 
 
 if __name__ == "__main__":
