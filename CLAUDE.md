@@ -137,7 +137,7 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
 | `explorationRatio` | state.json `goal_completions` | `{ratio, sessionsWithTypes, explore, total, low}`; `null` below 2 typed sessions |
 | `goalTypeBySession` | state.json `goal_completions` | `[{date, exploit, explore}]` chronological |
 | `carryForwardTrend` | all history/*.md files | `[{date, carryForward, goalsCompleted}]`; carry-forward = `## Incomplete` bullet count |
-| `lastRealityScore` | state.json `last_reality_score` | previous session's completeness % |
+| `lastRealityScore` | state.json `last_reality_score` | completeness % written by compass core at close; comparable only because both algorithms are identical |
 | `zoneDistribution` | active `learnings[]` | P56 `{golden, warning, preference, unclassified}`; top-level, not under `corpusHealth` |
 | `contracts[]` / `contractCoverage` / `criteriaHitRate` | state.json `goal_contracts` | P55; coverage stats `null` below 5 contracts |
 | `decisionGuidance[]` | `decision_guidance.jsonl` | P65; `status == "retired"` filtered out |
@@ -159,15 +159,24 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
   per-item rate is `None`, not `0.0`. Render "not enough data yet", never zero.
 - **Counting distributions always sum to the total:** missing/unrecognised values go to
   `unclassified`.
-- **Mirrored compass-core logic:** `_COMPLETION_MARKERS` (must include both `✓` and `✅`),
-  `_BACKLOG_HEADERS`, `_NON_ACHIEVEMENT_HEADERS`, `_iter_reality_bullets()`,
-  `_contract_coverage()`, `_compute_confidence_calibration()` are local copies of
-  `~/.claude/skills/compass/scripts/compass/reality.py`/`state.py`/`learnings.py` (can't import —
-  stdlib-only, separate repo). When compass core patches shared parsing logic, check this
-  file's mirror too.
+- **Mirrored compass-core logic:** `_COMPLETION_MARKERS`, `_BACKLOG_HEADERS`,
+  `_NON_ACHIEVEMENT_HEADERS`, `_reality_completeness()` (section-aware P22), `_iter_reality_bullets()`,
+  `_stale_bullet_count()` (whole-day threshold), `_contract_coverage()`,
+  `_compute_confidence_calibration()`, and the cadence gates `_check_dream_due()`,
+  `_check_claude_review_due()` (incl. size pull-forward), research/code-review/skill-opt due
+  are local copies of `~/.claude/skills/compass/scripts/compass/*.py` (can't import —
+  stdlib-only, separate repo). Read thresholds from `config` with core's defaults, never
+  hard-code them. `test_matches_compass_core_on_live_namespaces` imports core and checks
+  completeness parity on live data; extend that pattern when mirroring something new.
+- **Re-audit against compass core** when its git log shows changes to `reality.py`,
+  `state.py`, `orient.py`, `dream.py` or `state.json` shapes: compare each mirror side by side
+  against live data. Last audit: 2026-09-30. Don't trust `compass/docs/roadmap-status.md` as
+  the index; it lags the code.
 - **Computed-at-read-time fields:** some compass fields are computed fresh in compass's `read()`
   and never persisted (`dream_due`, `exploration_ratio` — stored as `None`,
-  `quality_plateau`/`cadence_pull_forward`, the `skill_opt` friction gate). Grep the compass
+  `quality_plateau`/`cadence_pull_forward`, the `skill_opt` friction gate,
+  `claude_review_status.pulled_forward_by_size`, reality-compaction-due, P78
+  contradiction warnings). Grep the compass
   source for how a field is produced before wiring a plain `state.get(...)`; replicate the
   derivation if it isn't persisted.
 - **Backlog docs are hypotheses, not specs.** Verify filenames/shapes against compass source

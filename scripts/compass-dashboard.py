@@ -93,11 +93,8 @@ def _e(s):
             .replace('"', "&quot;"))
 
 
-# Local copies — keep in sync with scripts/compass/reality.py (can't import; stdlib-only constraint)
-# 2026-08-30 audit: real reality.md files use "✅" (U+2705) exclusively, never the bare
-# "✓" (U+2713) this set originally shipped with — that halved reported completeness scores
-# in namespaces that only use the emoji (e.g. agentic-loopkit: 25.0% -> 56.2%). compass
-# core's own reality.py has the identical ✓-only gap; flagged upstream, not fixed here.
+# Local copies — keep in sync with scripts/compass/reality.py (can't import; stdlib-only constraint).
+# Both sets are identical to core as of 2026-09-30.
 _COMPLETION_MARKERS = frozenset({
     "complete", "live", "exists and works", "shipped", "passing", "done", "✓", "✅", "operational",
 })
@@ -105,15 +102,9 @@ _BACKLOG_HEADERS = frozenset({
     "backlog", "planned", "missing", "next", "todo", "debt", "pending", "phase",
 })
 
-# Local copy of compass/reality.py's _NON_ACHIEVEMENT_HEADERS (stdlib-only constraint
-# means this can't be imported — see CLAUDE.md "Constants sync"). Sections like
-# "External signals — directional" hold research findings, not shippable work — they're
-# neither achieved nor backlog, so they shouldn't enter the completeness denominator at
-# all. Originally a dashboard-local-only fix (2026-07-11); ported upstream to
-# compass/reality.py 2026-07-18 — this copy must now be kept in sync with that one.
-# 2026-08-30 audit: real reality.md files also use "## What is blocked", "## Known
-# limitations", and "## Known doc staleness" headers — none of these are shippable
-# achievements either, so they're added here too (flagged for the same upstream sync).
+# Local copy of compass/reality.py's _NON_ACHIEVEMENT_HEADERS: sections that are neither
+# achieved nor backlog (research signals, blocked work, known limitations), left out of the
+# completeness denominator. In sync with core since 2026-09-30.
 _NON_ACHIEVEMENT_HEADERS = frozenset({
     "external signals", "blocked", "known limitations", "known doc staleness",
 })
@@ -147,14 +138,31 @@ def _iter_reality_bullets(reality_md):
 
 
 def _reality_completeness(reality_md):
+    """P22 completeness %, a line-for-line mirror of compass core's section-aware
+    reality.py::_compute_reality_completeness (2026-09-30): only `##` headers change
+    section; backlog/non-achievement sections are left out; every bullet under an H2 that
+    carries a completion marker ("What exists and works") counts as achieved; any other
+    section scores per bullet. The live-parity test in test_data_loading.py fails if the
+    two drift.
+    """
+    excluded = False
+    section_achieved = False
     total = 0
     achieved = 0
-    for text, excluded in _iter_reality_bullets(reality_md):
-        if excluded:
-            continue
-        total += 1
-        if any(marker in text.lower() for marker in _COMPLETION_MARKERS):
-            achieved += 1
+    for line in reality_md.splitlines():
+        s = line.strip()
+        if s.startswith("#"):
+            if len(s) - len(s.lstrip("#")) == 2:
+                header = s.lstrip("#").strip().lower()
+                excluded = any(k in header for k in _BACKLOG_HEADERS | _NON_ACHIEVEMENT_HEADERS)
+                section_achieved = any(m in header for m in _COMPLETION_MARKERS)
+        elif s.startswith("- ") or s.startswith("* "):
+            text = s[2:].strip()
+            if not text or excluded:
+                continue
+            total += 1
+            if section_achieved or any(marker in text.lower() for marker in _COMPLETION_MARKERS):
+                achieved += 1
     if total == 0:
         return None
     return round(achieved / total * 100, 1)

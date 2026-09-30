@@ -159,6 +159,41 @@ class TestRealityCompleteness(unittest.TestCase):
 # _corpus_health
 # ─────────────────────────────────────────────────────────────────────────────
 
+
+class TestRealityCompletenessSectionAware(unittest.TestCase):
+    """Mirror of compass core's section-aware P22 (reality.py, 2026-09-30): every bullet
+    under an H2 carrying a completion marker counts as achieved; ### inherits; exclusion
+    beats the header marker. Keep in lockstep with scripts/tests/test_reality.py upstream."""
+
+    def test_bullets_under_what_exists_and_works_count_as_achieved(self):
+        self.assertEqual(_reality_completeness("## What exists and works\n- A\n- B\n"), 100.0)
+
+    def test_subheaders_inherit_the_achieved_section(self):
+        md = "## What exists and works\n### Tabs\n- Tab A\n### Data model\n- field x\n"
+        self.assertEqual(_reality_completeness(md), 100.0)
+
+    def test_plain_section_still_scores_per_bullet(self):
+        self.assertEqual(_reality_completeness("## Platform\n- Service A shipped\n- Service B\n"), 50.0)
+
+    def test_marker_in_header_does_not_override_backlog_exclusion(self):
+        md = "## What exists and works\n- A\n## Phase 2 — complete\n- B\n## Platform\n- C\n"
+        self.assertEqual(_reality_completeness(md), 50.0)
+
+    def test_matches_compass_core_on_live_namespaces(self):
+        core_path = Path.home() / ".claude" / "skills" / "compass" / "scripts"
+        loop = Path.home() / ".claude" / "loop"
+        if not (core_path / "compass" / "reality.py").exists() or not loop.is_dir():
+            self.skipTest("compass core or live loop data not present")
+        sys.path.insert(0, str(core_path))
+        try:
+            from compass.reality import _compute_reality_completeness
+        finally:
+            sys.path.remove(str(core_path))
+        for md_path in sorted(loop.glob("*/reality.md")):
+            md = md_path.read_text(encoding="utf-8")
+            with self.subTest(namespace=md_path.parent.name):
+                self.assertEqual(_reality_completeness(md), _compute_reality_completeness(md, {})["score"])
+
 class TestCorpusHealth(unittest.TestCase):
 
     def _fact(self, weight=2):
