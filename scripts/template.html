@@ -248,6 +248,12 @@
     .panel-msg   { padding: 1rem; color: var(--muted); }
 
     /* ── State tab collapsible groups (headline visible, detail on demand) ── */
+    /* Opt out of browser scroll anchoring page-wide. Scrolled to the bottom, Chrome anchors on
+       an element below the detail panel (e.g. the footer), so opening a drawer scrolls the page
+       to hold that element still and the clicked summary jumps up by the drawer's height.
+       Scoping this to #detail isn't enough -- the anchor is outside it. Safe here: the page is
+       static, nothing above the viewport ever resizes asynchronously. */
+    html, body { overflow-anchor: none; }
     .state-group {
       border: 1px solid var(--border); border-radius: 6px; margin-bottom: .75rem; overflow: hidden;
     }

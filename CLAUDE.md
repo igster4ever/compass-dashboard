@@ -55,6 +55,9 @@ scripts/
 All data is baked into `const NS = [...]` at generation time. There is no runtime backend
 and there never will be — static HTML only. Stdlib-only Python; no JS libraries (no D3,
 Chart.js etc. — the DAG force simulation and mind-map radial layout are hand-rolled).
+*Alternative considered, not adopted:* a `<script type="application/json">` data island
+parsed by `render(data)` would remove the JS-literal escaping surface; `const NS` plus
+`generate()`'s `</script>` escaping and `esc()` in `innerHTML` covers it today.
 
 ---
 
@@ -80,6 +83,9 @@ function becomes undefined (`ReferenceError: switchView is not defined`). Run
 5. **Native `<details>/<summary>`** needs no `window` export. An element inside a *closed*
    `<details>` has no layout box, so open its ancestors before `scrollIntoView()` or filtering
    (see `navigateToResult()`).
+6. **Scroll anchoring is off page-wide** (`html, body { overflow-anchor: none }`). With it on,
+   opening a drawer while scrolled to the bottom made the clicked summary jump up by the
+   drawer's height (Chrome anchored on the footer). Don't scope it back down to `#detail`.
 
 ---
 
