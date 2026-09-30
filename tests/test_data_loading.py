@@ -179,20 +179,6 @@ class TestRealityCompletenessSectionAware(unittest.TestCase):
         md = "## What exists and works\n- A\n## Phase 2 — complete\n- B\n## Platform\n- C\n"
         self.assertEqual(_reality_completeness(md), 50.0)
 
-    def test_matches_compass_core_on_live_namespaces(self):
-        core_path = Path.home() / ".claude" / "skills" / "compass" / "scripts"
-        loop = Path.home() / ".claude" / "loop"
-        if not (core_path / "compass" / "reality.py").exists() or not loop.is_dir():
-            self.skipTest("compass core or live loop data not present")
-        sys.path.insert(0, str(core_path))
-        try:
-            from compass.reality import _compute_reality_completeness
-        finally:
-            sys.path.remove(str(core_path))
-        for md_path in sorted(loop.glob("*/reality.md")):
-            md = md_path.read_text(encoding="utf-8")
-            with self.subTest(namespace=md_path.parent.name):
-                self.assertEqual(_reality_completeness(md), _compute_reality_completeness(md, {})["score"])
 
 class TestCorpusHealth(unittest.TestCase):
 

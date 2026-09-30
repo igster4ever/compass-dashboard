@@ -31,7 +31,8 @@ This file loads on every turn, so it holds rules, not stories. **Budget: 20KB**
   (`~/.claude/skills/compass/scripts/prompts/claude-md-hygiene-review.md`) fires for this
   namespace every 15 sessions, or early once this file is over budget. When it fires — or when
   the budget test fails — run it: correct stale facts against the code, archive dated narratives
-  verbatim **by script** (slice lines, don't retype), then
+  verbatim with `~/.claude/skills/compass/scripts/archive_claude_md.py` (`--list` for the size
+  table; it refuses to write unless nothing was lost), then
   `python3 ~/.claude/skills/compass/scripts/compass.py record-claude-review compass-dashboard`.
 - **Things that go stale fastest:** line counts, test counts, "authoritative list" copies of
   arrays in `template.html`. Prefer pointing at the code over copying it.
@@ -166,12 +167,12 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
   `_check_claude_review_due()` (incl. size pull-forward), research/code-review/skill-opt due
   are local copies of `~/.claude/skills/compass/scripts/compass/*.py` (can't import —
   stdlib-only, separate repo). Read thresholds from `config` with core's defaults, never
-  hard-code them. `test_matches_compass_core_on_live_namespaces` imports core and checks
-  completeness parity on live data; extend that pattern when mirroring something new.
-- **Re-audit against compass core** when its git log shows changes to `reality.py`,
-  `state.py`, `orient.py`, `dream.py` or `state.json` shapes: compare each mirror side by side
-  against live data. Last audit: 2026-09-30. Don't trust `compass/docs/roadmap-status.md` as
-  the index; it lags the code.
+  hard-code them. `tests/test_core_parity.py` imports core and checks every mirror against it
+  on all live namespaces; add a case there whenever you mirror something new.
+- **Re-audit against compass core** by running `test_core_parity.py`; a failure means core
+  changed, so port the change rather than loosening the test. It can't see *new* core fields,
+  so still skim core's git log for new persisted fields now and then. Last manual audit:
+  2026-09-30. Don't trust `compass/docs/roadmap-status.md` as the index; it lags the code.
 - **Computed-at-read-time fields:** some compass fields are computed fresh in compass's `read()`
   and never persisted (`dream_due`, `exploration_ratio` — stored as `None`,
   `quality_plateau`/`cadence_pull_forward`, the `skill_opt` friction gate,
@@ -283,6 +284,7 @@ Run `python3 -m pytest tests/ -q` **and** `node --test tests/js/` before calling
 | `test_generate.py` | `generate()` smoke tests — structural markers, `const NS = [` embedding, script-tag escaping, feature wiring |
 | `test_integration_pipeline.py` | End-to-end: on-disk synthetic namespace → `load_namespace()` → `_js_data()`/`generate()` |
 | `test_claude_md_budget.py` | Fails when this file exceeds its 20KB budget |
+| `test_core_parity.py` | Imports compass core; asserts every dashboard mirror matches it on all live namespaces (skips when absent) |
 | `js/dashboard_helpers.test.mjs` | Pure JS helpers extracted from `template.html` by brace-matching (`extractFunction()` — mind its default-parameter gotcha); add new pure helpers to `PURE_HELPERS` |
 | `js/render_smoke.test.mjs` | Runs the whole `<script>` IIFE in `node:vm` against a hand-rolled DOM stub and `js/fixtures/dashboard_fixture.json`; calls every view/sub-tab entrypoint and asserts "does not throw" |
 
