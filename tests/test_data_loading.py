@@ -453,6 +453,77 @@ class TestStaleBulletCount(unittest.TestCase):
             self.assertEqual(_stale_bullet_count(md, state, days=30), 1)
 
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reality compaction cadence + verification durability
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestRealityCompaction(unittest.TestCase):
+
+    _MD = ("## What exists and works\n- A\n### Sub\n- B\n"
+           "## Backlog\n- C\n")
+
+    def test_section_bullets_include_subsections_and_stop_at_next_h2(self):
+        texts = [t for _, t in _mod._parse_section_bullets(self._MD, "## What exists and works")]
+        self.assertEqual(texts, ["A", "B"])
+
+    def test_missing_section_is_empty(self):
+        self.assertEqual(_mod._parse_section_bullets("## Other\n- X\n", "## What exists and works"), [])
+
+    def test_due_on_session_cadence(self):
+        s = _mod._check_reality_compaction_due(self._MD, {"sessions_since_reality_compaction": 8}, {})
+        self.assertTrue(s["due"])
+        self.assertFalse(s["pulled_forward_by_size"])
+
+    def test_due_by_size_is_pulled_forward(self):
+        s = _mod._check_reality_compaction_due(self._MD, {}, {"reality_compaction_size_threshold": 2})
+        self.assertTrue(s["due"])
+        self.assertTrue(s["pulled_forward_by_size"])
+        self.assertEqual(s["bullet_count"], 2)
+
+    def test_not_due(self):
+        s = _mod._check_reality_compaction_due(self._MD, {"sessions_since_reality_compaction": 3}, {})
+        self.assertFalse(s["due"])
+        self.assertEqual((s["sessions_since_reality_compaction"], s["interval_sessions"]), (3, 8))
+
+    def test_eligible_needs_three_verifications_and_ninety_days(self):
+        old = (_NOW - timedelta(days=90)).isoformat()
+        young = (_NOW - timedelta(days=89)).isoformat()
+        state = {"reality_validation": {
+            _hash("A"): {"verified_at": old, "times_verified": 3, "first_verified_at": old},
+            _hash("B"): {"verified_at": young, "times_verified": 3, "first_verified_at": young},
+            _hash("C"): {"verified_at": old, "times_verified": 5, "first_verified_at": old},  # Backlog
+        }}
+        with patch.object(_mod, "_now_utc", return_value=_NOW):
+            self.assertEqual(_mod._compaction_eligible_count(self._MD, state, {}), 1)
+
+    def test_bare_string_entry_counts_as_one_verification(self):
+        old = (_NOW - timedelta(days=200)).isoformat()
+        state = {"reality_validation": {_hash("A"): old}}
+        with patch.object(_mod, "_now_utc", return_value=_NOW):
+            self.assertEqual(_mod._compaction_eligible_count(self._MD, state, {}), 0)
+
+    def test_archive_count_ignores_provenance_lines(self):
+        md = "# Reality archive\n\n- one\n  (archived_at: x)\n- two\n  (archived_at: y)\n"
+        self.assertEqual(_mod._reality_archive_count(md), 2)
+        self.assertEqual(_mod._reality_archive_count(""), 0)
+
+    def test_durability_none_when_nothing_verified(self):
+        self.assertIsNone(_mod._verification_durability("- A\n", {}))
+
+    def test_durability_counts_reverified_and_earliest_first_seen(self):
+        md = "## What exists and works\n- A\n- B\n- C\n"
+        state = {"reality_validation": {
+            _hash("A"): {"verified_at": "2026-09-01T00:00:00Z", "times_verified": 3,
+                         "first_verified_at": "2026-07-01T00:00:00Z"},
+            _hash("B"): "2026-08-01T00:00:00Z",
+            _hash("gone"): {"verified_at": "2026-01-01T00:00:00Z", "times_verified": 9,
+                            "first_verified_at": "2026-01-01T00:00:00Z"},
+        }}
+        self.assertEqual(_mod._verification_durability(md, state), {
+            "verified": 2, "reverified": 1, "max_times": 3, "first_verified_at": "2026-07-01",
+        })
+
 class TestMindmapData(unittest.TestCase):
     """E25a — _mindmap_data() hierarchy builder."""
 

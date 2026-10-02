@@ -368,6 +368,121 @@ def _stale_bullet_count(reality_md, state, days=30):
     return stale
 
 
+def _parse_section_bullets(reality_md, section_header):
+    """(hash, text) bullets under one exact-match header, stopping at the next header of
+    the same or higher level (subsections stay included). Mirrors compass/reality.py's
+    _parse_section_bullets(); [] when the header is absent."""
+    target = section_header.strip()
+    target_level = len(target) - len(target.lstrip("#"))
+    lines = reality_md.splitlines()
+    start = next((i for i, line in enumerate(lines) if line.strip() == target), None)
+    if start is None:
+        return []
+    bullets = []
+    for line in lines[start + 1:]:
+        s = line.strip()
+        if s.startswith("#"):
+            if len(s) - len(s.lstrip("#")) <= target_level:
+                break
+            continue
+        if s.startswith("- ") or s.startswith("* "):
+            text = s[2:].strip()
+            if text:
+                bullets.append((hashlib.sha256(text.encode()).hexdigest()[:8], text))
+    return bullets
+
+
+def _normalise_validation_entry(raw):
+    """Full {verified_at, confidence, times_verified, first_verified_at} shape for a
+    reality_validation value, accepting the pre-P66 bare-ISO-string form and dicts written
+    before the compaction fields existed. Mirrors compass/reality.py."""
+    if isinstance(raw, dict):
+        verified_at = raw.get("verified_at")
+        return {
+            "verified_at": verified_at,
+            "confidence": raw.get("confidence", 1.0),
+            "times_verified": raw.get("times_verified", 1),
+            "first_verified_at": raw.get("first_verified_at", verified_at),
+        }
+    return {"verified_at": raw, "confidence": 1.0, "times_verified": 1, "first_verified_at": raw}
+
+
+def _check_reality_compaction_due(reality_md, state, config):
+    """Reality-compaction cadence. Mirrors compass/reality.py's
+    _check_reality_compaction_due(): OR gate of `reality_compaction_interval_sessions`
+    (default 8) and a '## What exists and works' bullet count of at least
+    `reality_compaction_size_threshold` (default 120). `pulled_forward_by_size` is
+    dashboard-only: due by size while the session cadence alone is not."""
+    sessions_since = state.get("sessions_since_reality_compaction", 0)
+    interval = int(config.get("reality_compaction_interval_sessions", 8))
+    bullet_count = len(_parse_section_bullets(reality_md, "## What exists and works"))
+    size_threshold = int(config.get("reality_compaction_size_threshold", 120))
+    cadence_due = sessions_since >= interval
+    by_size = bullet_count >= size_threshold
+    return {
+        "due": cadence_due or by_size,
+        "sessions_since_reality_compaction": sessions_since,
+        "interval_sessions": interval,
+        "last_reality_compaction_at": state.get("last_reality_compaction_at"),
+        "bullet_count": bullet_count,
+        "size_threshold": size_threshold,
+        "pulled_forward_by_size": by_size and not cadence_due,
+    }
+
+
+def _compaction_eligible_count(reality_md, state, config):
+    """How many '## What exists and works' bullets a steady-state compaction pass would
+    archive now. Mirrors compass/reality.py's _find_compaction_candidates() (bootstrap=False):
+    times_verified >= `reality_compaction_min_verifications` (default 3) and
+    first_verified_at at least `reality_compaction_min_age_days` (default 90) whole days old.
+    An unverified bullet is a staleness case, never a candidate."""
+    validation = state.get("reality_validation", {})
+    min_verifications = int(config.get("reality_compaction_min_verifications", 3))
+    min_age_days = int(config.get("reality_compaction_min_age_days", 90))
+    now = _now_utc()
+    count = 0
+    for bullet_hash, _ in _parse_section_bullets(reality_md, "## What exists and works"):
+        raw = validation.get(bullet_hash)
+        if raw is None:
+            continue
+        entry = _normalise_validation_entry(raw)
+        if entry["times_verified"] < min_verifications:
+            continue
+        first = _parse_iso(entry["first_verified_at"])
+        if first and (now - first).days >= min_age_days:
+            count += 1
+    return count
+
+
+def _reality_archive_count(archive_md):
+    """Bullets compaction has moved to reality_archive.md. Each archived bullet is one
+    top-level '- ' line; its '(archived_at: ...)' provenance line is indented beneath it."""
+    return sum(1 for line in archive_md.splitlines() if line.startswith("- "))
+
+
+def _verification_durability(reality_md, state):
+    """How durable reality verification is across the bullets currently in reality.md
+    (the same set _stale_bullet_count scans): `{verified, reverified, max_times,
+    first_verified_at}`, where `reverified` counts bullets confirmed 2+ times and
+    `first_verified_at` is the earliest first confirmation. None when nothing is verified.
+    Validation entries for bullets no longer in reality.md are ignored."""
+    validation = state.get("reality_validation", {})
+    entries = []
+    for text, _ in _iter_reality_bullets(reality_md):
+        raw = validation.get(hashlib.sha256(text.encode()).hexdigest()[:8])
+        if raw:
+            entries.append(_normalise_validation_entry(raw))
+    if not entries:
+        return None
+    firsts = [dt for dt in (_parse_iso(e["first_verified_at"]) for e in entries) if dt]
+    return {
+        "verified": len(entries),
+        "reverified": sum(1 for e in entries if e["times_verified"] >= 2),
+        "max_times": max(e["times_verified"] for e in entries),
+        "first_verified_at": min(firsts).strftime("%Y-%m-%d") if firsts else None,
+    }
+
+
 def _parse_goal_entry(entry):
     """Normalise a goal_completions entry to (total_goals, hit_rate_pct)."""
     if isinstance(entry, dict):
@@ -1090,6 +1205,7 @@ def _read_namespace_files(ns_dir):
             _l["confidence"] = _normalize_confidence(_l["confidence"])
     decisions    = _read_jsonl(ns_dir / "decisions.jsonl")
     code_context = _read_file(ns_dir / "code_context.md")
+    reality_archive = _read_file(ns_dir / "reality_archive.md")
     config       = _read_json(ns_dir / "config.json")
 
     history_dir   = ns_dir / "history"
@@ -1158,6 +1274,7 @@ def _read_namespace_files(ns_dir):
         "learnings":               learnings,
         "decisions":               decisions,
         "code_context":            code_context,
+        "reality_archive":         reality_archive,
         "config":                  config,
         "history_dir":             history_dir,
         "history_files":           history_files,
@@ -1254,6 +1371,13 @@ def _assemble_namespace_dict(ns_dir, raw):
 
     intent_version     = state.get("intent_versions", 1)
     stale_bullet_count = _stale_bullet_count(reality, state)
+    verification_durability = _verification_durability(reality, state)
+    reality_compaction_status = _check_reality_compaction_due(reality, state, config)
+    reality_compaction_status["eligible_count"] = _compaction_eligible_count(reality, state, config)
+    reality_compaction_status["archived_count"] = _reality_archive_count(raw.get("reality_archive") or "")
+    reality_compaction_status["archive_path"] = (
+        str(ns_dir / "reality_archive.md") if raw.get("reality_archive") else None
+    )
     corpus_health      = _corpus_health(active_learnings, superseded_count)
     zone_distribution  = _zone_distribution(active_learnings)
     confidence_calibration = _compute_confidence_calibration(all_learnings)
@@ -1435,6 +1559,8 @@ def _assemble_namespace_dict(ns_dir, raw):
         "assumption_audit_candidates": assumption_audit_candidates,
         "claude_review_due":          claude_review_due,
         "claude_review_status":       claude_review_status,
+        "verification_durability":    verification_durability,
+        "reality_compaction_status":  reality_compaction_status,
         "dream_defer_count":          dream_defer_count,
         "complexity_clustering_signals": complexity_clustering_signals,
     }
@@ -2010,6 +2136,8 @@ _JS_DATA_RENAME_FIELDS = [
         "claude_md_bytes": None, "size_budget_bytes": 20000,
     }),
     ("dreamDeferCount",            "dream_defer_count",          0),
+    ("verificationDurability",     "verification_durability",    None),
+    ("realityCompactionStatus",    "reality_compaction_status",  None),
     ("complexityClusteringSignals", "complexity_clustering_signals", []),
 ]
 

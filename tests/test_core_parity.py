@@ -95,6 +95,23 @@ class TestCoreParity(unittest.TestCase):
             self.assertEqual(dash._stale_bullet_count(md, state),
                              len(core["reality"]._get_stale_bullets(md, state)))
 
+    def test_reality_compaction_due(self):
+        for name, _, state, config, md in self._each():
+            ours = dash._check_reality_compaction_due(md, state, config)
+            theirs = core["reality"]._check_reality_compaction_due(md, state, config)
+            self.assertEqual({k: ours[k] for k in theirs}, theirs)
+
+    def test_compaction_eligible_count(self):
+        for name, _, state, config, md in self._each():
+            self.assertEqual(dash._compaction_eligible_count(md, state, config),
+                             len(core["reality"]._find_compaction_candidates(md, state, config)))
+
+    def test_normalise_validation_entry(self):
+        for name, _, state, _, _ in self._each():
+            for h, raw in state.get("reality_validation", {}).items():
+                self.assertEqual(dash._normalise_validation_entry(raw),
+                                 core["reality"]._normalise_validation_entry(raw), h)
+
     def test_reality_bullet_hashes(self):
         # Goal-outcome links and verification records are keyed by these hashes.
         for name, _, _, _, md in self._each():

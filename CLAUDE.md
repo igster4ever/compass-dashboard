@@ -162,7 +162,9 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
   `unclassified`.
 - **Mirrored compass-core logic:** `_COMPLETION_MARKERS`, `_BACKLOG_HEADERS`,
   `_NON_ACHIEVEMENT_HEADERS`, `_reality_completeness()` (section-aware P22), `_iter_reality_bullets()`,
-  `_stale_bullet_count()` (whole-day threshold), `_contract_coverage()`,
+  `_stale_bullet_count()` (whole-day threshold), `_parse_section_bullets()`,
+  `_normalise_validation_entry()`, `_check_reality_compaction_due()`,
+  `_compaction_eligible_count()` (steady-state only), `_contract_coverage()`,
   `_compute_confidence_calibration()`, and the cadence gates `_check_dream_due()`,
   `_check_claude_review_due()` (incl. size pull-forward), research/code-review/skill-opt due
   are local copies of `~/.claude/skills/compass/scripts/compass/*.py` (can't import —
@@ -254,7 +256,9 @@ the backlog bucket. There's no `--purple` CSS variable; Strategic uses a one-off
 **State sub-tab** (`renderState()`) — always-visible Intent, Active goals and a "Health &
 cadence" strip (`.state-health-strip`), then `stateGroup` drawers (Reality, Decisions & backlog,
 Goal tracking, Cross-namespace signals, Feedback & failure analysis, Intent history). New
-sections go in the matching drawer, not the flat top.
+sections go in the matching drawer, not the flat top. The Reality drawer's upkeep lines
+(`renderRealityUpkeep()`) show compaction cadence, eligible/archived counts with a `file://`
+link to `reality_archive.md`, and verification durability over bullets still in reality.md.
 
 **Learnings sub-tab** — type and zone filters compose through `applyLearningFilters(table,
 nsId)` over `data-ltype`/`data-zone`; never set `row.style.display` from a second independent

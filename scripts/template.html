@@ -1342,7 +1342,39 @@ function renderStateSection_Reality(ns) {
   const staleNote = ns.staleBulletCount > 0
     ? ` <span style="color:var(--amber);font-size:.66rem;font-weight:normal">\u26a0 ${ns.staleBulletCount} unverified</span>`
     : '';
-  return `<div class="md-section"><h3>Reality${staleNote}</h3><div>${md(ns.reality)}</div></div>`;
+  return `<div class="md-section"><h3>Reality${staleNote}</h3>${renderRealityUpkeep(ns)}<div>${md(ns.reality)}</div></div>`;
+}
+
+// Reality upkeep: compaction cadence (mirrors core's _check_reality_compaction_due) plus
+// how durable verification is (times_verified / first_verified_at). '' when neither exists.
+function renderRealityUpkeep(ns) {
+  const rc = ns.realityCompactionStatus;
+  const vd = ns.verificationDurability;
+  const lines = [];
+  if (rc) {
+    const icon = rc.due ? '\u26a0' : '\u2713';
+    const col  = rc.due ? 'var(--amber)' : 'var(--muted)';
+    const bolt = rc.pulled_forward_by_size ? ' \u26a1' : '';
+    const titleAttr = rc.pulled_forward_by_size
+      ? ` title="${esc('Pulled forward by What-exists bullet count, not session cadence')}"` : '';
+    const archived = rc.archived_count
+      ? (rc.archive_path
+          ? ` \u00b7 <a href="file://${esc(encodeURI(rc.archive_path))}" target="_blank" rel="noopener">${rc.archived_count} archived</a>`
+          : ` \u00b7 ${rc.archived_count} archived`)
+      : '';
+    lines.push(`<div style="color:${col}"${titleAttr}>${icon} Compaction ${rc.due ? 'due' : 'on schedule'}${bolt}`
+      + ` \u00b7 ${rc.sessions_since_reality_compaction}/${rc.interval_sessions} sessions`
+      + ` \u00b7 ${rc.bullet_count}/${rc.size_threshold} What-exists bullets`
+      + ` \u00b7 ${rc.eligible_count || 0} eligible${archived}</div>`);
+  }
+  if (vd) {
+    const re = vd.reverified
+      ? ` \u00b7 ${vd.reverified} re-verified 2+\u00d7 (max ${vd.max_times}\u00d7)`
+      : ' \u00b7 none re-verified yet';
+    const first = vd.first_verified_at ? ` \u00b7 first seen ${esc(vd.first_verified_at)}` : '';
+    lines.push(`<div style="color:var(--muted)">Verified ${vd.verified} bullet${vd.verified !== 1 ? 's' : ''}${re}${first}</div>`);
+  }
+  return lines.length ? `<div class="reality-upkeep" style="font-size:.72rem;margin:.2rem 0 .5rem">${lines.join('')}</div>` : '';
 }
 
 function renderStateSection_Decisions(ns) {
@@ -1640,6 +1672,7 @@ function renderState(ns) {
 
   const realityHeadline = ns.realityCompletenessScore != null
     ? `${ns.realityCompletenessScore}% complete${ns.staleBulletCount > 0 ? `, ${ns.staleBulletCount} unverified ⚠` : ''}`
+      + (ns.realityCompactionStatus && ns.realityCompactionStatus.due ? ', compaction due' : '')
     : '';
   const reality = stateGroup('Reality', realityHeadline, renderStateSection_Reality(ns));
 
