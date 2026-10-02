@@ -378,6 +378,14 @@ class TestStaleBulletCount(unittest.TestCase):
         with patch.object(_mod, "_now_utc", return_value=_NOW):
             self.assertEqual(_stale_bullet_count(md, state, days=30), 0)
 
+    def test_backlog_bullets_never_stale(self):
+        # Mirrors compass core's _get_stale_bullets (2026-10-02): any H2 containing
+        # "backlog" is pending work; ### subsections inherit, other sections still count.
+        md = ("## What exists\n- Shipped\n## Backlog\n### Tactical\n- Todo\n"
+              "## Known limitations\n- Limit\n")
+        with patch.object(_mod, "_now_utc", return_value=_NOW):
+            self.assertEqual(_stale_bullet_count(md, {}, days=30), 2)
+
     def test_old_verified_bullet_is_stale(self):
         md = self._make_md(["Some feature"])
         state = self._make_state([("Some feature", _STALE_TS)])

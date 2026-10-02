@@ -343,8 +343,24 @@ def _normalize_confidence(value):
     return "low"
 
 
+def _backlog_bullet_texts(reality_md):
+    """Texts of bullets under an H2 whose text contains "backlog" -- never stale, since
+    they are pending work rather than claims. Mirrors compass/reality.py's
+    _backlog_bullet_hashes (2026-10-02); ### subsections inherit."""
+    texts, in_backlog = set(), False
+    for line in reality_md.splitlines():
+        s = line.strip()
+        if s.startswith("#"):
+            if len(s) - len(s.lstrip("#")) == 2:
+                in_backlog = "backlog" in s.lstrip("#").strip().lower()
+        elif in_backlog and (s.startswith("- ") or s.startswith("* ")):
+            if s[2:].strip():
+                texts.add(s[2:].strip())
+    return texts
+
+
 def _stale_bullet_count(reality_md, state, days=30):
-    """Count reality bullets not verified within `days` days (mirrors compass logic).
+    """Count non-backlog reality bullets not verified within `days` days (mirrors compass logic).
 
     compass's P66 (2026-07-28) changed reality_validation values from a bare ISO
     string to a {"verified_at", "confidence"} dict; existing namespaces still have
@@ -353,7 +369,10 @@ def _stale_bullet_count(reality_md, state, days=30):
     validation = state.get("reality_validation", {})
     now = _now_utc()
     stale = 0
+    backlog = _backlog_bullet_texts(reality_md)
     for text, _ in _iter_reality_bullets(reality_md):
+        if text in backlog:
+            continue
         h = hashlib.sha256(text.encode()).hexdigest()[:8]
         entry = validation.get(h)
         if not entry:
