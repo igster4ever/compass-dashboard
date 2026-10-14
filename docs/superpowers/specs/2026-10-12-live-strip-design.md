@@ -93,14 +93,36 @@ No new files, no server, and `pulse` is never written to.
 
 ## Risks and open questions
 
-1. **How much of `pulse` is already mirrored?** I have not diffed `_assemble_namespace_dict()`
-   against `compass.py pulse`. It decides mirror vs subprocess cost.
+1. **How much of `pulse` is already mirrored?** *Answered 2026-10-14, see "Pulse field coverage"
+   below: about half is free, the rest is small except the ledger-derived fields. Mirror stays the
+   choice.*
 2. **`location.reload()` over `file://`** works but flashes; fine for a glanceable page, worth a
    check that scroll position survives (anchor off page-wide per `CLAUDE.md` trap 6).
 3. **Clock skew:** elapsed uses the browser clock against `last_open` from the machine's clock.
    Same machine in practice; if the HTML is ever opened elsewhere, elapsed would be wrong. Mitigate by
    computing against `generated_at`'s `now` plus time since page load, not the raw browser clock.
 4. **Naming:** "Live" over-promises; consider "Now".
+
+## Pulse field coverage (diff of `_assemble_namespace_dict()` vs `compass/pulse.py`, 2026-10-14)
+
+| `pulse` field | Dashboard today | Cost to mirror |
+|---|---|---|
+| `open_session`, `last_open`, `last_close` | Present | None |
+| `typical_minutes` | `cycle_history` present; pulse takes the median of `cycle_history[].minutes` | Trivial (`statistics.median`) |
+| `quality` | `quality_history` present; pulse takes the last entry's `score`, `weakest_component` and that component's value | Trivial |
+| `goals` | `planned_actions` present, **`goal_progress` is not exposed** | Small: read `goal_progress` from state |
+| `phase`, `close_phase_started_at` | Not exposed; phase derives from `open_session` plus `close_phase_started_at` | Small |
+| `elapsed_seconds`, `now` | Not baked, and should not be (client-side tick from `generated_at`) | Trivial |
+| `cadences` | All seven `*_due` checks are mirrored, but the dashboard's review and research include the git complexity pull-forward, which pulse deliberately skips | **Semantic divergence**: needs a cheap-gate variant, or the strip must show the dashboard's own value and say so |
+| `reality_changes`, `reality_delta` | Not mirrored: needs `_session_ledger`, `_session_window` and the H2 classifier | **Largest piece**: about 60 lines of core logic to copy under parity |
+| `git` | Not mirrored; pulse runs two `git -C` calls with a 3 s timeout | Small code, but adds a subprocess per open namespace to generation. Dashboard already shells out to git at line 635 |
+
+Consequences for the build:
+- The parity test should compare **field by field**, so the cadence divergence is a named, expected
+  mismatch rather than a failure that hides real drift.
+- Start with the cheap rows (typical, quality, goals, phase), then the ledger, then `git`.
+- Cadence needs a decision before the strip shows it: mirror pulse's cheap gates, or show
+  `dream_due`-style flags only, which already agree between the two surfaces.
 
 ## Testing
 
@@ -123,6 +145,6 @@ No new files, no server, and `pulse` is never written to.
 | Aspect | Score | Why |
 |---|---|---|
 | Bake-tick-regenerate resolves the contradiction | 8/10 | Fits every stated constraint; unproven against real use |
-| Mirror (not subprocess) as the data source | 6/10 | Depends on open question 1, which I haven't checked |
+| Mirror (not subprocess) as the data source | 7/10 | Coverage diff done 2026-10-14: most fields are cheap; the ledger fields and the cadence pull-forward divergence are the real cost |
 | `--watch` reload plus hash persistence | 6/10 | `file://` reload behaviour and scroll restore untested |
 | Strip layout | 5/10 | Sketched in text only, never seen |

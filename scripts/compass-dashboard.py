@@ -12,6 +12,7 @@ import hashlib
 import json
 import sys
 import re
+import statistics
 import subprocess
 import argparse
 from pathlib import Path
@@ -1206,6 +1207,186 @@ def _check_cadence_pull_forward(quality_plateau, repo_path, code_review_due, sta
     return pull_forward
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Live strip: a baked `pulse` object per namespace
+# ─────────────────────────────────────────────────────────────────────────────
+# Mirrors compass/pulse.py's `cmd_pulse` field for field, under tests/test_pulse_parity.py.
+# Cadences use pulse's cheap gates only (no git complexity pull-forward) by decision, so the
+# strip says what the in-Claude pane says, not what the wider ORIENT brief would.
+
+_PULSE_MAX_CHANGES = 20
+
+
+def _pulse_session_ledger(ns_dir, state):
+    """Mirrors compass/orient.py's _session_window() + _session_ledger(): reality_changes.jsonl
+    rows from last_open to now while open, to last_close once closed."""
+    start = state.get("last_open")
+    if not start:
+        return []
+    end = None if state.get("open_session") else state.get("last_close")
+    return [r for r in _read_jsonl(ns_dir / "reality_changes.jsonl")
+            if r.get("at", "") >= start and not (end and r.get("at", "") > end)]
+
+
+def _pulse_section_parents(reality_md):
+    """Header line -> the H2 it sits under (an H2 maps to itself)."""
+    parents, current_h2 = {}, None
+    for line in reality_md.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("#"):
+            continue
+        if len(stripped) - len(stripped.lstrip("#")) == 2:
+            current_h2 = stripped
+        parents.setdefault(stripped, current_h2 or stripped)
+    return parents
+
+
+def _pulse_classify(section, parents):
+    """achieved | backlog | other: the P22 section rules applied to the bullet's H2."""
+    h2 = parents.get(section.strip())
+    text = (h2 or section).lstrip("#").strip().lower()
+    if h2 is None and text in ("tactical", "strategic"):
+        return "backlog"
+    if any(k in text for k in _BACKLOG_HEADERS):
+        return "backlog"
+    if any(k in text for k in _NON_ACHIEVEMENT_HEADERS):
+        return "other"
+    if any(m in text for m in _COMPLETION_MARKERS):
+        return "achieved"
+    return "other"
+
+
+def _pulse_cadences(state, config, reality_md, claude_md_size):
+    """The seven cadences in pulse's order, each {name, sessions_since, interval_sessions, due}."""
+    def base(sessions_key, interval_key, default):
+        since = state.get(sessions_key, 0)
+        interval = int(config.get(interval_key, default))
+        return since or 0, interval, since >= interval
+
+    out = []
+
+    since, interval, due = base("sessions_since_review", "review_interval_sessions", 5)
+    last_review = state.get("last_review_at")
+    if last_review and _parse_iso(last_review):
+        due = due and (_now_utc() - _parse_iso(last_review)
+                       >= timedelta(days=config.get("review_interval_days", 7)))
+    out.append(("review", since, interval, due))
+
+    out.append(("research", *base("sessions_since_research", "research_interval_sessions", 10)))
+
+    since, interval, due = base("sessions_since_dream", "dream_interval_sessions", 5)
+    due = due or (state.get("corpus_delta", 0) or 0) >= int(config.get("corpus_delta_threshold", 10))
+    out.append(("dream", since, interval, due))
+
+    out.append(("skill_opt", *base("sessions_since_skill_opt", "skill_opt_interval_sessions", 10)))
+    out.append(("assumption_audit",
+                *base("sessions_since_assumption_audit", "assumption_audit_interval_sessions", 10)))
+
+    since, interval, due = base("sessions_since_claude_review", "claude_review_interval_sessions", 15)
+    if (claude_md_size is not None and claude_md_size > int(config.get("claude_md_size_budget_bytes", 20000))
+            and not due and since >= int(config.get("claude_review_size_min_sessions", 2))):
+        due = True
+    out.append(("claude_review", since, interval, due))
+
+    since, interval, due = base("sessions_since_reality_compaction",
+                                "reality_compaction_interval_sessions", 8)
+    bullets = len(_parse_section_bullets(reality_md, "## What exists and works"))
+    due = due or bullets >= int(config.get("reality_compaction_size_threshold", 120))
+    out.append(("reality_compaction", since, interval, due))
+
+    return [{"name": n, "sessions_since": s, "interval_sessions": i, "due": bool(d)}
+            for n, s, i, d in out]
+
+
+def _pulse_git(repo_path):
+    """Unpushed commits and dirty files for the namespace's repo; None without one."""
+    if not repo_path:
+        return None
+    repo = str(Path(repo_path).expanduser())
+
+    def run(*args):
+        try:
+            p = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, timeout=3)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return p.stdout if p.returncode == 0 else None
+
+    ahead = run("rev-list", "--count", "@{u}..HEAD")
+    status = run("status", "--porcelain")
+    return {"repo": repo,
+            "ahead": int(ahead.strip()) if ahead and ahead.strip().isdigit() else None,
+            "dirty_files": len(status.splitlines()) if status is not None else None}
+
+
+def _build_pulse(ns_dir):
+    """The Live strip's per-namespace snapshot: `compass.py pulse <ns>`'s fields, computed
+    from the namespace files, plus `generated_at` (the clock `elapsed_seconds` is measured on,
+    so the page can keep ticking from it without trusting the viewer's clock). Read-only."""
+    state = _read_json(ns_dir / "state.json")
+    config = _read_json(ns_dir / "config.json")
+    try:
+        reality_md = (ns_dir / "reality.md").read_text(encoding="utf-8")
+    except OSError:
+        reality_md = ""
+
+    now = _now_utc()
+    is_open = bool(state.get("open_session"))
+    phase = ("closing" if state.get("close_phase_started_at") else "work") if is_open else "idle"
+    opened = _parse_iso(state.get("last_open"))
+    elapsed = max(0, int((now - opened).total_seconds())) if is_open and opened else None
+
+    planned = state.get("planned_actions", []) if is_open else []
+    progress = state.get("goal_progress", [])
+    goals = [{"text": t, "done": bool(progress[i]) if i < len(progress) else False}
+             for i, t in enumerate(planned)]
+
+    parents = _pulse_section_parents(reality_md)
+    changes = [{"op": r.get("op"), "text": r.get("text", ""), "section": r.get("section", ""),
+                "kind": _pulse_classify(r.get("section", ""), parents), "at": r.get("at", "")}
+               for r in _pulse_session_ledger(ns_dir, state)]
+    changes.sort(key=lambda r: r["at"], reverse=True)
+
+    minutes = [c["minutes"] for c in state.get("cycle_history", [])
+               if isinstance(c.get("minutes"), (int, float))]
+    history = state.get("quality_history") or []
+    quality = None
+    if history:
+        weakest = history[-1].get("weakest_component")
+        quality = {"score": history[-1].get("score"), "weakest_component": weakest,
+                   "weakest_value": (history[-1].get("components") or {}).get(weakest)}
+
+    repo_path = state.get("repo_path")
+    claude_base = (Path(repo_path).expanduser() if repo_path
+                   else Path.home() / ".claude" / "skills" / ns_dir.name)
+    try:
+        claude_md_size = (claude_base / "CLAUDE.md").stat().st_size
+    except OSError:
+        claude_md_size = None
+
+    return {
+        "namespace": ns_dir.name,
+        "phase": phase,
+        "open_session": is_open,
+        "last_open": state.get("last_open"),
+        "last_close": state.get("last_close"),
+        "close_phase_started_at": state.get("close_phase_started_at"),
+        "generated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "elapsed_seconds": elapsed,
+        "typical_minutes": statistics.median(minutes) if minutes else None,
+        "goals": goals,
+        "reality_changes": changes[:_PULSE_MAX_CHANGES],
+        "reality_delta": {
+            "appended":        sum(c["op"] == "append" for c in changes),
+            "removed":         sum(c["op"] == "remove" for c in changes),
+            "achieved_added":  sum(c["op"] == "append" and c["kind"] == "achieved" for c in changes),
+            "backlog_removed": sum(c["op"] == "remove" and c["kind"] == "backlog" for c in changes),
+        },
+        "cadences": _pulse_cadences(state, config, reality_md, claude_md_size),
+        "quality": quality,
+        "git": _pulse_git(repo_path),
+    }
+
+
 def _read_namespace_files(ns_dir):
     """File-reading/parsing phase of load_namespace() — every disk read this
     namespace needs, with only the trivial per-record parsing that belongs with
@@ -1582,6 +1763,7 @@ def _assemble_namespace_dict(ns_dir, raw):
         "reality_compaction_status":  reality_compaction_status,
         "dream_defer_count":          dream_defer_count,
         "complexity_clustering_signals": complexity_clustering_signals,
+        "pulse":                      _build_pulse(ns_dir),
     }
 
 
@@ -2158,6 +2340,7 @@ _JS_DATA_RENAME_FIELDS = [
     ("verificationDurability",     "verification_durability",    None),
     ("realityCompactionStatus",    "reality_compaction_status",  None),
     ("complexityClusteringSignals", "complexity_clustering_signals", []),
+    ("pulse",                      "pulse",                      None),
 ]
 
 
