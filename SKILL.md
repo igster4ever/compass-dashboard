@@ -17,7 +17,7 @@ description: |
 ## Script
 
 ```bash
-/opt/homebrew/bin/python3 ~/.claude/skills/compass-dashboard/scripts/compass-dashboard.py [--namespace <ns>] [--output <path>] [--no-open]
+~/.claude/skills/compass-dashboard/scripts/run.sh [--namespace <ns>] [--output <path>] [--no-open]
 ```
 
 ## Namespace argument
@@ -25,7 +25,7 @@ description: |
 If `$ARGUMENTS` contains a namespace name (not a path or flag), pass it as `--namespace`:
 
 ```bash
-/opt/homebrew/bin/python3 ~/.claude/skills/compass-dashboard/scripts/compass-dashboard.py --namespace <ns>
+~/.claude/skills/compass-dashboard/scripts/run.sh --namespace <ns>
 ```
 
 ## Default output
