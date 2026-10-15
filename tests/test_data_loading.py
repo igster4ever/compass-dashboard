@@ -1281,6 +1281,16 @@ class TestCheckClaudeReviewDue(unittest.TestCase):
         self.assertTrue(r["pulled_forward_by_size"])
         self.assertEqual(r["claude_md_bytes"], 20_001)
 
+    def test_size_gate_uses_largest_of_root_and_nested(self):
+        self._write(4_000)
+        nested = self.repo / "scripts"
+        nested.mkdir()
+        (nested / "CLAUDE.md").write_text("x" * 20_001)
+        r = _mod._check_claude_review_due(self.ns_dir, {"sessions_since_claude_review": 2}, {}, str(self.repo))
+        self.assertTrue(r["pulled_forward_by_size"])
+        self.assertEqual(r["claude_md_bytes"], 20_001)
+        self.assertEqual(r["claude_md_files"], {"CLAUDE.md": 4_000, "scripts/CLAUDE.md": 20_001})
+
     def test_size_gate_waits_for_min_sessions(self):
         self._write(50_000)
         r = _mod._check_claude_review_due(self.ns_dir, {"sessions_since_claude_review": 1}, {}, str(self.repo))

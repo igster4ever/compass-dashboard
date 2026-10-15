@@ -1094,20 +1094,34 @@ def _check_research_due(state, config, complexity_signal=None):
     }
 
 
+def _claude_md_files(ns_dir, repo_path):
+    """{label: bytes} for the root CLAUDE.md and the nested scripts/CLAUDE.md beside it.
+    Base is `repo_path`, else ~/.claude/skills/<namespace> (mirrors core's
+    _resolve_claude_md_path). Shared by the review-due gate and the Live strip pulse."""
+    base = Path(repo_path).expanduser() if repo_path else Path.home() / ".claude" / "skills" / ns_dir.name
+    files = {}
+    for label, path in (("CLAUDE.md", base / "CLAUDE.md"),
+                        ("scripts/CLAUDE.md", base / "scripts" / "CLAUDE.md")):
+        try:
+            files[label] = path.stat().st_size
+        except OSError:
+            continue
+    return files
+
+
 def _check_claude_review_due(ns_dir, state, config, repo_path):
     """CLAUDE.md hygiene review status. Mirrors compass/orient.py's
     _check_claude_review_due() + _resolve_claude_md_path(): the CLAUDE.md is
     `repo_path/CLAUDE.md`, else ~/.claude/skills/<namespace>/CLAUDE.md only when repo_path
-    is unset. Due on the session cadence (`claude_review_interval_sessions`, default 15),
-    or pulled forward once the file exceeds `claude_md_size_budget_bytes` (default 20000)
-    and at least `claude_review_size_min_sessions` (default 2) sessions have passed.
+    is unset. The size budget applies per file: the root CLAUDE.md and the nested
+    `scripts/CLAUDE.md` beside it; `claude_md_bytes` is the largest, `claude_md_files` each.
+    Due on the session cadence (`claude_review_interval_sessions`, default 15), or pulled
+    forward once the largest file exceeds `claude_md_size_budget_bytes` (default 20000) and at
+    least `claude_review_size_min_sessions` (default 2) sessions have passed.
     Never due when no CLAUDE.md exists (the skill resets the counter and skips).
     """
-    base = Path(repo_path).expanduser() if repo_path else Path.home() / ".claude" / "skills" / ns_dir.name
-    try:
-        size = (base / "CLAUDE.md").stat().st_size
-    except OSError:
-        size = None
+    files = _claude_md_files(ns_dir, repo_path)
+    size = max(files.values()) if files else None
     sessions_since = state.get("sessions_since_claude_review", 0)
     cadence_due = sessions_since >= int(config.get("claude_review_interval_sessions", 15))
     budget = int(config.get("claude_md_size_budget_bytes", 20000))
@@ -1119,6 +1133,7 @@ def _check_claude_review_due(ns_dir, state, config, repo_path):
         "due": size is not None and (cadence_due or pulled_forward),
         "pulled_forward_by_size": pulled_forward,
         "claude_md_bytes": size,
+        "claude_md_files": files,
         "size_budget_bytes": budget,
     }
 
@@ -1306,7 +1321,7 @@ def _pulse_git(repo_path):
 
     def run(*args):
         try:
-            p = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, timeout=3)
+            p = subprocess.run(["git", "--no-optional-locks", "-C", repo, *args], capture_output=True, text=True, timeout=3)
         except (OSError, subprocess.TimeoutExpired):
             return None
         return p.stdout if p.returncode == 0 else None
@@ -1356,12 +1371,8 @@ def _build_pulse(ns_dir):
                    "weakest_value": (history[-1].get("components") or {}).get(weakest)}
 
     repo_path = state.get("repo_path")
-    claude_base = (Path(repo_path).expanduser() if repo_path
-                   else Path.home() / ".claude" / "skills" / ns_dir.name)
-    try:
-        claude_md_size = (claude_base / "CLAUDE.md").stat().st_size
-    except OSError:
-        claude_md_size = None
+    claude_files = _claude_md_files(ns_dir, repo_path)
+    claude_md_size = max(claude_files.values()) if claude_files else None
 
     return {
         "namespace": ns_dir.name,

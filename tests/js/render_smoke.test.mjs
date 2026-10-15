@@ -330,3 +330,15 @@ test('globalToggleNamespace() re-render reflects the new namespace set in the DO
   const html = sandbox.document.getElementById('view-compare').innerHTML;
   assert.match(html, /cmp-legend/);
 });
+
+test('live strip renders a snapshot footer and one line per namespace state from NS[*].pulse', () => {
+  const sandbox = runScriptInSandbox();
+  const strip = sandbox.document.getElementById('live-strip').innerHTML;
+  assert.match(strip, /snapshot as of \d\d:\d\d/);
+  assert.match(strip, /example-ns-two/);
+  assert.match(strip, /WORK/);
+  assert.match(strip, /1\/1 goals/);
+  assert.match(strip, /1 uncommitted/);
+  assert.match(strip, /due: dream/);
+  assert.match(strip, /1 idle/);
+});

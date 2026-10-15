@@ -152,6 +152,17 @@ def build():
 
     for n in ns_list:
         n["mindmap"] = mod._mindmap_data(n)
+        is_open = n["open_session"]
+        n["pulse"] = {
+            "namespace": n["namespace"], "phase": "work" if is_open else "idle", "open_session": is_open,
+            "last_open": "2026-08-01T08:00:00Z", "last_close": "2026-08-01T09:00:00Z",
+            "close_phase_started_at": None, "generated_at": "2026-08-01T08:14:00Z",
+            "elapsed_seconds": 840 if is_open else None, "typical_minutes": 17.0,
+            "goals": [{"text": "Do a thing", "done": True}] if is_open else [],
+            "reality_changes": [], "reality_delta": {"appended": 1, "removed": 0, "achieved_added": 1, "backlog_removed": 0},
+            "cadences": [{"name": "dream", "sessions_since": 5, "interval_sessions": 5, "due": True}],
+            "quality": None, "git": {"repo": "/tmp/example", "ahead": 0, "dirty_files": 1},
+        }
 
     community = {
         "enabled": True,

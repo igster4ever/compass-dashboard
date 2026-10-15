@@ -88,6 +88,9 @@ function becomes undefined (`ReferenceError: switchView is not defined`). Run
    opening a drawer while scrolled to the bottom made the clicked summary jump up by the
    drawer's height (Chrome anchored on the footer). Don't scope it back down to `#detail`.
 
+7. **`</style>` appears inside JS template literals.** Add CSS before the *2-space-indented*
+   `  </style>` closing the main stylesheet, never the first `</style>` string match.
+
 ---
 
 ## Template substitution
@@ -166,7 +169,7 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
   `_normalise_validation_entry()`, `_check_reality_compaction_due()`,
   `_compaction_eligible_count()` (steady-state only), `_contract_coverage()`,
   `_compute_confidence_calibration()`, and the cadence gates `_check_dream_due()`,
-  `_check_claude_review_due()` (incl. size pull-forward), research/code-review/skill-opt due
+  `_check_claude_review_due()` (per-file budget over root + `scripts/CLAUDE.md` via `_claude_md_files()`, shared with the pulse), research/code-review/skill-opt due
   are local copies of `~/.claude/skills/compass/scripts/compass/*.py` (can't import —
   stdlib-only, separate repo). Read thresholds from `config` with core's defaults, never
   hard-code them. `tests/test_core_parity.py` imports core and checks every mirror against it
@@ -247,6 +250,12 @@ visible) and `visibleNS()` (filtered copy — `NS` stays `const`, never mutated)
 - Guard empty selections (e.g. Scorecard's `Math.min/max` on `[]`).
 - `globalFilterRerender()` re-invokes uncached views and only clears+re-renders cached views
   (`dataset.rendered`/`_dag.rendered`) that have already been visited.
+
+**Live strip** (`renderLiveStrip()`, `#live-strip` above the Overview grid) renders from the baked
+`NS[*].pulse` (snake_case keys, passed through `_js_data()` unrenamed). It is a static snapshot:
+the footer says `snapshot as of HH:MM`, it never claims to be live, and it does no polling. Spec:
+`docs/superpowers/specs/2026-10-12-live-strip-design.md` (steps 1–2 shipped; ticking/staleness badge
+and `--watch` remain). `generate_fixture.py` injects a synthetic `pulse` per namespace.
 
 **Tasks sub-tab** (`deriveTasks(ns)`, pure JS over `ns.reality`) — reads `## What is next`,
 inline `Next session:` lines, `plannedActions`, `deferred`, recent `history[].incomplete`, and

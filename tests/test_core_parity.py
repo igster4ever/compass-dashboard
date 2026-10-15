@@ -142,6 +142,7 @@ class TestCoreParity(unittest.TestCase):
                 self.assertEqual(ours["due"], theirs["due"])
             self.assertEqual(ours["pulled_forward_by_size"], theirs["pulled_forward_by_size"])
             self.assertEqual(ours["claude_md_bytes"], theirs["claude_md_bytes"])
+            self.assertEqual(ours["claude_md_files"], theirs["claude_md_files"])
 
     def test_research_due(self):
         for name, d, state, config, _ in self._each():

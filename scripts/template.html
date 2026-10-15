@@ -893,6 +893,16 @@
     }
     .gfilter-actions button:hover { border-color: var(--blue); }
     .gfilter-list { display: flex; flex-direction: column; gap: .35rem; }
+    .live-strip { margin: 0 0 14px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; font-size: .78rem; font-variant-numeric: tabular-nums; }
+    .live-row { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding: 4px 0; cursor: pointer; }
+    .live-row:hover .live-name { text-decoration: underline; }
+    .live-phase { font-weight: 600; letter-spacing: .04em; }
+    .live-phase.work { color: var(--green); }
+    .live-phase.closing { color: var(--amber); }
+    .live-name { font-weight: 600; }
+    .live-meta { color: var(--muted); }
+    .live-due { color: var(--amber); }
+    .live-foot { display: flex; justify-content: space-between; gap: 14px; color: var(--muted); padding-top: 4px; }
   </style>
 </head>
 <body>
@@ -945,6 +955,7 @@
   </nav>
 
   <div id="view-overview">
+    <div class="live-strip" id="live-strip"></div>
     <div class="grid">[[CARDS]]</div>
     <div class="detail" id="detail">
       <div class="no-selection">
@@ -2212,6 +2223,47 @@ function globalSetAllNamespaces(allVisible) {
   renderGlobalFilterList();
 }
 
+// Live strip: one row per open loop, built from the baked NS[*].pulse (static snapshot, no ticking).
+function renderLiveStrip() {
+  const el = document.getElementById('live-strip');
+  if (!el) return;
+  const visible = globalVisibleNames();
+  const rows = [];
+  const idle = [];
+  let generatedAt = null;
+  NS.forEach((ns, i) => {
+    const p = ns.pulse;
+    if (!p || !visible.has(ns.namespace)) return;
+    if (p.generated_at && (!generatedAt || p.generated_at > generatedAt)) generatedAt = p.generated_at;
+    if (!p.open_session) { idle.push({ ns, p }); return; }
+    const mins = p.elapsed_seconds == null ? null : Math.floor(p.elapsed_seconds / 60);
+    const typical = p.typical_minutes != null ? ` of ~${Math.round(p.typical_minutes)}m` : '';
+    const goals = p.goals || [];
+    const done = goals.filter(g => g.done).length;
+    const delta = p.reality_delta || {};
+    const due = (p.cadences || []).filter(c => c.due).map(c => c.name);
+    const dirty = p.git && p.git.dirty_files ? `${p.git.dirty_files} uncommitted` : '';
+    rows.push(
+      `<div class="live-row" onclick="selectCard(${i},{force:true})">`
+      + `<span class="live-phase ${esc(p.phase)}">&#9670; ${esc(String(p.phase).toUpperCase())}</span>`
+      + `<span class="live-name">${esc(ns.namespace)}</span>`
+      + `<span class="live-meta">${mins == null ? '' : mins + 'm' + typical}</span>`
+      + (goals.length ? `<span class="live-meta">${done}/${goals.length} goals</span>` : '')
+      + `<span class="live-meta">&#9650;${delta.appended || 0} &#9660;${delta.removed || 0}</span>`
+      + `<span class="${due.length ? 'live-due' : 'live-meta'}">due: ${due.length ? esc(due.join(', ')) : '&ndash;'}</span>`
+      + (dirty ? `<span class="live-meta">${esc(dirty)}</span>` : '')
+      + `</div>`);
+  });
+  const asOf = generatedAt ? new Date(generatedAt) : null;
+  const asOfTxt = asOf && !isNaN(asOf) ? 'snapshot as of ' + asOf.toTimeString().slice(0, 5) : 'snapshot';
+  let lastClose = '';
+  const closed = idle.filter(x => x.p.last_close).sort((a, b) => b.p.last_close.localeCompare(a.p.last_close))[0];
+  if (closed) lastClose = ` &middot; last close ${esc(closed.ns.namespace)} ${esc(String(closed.p.last_close).slice(0, 10))}`;
+  const summary = rows.length
+    ? `${idle.length} idle${lastClose}`
+    : `No open loops &middot; ${idle.length} idle${lastClose}`;
+  el.innerHTML = rows.join('') + `<div class="live-foot"><span>${summary}</span><span>${asOfTxt}</span></div>`;
+}
 function refreshOverviewVisibility() {
   const visible = globalVisibleNames();
   NS.forEach((ns, i) => {
@@ -2233,6 +2285,7 @@ function refreshOverviewVisibility() {
 // since they'll read visibleNS() fresh the first time they're shown.
 function globalFilterRerender() {
   refreshOverviewVisibility();
+  renderLiveStrip();
   renderPriorities();
 
   const scorecardEl = document.getElementById('view-scorecard');
@@ -2814,6 +2867,7 @@ document.addEventListener('click', e => {
 
 initAttentionQueue();
 refreshOverviewVisibility();
+renderLiveStrip();
 updateGlobalFilterButton();
 
 // ── Decisions registry (E22) ──────────────────────────────────────────────────
