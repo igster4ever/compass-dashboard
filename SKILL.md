@@ -1,17 +1,9 @@
 ---
 name: compass-dashboard
 description: |
-  Generate a self-contained interactive HTML dashboard from all compass namespace data.
-  Aggregates intent, reality, learnings, decisions, session history, goal trends,
-  code context, and deferred opportunities across every active loop into a single
-  visual overview.
-
-  Usage:
-    /compass-dashboard              — generate dashboard for all namespaces, open in browser
-    /compass-dashboard <namespace>  — focus on a single namespace
-    /compass-dashboard --output <path>  — write to custom path
-
-  Related: /compass (the session loop skill this reads from)
+  Build one self-contained HTML dashboard from compass loop data (intent, reality, learnings,
+  decisions, history, goal trends) across all namespaces.
+  Usage: /compass-dashboard [namespace] [--output <path>]. Reads data from /compass.
 ---
 
 ## Script
