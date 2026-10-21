@@ -252,10 +252,12 @@ visible) and `visibleNS()` (filtered copy — `NS` stays `const`, never mutated)
   (`dataset.rendered`/`_dag.rendered`) that have already been visited.
 
 **Live strip** (`renderLiveStrip()`, `#live-strip` above the Overview grid) renders from the baked
-`NS[*].pulse` (snake_case keys, passed through `_js_data()` unrenamed). It is a static snapshot:
-the footer says `snapshot as of HH:MM`, it never claims to be live, and it does no polling. Spec:
-`docs/superpowers/specs/2026-10-12-live-strip-design.md` (steps 1–2 shipped; ticking/staleness badge
-and `--watch` remain). `generate_fixture.py` injects a synthetic `pulse` per namespace.
+`NS[*].pulse` (snake_case keys, passed through `_js_data()` unrenamed). It is a snapshot that
+only ticks the clock: elapsed is the baked `elapsed_seconds` plus time since page load (never the
+viewer's clock against `last_open`), re-rendered every 30 s with no polling or requests. The footer
+says `snapshot as of HH:MM (N min ago)` and turns amber from 10 min, so it never claims to be live.
+`renderLiveStrip(nowMs)` takes an injectable clock for tests. Spec:
+`docs/superpowers/specs/2026-10-12-live-strip-design.md` (steps 1–3 shipped; `--watch` remains). `generate_fixture.py` injects a synthetic `pulse` per namespace.
 
 **Tasks sub-tab** (`deriveTasks(ns)`, pure JS over `ns.reality`) — reads `## What is next`,
 inline `Next session:` lines, `plannedActions`, `deferred`, recent `history[].incomplete`, and

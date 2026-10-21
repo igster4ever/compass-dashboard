@@ -2223,8 +2223,15 @@ function globalSetAllNamespaces(allVisible) {
   renderGlobalFilterList();
 }
 
-// Live strip: one row per open loop, built from the baked NS[*].pulse (static snapshot, no ticking).
-function renderLiveStrip() {
+// Live strip: one row per open loop, built from the baked NS[*].pulse. Elapsed time ticks from the
+// baked `elapsed_seconds` plus time since page load (so a skewed viewer clock cannot corrupt it);
+// the footer ages the snapshot against `generated_at` and turns amber once it is stale.
+const LIVE_LOADED_AT = Date.now();
+const LIVE_TICK_MS = 30000;
+const LIVE_STALE_MIN = 10;
+function renderLiveStrip(nowMs) {
+  if (nowMs == null) nowMs = Date.now();
+  const sinceLoad = Math.max(0, (nowMs - LIVE_LOADED_AT) / 1000);
   const el = document.getElementById('live-strip');
   if (!el) return;
   const visible = globalVisibleNames();
@@ -2236,7 +2243,7 @@ function renderLiveStrip() {
     if (!p || !visible.has(ns.namespace)) return;
     if (p.generated_at && (!generatedAt || p.generated_at > generatedAt)) generatedAt = p.generated_at;
     if (!p.open_session) { idle.push({ ns, p }); return; }
-    const mins = p.elapsed_seconds == null ? null : Math.floor(p.elapsed_seconds / 60);
+    const mins = p.elapsed_seconds == null ? null : Math.floor((p.elapsed_seconds + sinceLoad) / 60);
     const typical = p.typical_minutes != null ? ` of ~${Math.round(p.typical_minutes)}m` : '';
     const goals = p.goals || [];
     const done = goals.filter(g => g.done).length;
@@ -2255,7 +2262,12 @@ function renderLiveStrip() {
       + `</div>`);
   });
   const asOf = generatedAt ? new Date(generatedAt) : null;
-  const asOfTxt = asOf && !isNaN(asOf) ? 'snapshot as of ' + asOf.toTimeString().slice(0, 5) : 'snapshot';
+  const asOfValid = asOf && !isNaN(asOf);
+  const ageMin = asOfValid ? Math.max(0, Math.floor((nowMs - asOf.getTime()) / 60000)) : null;
+  const stale = ageMin != null && ageMin >= LIVE_STALE_MIN;
+  const asOfTxt = asOfValid
+    ? `<span class="${stale ? 'live-due' : ''}">snapshot as of ${asOf.toTimeString().slice(0, 5)} (${ageMin} min ago)</span>`
+    : 'snapshot';
   let lastClose = '';
   const closed = idle.filter(x => x.p.last_close).sort((a, b) => b.p.last_close.localeCompare(a.p.last_close))[0];
   if (closed) lastClose = ` &middot; last close ${esc(closed.ns.namespace)} ${esc(String(closed.p.last_close).slice(0, 10))}`;
@@ -2868,6 +2880,7 @@ document.addEventListener('click', e => {
 initAttentionQueue();
 refreshOverviewVisibility();
 renderLiveStrip();
+if (typeof window.setInterval === 'function') window.setInterval(() => renderLiveStrip(), LIVE_TICK_MS);
 updateGlobalFilterButton();
 
 // ── Decisions registry (E22) ──────────────────────────────────────────────────
@@ -5433,6 +5446,7 @@ if (NS.length === 1) selectCard(0);
 // decSort/decExpand are NOT listed here — they self-assign to window at their
 // definition site inside renderDecisionsView() (closures over local render state).
 Object.assign(window, {
+  renderLiveStrip,
   switchView, switchTab, switchHeatmap, selectCard, setFilter,
   toggleSession, filterLearningType, filterLearningZone,
   openSearch, closeSearch, closeSearchIfBackdrop, handleSearch, handleSearchKey, handleResultClick,

@@ -342,3 +342,28 @@ test('live strip renders a snapshot footer and one line per namespace state from
   assert.match(strip, /due: dream/);
   assert.match(strip, /1 idle/);
 });
+
+// Fixture pulse: generated_at 2026-08-01T08:14:00Z, example-ns-two elapsed_seconds 840 (14m), typical ~17m.
+const FIXTURE_GENERATED_MS = Date.parse('2026-08-01T08:14:00Z');
+
+test('live strip elapsed ticks forward from the baked elapsed_seconds, not the viewer clock', () => {
+  const sandbox = runScriptInSandbox();
+  const strip = () => sandbox.document.getElementById('live-strip').innerHTML;
+  sandbox.window.renderLiveStrip(Date.now());
+  assert.match(strip(), /14m of ~17m/);
+  sandbox.window.renderLiveStrip(Date.now() + 10 * 60 * 1000);
+  assert.match(strip(), /24m of ~17m/);
+});
+
+test('live strip snapshot badge shows its age and turns amber from 10 minutes', () => {
+  const sandbox = runScriptInSandbox();
+  const strip = () => sandbox.document.getElementById('live-strip').innerHTML;
+  sandbox.window.renderLiveStrip(FIXTURE_GENERATED_MS + 3 * 60 * 1000);
+  assert.match(strip(), /snapshot as of \d\d:\d\d \(3 min ago\)/);
+  assert.doesNotMatch(strip(), /live-due">snapshot as of/);
+  sandbox.window.renderLiveStrip(FIXTURE_GENERATED_MS + 10 * 60 * 1000);
+  assert.match(strip(), /live-due">snapshot as of \d\d:\d\d \(10 min ago\)/);
+  // A viewer clock behind generated_at must clamp to 0, never print a negative age.
+  sandbox.window.renderLiveStrip(FIXTURE_GENERATED_MS - 5 * 60 * 1000);
+  assert.match(strip(), /\(0 min ago\)/);
+});
