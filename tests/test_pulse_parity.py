@@ -18,8 +18,10 @@ Run: python3 -m pytest tests/test_pulse_parity.py -v
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -40,11 +42,13 @@ EXACT_FIELDS = (
 ELAPSED_TOLERANCE_S = 5
 
 
-def _core_pulse(ns):
-    """`compass.py pulse <ns>` parsed, or None when it can't run here."""
+def _core_pulse(ns, loop_dir=None):
+    """`compass.py pulse <ns>` parsed, or None when it can't run here. `loop_dir` points core
+    at a fixture loop via COMPASS_LOOP_DIR instead of ~/.claude/loop."""
+    env = dict(os.environ, COMPASS_LOOP_DIR=str(loop_dir)) if loop_dir else None
     try:
         p = subprocess.run([sys.executable, str(CORE_SCRIPTS / "compass.py"), "pulse", ns],
-                           capture_output=True, text=True, timeout=15)
+                           capture_output=True, text=True, timeout=15, env=env)
     except (OSError, subprocess.TimeoutExpired):
         return None
     if p.returncode != 0:
@@ -115,6 +119,38 @@ class TestPulseParity(unittest.TestCase):
         for d in self.dirs:
             _pulse(d)
         self.assertEqual(snapshot(), before)
+
+
+@unittest.skipIf(not (CORE_SCRIPTS / "compass.py").exists(), "compass core not present")
+class TestPulseParityNestedClaudeMd(unittest.TestCase):
+    """A fixture namespace whose scripts/CLAUDE.md is over budget while the root one is not.
+    Live namespaces have no nested CLAUDE.md, so the live suite can't see the pulse's
+    claude_review gate fall back to measuring only the root file (the 4e6f6da drift)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.loop = root / "loop"
+        self.ns_dir = self.loop / "fixture-ns"
+        repo = root / "repo"
+        (repo / "scripts").mkdir(parents=True)
+        self.ns_dir.mkdir(parents=True)
+        (repo / "CLAUDE.md").write_text("x" * 4_000)
+        (repo / "scripts" / "CLAUDE.md").write_text("x" * 20_001)
+        (self.ns_dir / "state.json").write_text(json.dumps({
+            "open_session": False, "repo_path": str(repo), "sessions_since_claude_review": 2}))
+        (self.ns_dir / "config.json").write_text("{}")
+        (self.ns_dir / "reality.md").write_text("# Reality\n\n## What exists and works\n\n- a thing\n")
+
+    def test_claude_review_cadence_matches_core(self):
+        theirs = _core_pulse("fixture-ns", self.loop)
+        self.assertIsNotNone(theirs, "compass.py pulse fixture-ns did not return JSON")
+        ours = _pulse(self.ns_dir)
+        by_name = {c["name"]: c for c in ours["cadences"]}
+        expected = next(c for c in theirs["cadences"] if c["name"] == "claude_review")
+        self.assertTrue(expected["due"], "fixture should pull the review forward by size in core")
+        self.assertEqual(by_name["claude_review"], expected)
 
 
 if __name__ == "__main__":
