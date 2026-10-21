@@ -638,3 +638,13 @@ Run: `python3 -m pytest tests/ -q` from the repo root.
 - **Per-file CLAUDE.md budget.** Compass core (de498d0, 2026-10-14) began sizing the largest of root and `scripts/CLAUDE.md`. `_check_claude_review_due` measured only root, so `test_core_parity.py::test_claude_review_due` failed (4426 vs 16388) and the size pull-forward gate would not fire. Fixed with `_claude_md_files()`; a Haiku 5.5 code review then found `_build_pulse` still stat'ed only the root file (live namespaces had no nested file to expose it), so the pulse now shares the helper too.
 - **CSS inserted into the wrong `<style>`.** The first `    </style>` match sat inside a JS template literal (~line 4400), so the strip rendered unstyled with correct data. Caught only by looking in a browser; the DOM-stub smoke test cannot see CSS. Rule is trap 7.
 - **Open review items** (report: `~/.claude/loop/compass-dashboard/code_reviews/2026-10-15.md`): `_build_pulse` does its own disk reads; serial git probes; three copies of the cadence gate; `compass-dashboard.py` is about 2,500 lines of mixed concerns.
+
+
+## 2026-10-21 archival pass
+
+- **Pure pulse builder.** `_build_pulse(ns_dir)` re-read `state.json`, `config.json`, `reality.md` and `reality_changes.jsonl` and stat'ed CLAUDE.md itself (code-review-2026-10-15 item). It now takes `(namespace, raw)`; the ledger read and CLAUDE.md sizes moved into `_read_namespace_files()`. Verified by comparing `load_namespace()` output for all 14 live namespaces (frozen clock, stubbed git probe): identical. Adding the rule pushed CLAUDE.md to 20,157 bytes, so the paragraph below moved here.
+- Moved verbatim from the Architecture section:
+
+*Alternative considered, not adopted:* a `<script type="application/json">` data island
+parsed by `render(data)` would remove the JS-literal escaping surface; `const NS` plus
+`generate()`'s `</script>` escaping and `esc()` in `innerHTML` covers it today.

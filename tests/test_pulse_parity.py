@@ -61,6 +61,10 @@ def _namespace_dirs():
         if LOOP.is_dir() else []
 
 
+def _pulse(ns_dir):
+    return dash._build_pulse(ns_dir.name, dash._read_namespace_files(ns_dir))
+
+
 @unittest.skipIf(not (CORE_SCRIPTS / "compass.py").exists() or not LOOP.is_dir(),
                  "compass core or live loop data not present")
 class TestPulseParity(unittest.TestCase):
@@ -69,13 +73,13 @@ class TestPulseParity(unittest.TestCase):
         self.dirs = _namespace_dirs()
         self.assertTrue(self.dirs, "no live namespaces found")
         self.assertTrue(hasattr(dash, "_build_pulse"),
-                        "dash._build_pulse(ns_dir) not implemented yet (Live strip goal 4)")
+                        "dash._build_pulse(namespace, raw) not implemented yet (Live strip goal 4)")
 
     def _each(self):
         for d in self.dirs:
             theirs = _core_pulse(d.name)
             self.assertIsNotNone(theirs, f"compass.py pulse {d.name} did not return JSON")
-            yield d, dash._build_pulse(d), theirs
+            yield d, _pulse(d), theirs
 
     def test_exact_fields(self):
         for d, ours, theirs in self._each():
@@ -109,7 +113,7 @@ class TestPulseParity(unittest.TestCase):
             return {str(p): p.stat().st_mtime_ns for d in self.dirs for p in d.rglob("*") if p.is_file()}
         before = snapshot()
         for d in self.dirs:
-            dash._build_pulse(d)
+            _pulse(d)
         self.assertEqual(snapshot(), before)
 
 

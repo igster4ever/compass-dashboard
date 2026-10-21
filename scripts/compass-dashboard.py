@@ -1232,14 +1232,14 @@ def _check_cadence_pull_forward(quality_plateau, repo_path, code_review_due, sta
 _PULSE_MAX_CHANGES = 20
 
 
-def _pulse_session_ledger(ns_dir, state):
+def _pulse_session_ledger(reality_changes, state):
     """Mirrors compass/orient.py's _session_window() + _session_ledger(): reality_changes.jsonl
     rows from last_open to now while open, to last_close once closed."""
     start = state.get("last_open")
     if not start:
         return []
     end = None if state.get("open_session") else state.get("last_close")
-    return [r for r in _read_jsonl(ns_dir / "reality_changes.jsonl")
+    return [r for r in reality_changes
             if r.get("at", "") >= start and not (end and r.get("at", "") > end)]
 
 
@@ -1333,16 +1333,14 @@ def _pulse_git(repo_path):
             "dirty_files": len(status.splitlines()) if status is not None else None}
 
 
-def _build_pulse(ns_dir):
+def _build_pulse(namespace, raw):
     """The Live strip's per-namespace snapshot: `compass.py pulse <ns>`'s fields, computed
-    from the namespace files, plus `generated_at` (the clock `elapsed_seconds` is measured on,
-    so the page can keep ticking from it without trusting the viewer's clock). Read-only."""
-    state = _read_json(ns_dir / "state.json")
-    config = _read_json(ns_dir / "config.json")
-    try:
-        reality_md = (ns_dir / "reality.md").read_text(encoding="utf-8")
-    except OSError:
-        reality_md = ""
+    from `_read_namespace_files()` output, plus `generated_at` (the clock `elapsed_seconds` is
+    measured on, so the page can keep ticking from it without trusting the viewer's clock).
+    No disk reads; its only I/O is the `_pulse_git()` probe."""
+    state = raw["state"]
+    config = raw["config"]
+    reality_md = raw["reality"]
 
     now = _now_utc()
     is_open = bool(state.get("open_session"))
@@ -1358,7 +1356,7 @@ def _build_pulse(ns_dir):
     parents = _pulse_section_parents(reality_md)
     changes = [{"op": r.get("op"), "text": r.get("text", ""), "section": r.get("section", ""),
                 "kind": _pulse_classify(r.get("section", ""), parents), "at": r.get("at", "")}
-               for r in _pulse_session_ledger(ns_dir, state)]
+               for r in _pulse_session_ledger(raw["reality_changes"], state)]
     changes.sort(key=lambda r: r["at"], reverse=True)
 
     minutes = [c["minutes"] for c in state.get("cycle_history", [])
@@ -1370,12 +1368,11 @@ def _build_pulse(ns_dir):
         quality = {"score": history[-1].get("score"), "weakest_component": weakest,
                    "weakest_value": (history[-1].get("components") or {}).get(weakest)}
 
-    repo_path = state.get("repo_path")
-    claude_files = _claude_md_files(ns_dir, repo_path)
+    claude_files = raw["claude_md_files"]
     claude_md_size = max(claude_files.values()) if claude_files else None
 
     return {
-        "namespace": ns_dir.name,
+        "namespace": namespace,
         "phase": phase,
         "open_session": is_open,
         "last_open": state.get("last_open"),
@@ -1394,7 +1391,7 @@ def _build_pulse(ns_dir):
         },
         "cadences": _pulse_cadences(state, config, reality_md, claude_md_size),
         "quality": quality,
-        "git": _pulse_git(repo_path),
+        "git": _pulse_git(state.get("repo_path")),
     }
 
 
@@ -1478,6 +1475,10 @@ def _read_namespace_files(ns_dir):
     back_refs_raw = _read_jsonl(ns_dir / "back_references.jsonl")
     conflicts_raw = _read_jsonl(ns_dir / "conflict_resolutions.jsonl")
 
+    # Live strip pulse inputs: the session ledger and CLAUDE.md sizes
+    reality_changes = _read_jsonl(ns_dir / "reality_changes.jsonl")
+    claude_md_files = _claude_md_files(ns_dir, state.get("repo_path"))
+
     return {
         "state":                   state,
         "intent":                  intent,
@@ -1501,6 +1502,8 @@ def _read_namespace_files(ns_dir):
         "decision_guidance":       decision_guidance,
         "back_refs_raw":           back_refs_raw,
         "conflicts_raw":           conflicts_raw,
+        "reality_changes":         reality_changes,
+        "claude_md_files":         claude_md_files,
     }
 
 
@@ -1774,7 +1777,7 @@ def _assemble_namespace_dict(ns_dir, raw):
         "reality_compaction_status":  reality_compaction_status,
         "dream_defer_count":          dream_defer_count,
         "complexity_clustering_signals": complexity_clustering_signals,
-        "pulse":                      _build_pulse(ns_dir),
+        "pulse":                      _build_pulse(ns_dir.name, raw),
     }
 
 

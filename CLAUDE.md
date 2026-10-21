@@ -56,9 +56,6 @@ scripts/
 All data is baked into `const NS = [...]` at generation time. There is no runtime backend
 and there never will be — static HTML only. Stdlib-only Python; no JS libraries (no D3,
 Chart.js etc. — the DAG force simulation and mind-map radial layout are hand-rolled).
-*Alternative considered, not adopted:* a `<script type="application/json">` data island
-parsed by `render(data)` would remove the JS-literal escaping surface; `const NS` plus
-`generate()`'s `</script>` escaping and `esc()` in `innerHTML` covers it today.
 
 ---
 
@@ -256,7 +253,8 @@ visible) and `visibleNS()` (filtered copy — `NS` stays `const`, never mutated)
 only ticks the clock: elapsed is the baked `elapsed_seconds` plus time since page load (never the
 viewer's clock against `last_open`), re-rendered every 30 s with no polling or requests. The footer
 says `snapshot as of HH:MM (N min ago)` and turns amber from 10 min, so it never claims to be live.
-`renderLiveStrip(nowMs)` takes an injectable clock for tests. Spec:
+`renderLiveStrip(nowMs)` takes an injectable clock for tests. `_build_pulse(namespace, raw)` reads
+no files (inputs come from `_read_namespace_files()`); its only I/O is `_pulse_git()`. Spec:
 `docs/superpowers/specs/2026-10-12-live-strip-design.md` (steps 1–3 shipped; `--watch` remains). `generate_fixture.py` injects a synthetic `pulse` per namespace.
 
 **Tasks sub-tab** (`deriveTasks(ns)`, pure JS over `ns.reality`) — reads `## What is next`,
