@@ -35,12 +35,13 @@ function extractScriptBody() {
   return html.slice(start, end);
 }
 
-function buildScriptSource() {
+function buildScriptSource({ watchSeconds = null } = {}) {
   let src = extractScriptBody();
   src = src.replace('[[NS_DATA]]', JSON.stringify(fixture.NS));
   src = src.replace('[[COMMUNITY_DATA]]', JSON.stringify(fixture.COMMUNITY));
   src = src.replace('[[BLOCKING_EDGES]]', JSON.stringify(fixture.BLOCKING_EDGES));
-  for (const marker of ['[[NS_DATA]]', '[[COMMUNITY_DATA]]', '[[BLOCKING_EDGES]]']) {
+  src = src.replace('[[WATCH_SECONDS]]', JSON.stringify(watchSeconds));
+  for (const marker of ['[[NS_DATA]]', '[[COMMUNITY_DATA]]', '[[BLOCKING_EDGES]]', '[[WATCH_SECONDS]]']) {
     if (src.includes(marker)) throw new Error(`unresolved ${marker} left in script — fixture keys out of sync?`);
   }
   return src;
@@ -114,8 +115,8 @@ function makeDocumentStub() {
   };
 }
 
-function runScriptInSandbox() {
-  const src = buildScriptSource();
+function runScriptInSandbox({ watchSeconds = null, globals = {} } = {}) {
+  const src = buildScriptSource({ watchSeconds });
   const sandbox = {};
   sandbox.window = sandbox; // `window.foo = ...` and bare `foo` resolve to the same object
   sandbox.document = makeDocumentStub();
@@ -138,6 +139,7 @@ function runScriptInSandbox() {
   sandbox.clearTimeout = clearTimeout;
   sandbox.addEventListener = () => {};
   sandbox.removeEventListener = () => {};
+  Object.assign(sandbox, globals);
   vm.createContext(sandbox);
   vm.runInContext(src, sandbox, { filename: 'template.html-script' });
   return sandbox;
@@ -366,4 +368,81 @@ test('live strip snapshot badge shows its age and turns amber from 10 minutes', 
   // A viewer clock behind generated_at must clamp to 0, never print a negative age.
   sandbox.window.renderLiveStrip(FIXTURE_GENERATED_MS - 5 * 60 * 1000);
   assert.match(strip(), /\(0 min ago\)/);
+});
+
+// ── Live strip step 4: --watch reload and hash-persisted page state ──────────
+
+function fakeNav(hash = '') {
+  const nav = { replaced: [], reloads: 0, scrolledTo: null, intervals: [] };
+  nav.location = {
+    pathname: '/tmp/compass-dashboard.html', search: '', hash,
+    reload() { nav.reloads += 1; },
+  };
+  nav.history = {
+    replaceState(_s, _t, url) {
+      nav.replaced.push(url);
+      nav.location.hash = url.startsWith('#') ? url : '';
+    },
+  };
+  nav.globals = {
+    location: nav.location, history: nav.history, scrollY: 0,
+    scrollTo(_x, y) { nav.scrolledTo = y; },
+    setInterval(cb, ms) { nav.intervals.push({ cb, ms }); return nav.intervals.length; },
+  };
+  return nav;
+}
+
+test('selecting a card, sub-tab and view writes them to the hash by namespace name', () => {
+  const nav = fakeNav();
+  const sandbox = runScriptInSandbox({ globals: nav.globals });
+  const name = encodeURIComponent(fixture.NS[1].namespace);
+  sandbox.window.selectCard(1);
+  assert.equal(nav.location.hash, `#ns=${name}`);
+  sandbox.window.switchTab('learnings');
+  assert.equal(nav.location.hash, `#ns=${name}&tab=learnings`);
+  sandbox.window.switchView('heatmap');
+  assert.equal(nav.location.hash, `#ns=${name}&view=heatmap&tab=learnings`);
+  sandbox.window.selectCard(1); // toggles the selection off; ns and tab go with it
+  assert.equal(nav.location.hash, '#view=heatmap');
+});
+
+test('a hash from a previous load restores selection, tab and scroll, then drops the scroll offset', () => {
+  const name = fixture.NS[1].namespace;
+  const nav = fakeNav(`#ns=${encodeURIComponent(name)}&tab=learnings&y=420`);
+  runScriptInSandbox({ globals: nav.globals });
+  assert.equal(nav.scrolledTo, 420);
+  assert.equal(nav.location.hash, `#ns=${encodeURIComponent(name)}&tab=learnings`);
+});
+
+test('an unknown namespace in the hash is ignored and cleared', () => {
+  const nav = fakeNav('#ns=no-such-namespace&y=50');
+  runScriptInSandbox({ globals: nav.globals });
+  assert.equal(nav.location.hash, '');
+  assert.equal(nav.replaced.at(-1), '/tmp/compass-dashboard.html');
+});
+
+test('without --watch the page registers no reload timer and says nothing about refreshing', () => {
+  const nav = fakeNav();
+  const sandbox = runScriptInSandbox({ globals: nav.globals });
+  assert.equal(nav.intervals.length, 1, 'only the live strip tick');
+  assert.doesNotMatch(sandbox.document.getElementById('live-strip').innerHTML, /refreshes every/);
+});
+
+test('with --watch the page reloads once an interval old, saving scroll, unless search is open', () => {
+  const nav = fakeNav();
+  const sandbox = runScriptInSandbox({ watchSeconds: 1e-9, globals: nav.globals });
+  assert.match(sandbox.document.getElementById('live-strip').innerHTML, /refreshes every 1e-9 s/);
+  const watch = nav.intervals.find(i => i.ms === 5000);
+  assert.ok(watch, 'watch timer registered');
+
+  sandbox.document.getElementById('search-modal').style.display = '';
+  watch.cb();
+  assert.equal(nav.reloads, 0, 'no reload while the search palette is open');
+
+  sandbox.document.getElementById('search-modal').style.display = 'none';
+  sandbox.window.selectCard(0);
+  sandbox.scrollY = 300;
+  watch.cb();
+  assert.equal(nav.reloads, 1);
+  assert.equal(nav.location.hash, `#ns=${encodeURIComponent(fixture.NS[0].namespace)}&y=300`);
 });

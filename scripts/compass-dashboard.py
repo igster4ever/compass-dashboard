@@ -10,7 +10,9 @@ Usage:
 import copy
 import hashlib
 import json
+import os
 import sys
+import time
 import re
 import statistics
 import subprocess
@@ -2459,7 +2461,7 @@ def _js_community(community):
     return raw.replace("</script>", r"<\/script>").replace("<!--", r"<\!--")
 
 
-def generate(namespaces):
+def generate(namespaces, watch_seconds=None):
     now         = _now_utc().strftime("%d %b %Y %H:%M UTC")
     n_open      = sum(1 for n in namespaces if n["open_session"])
     n_learnings = sum(len(n["learnings"]) for n in namespaces)
@@ -2507,6 +2509,7 @@ def generate(namespaces):
     html = html.replace("[[NS_DATA]]",           _js_data(namespaces))
     html = html.replace("[[COMMUNITY_DATA]]",    _js_community(community))
     html = html.replace("[[BLOCKING_EDGES]]",    _js_blocking_edges(namespaces))
+    html = html.replace("[[WATCH_SECONDS]]",     json.dumps(watch_seconds))
 
     return html
 
@@ -2515,39 +2518,79 @@ def generate(namespaces):
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
-def main():
-    parser = argparse.ArgumentParser(description="Generate compass HTML dashboard")
-    parser.add_argument("--namespace", "-n", help="Focus on a single namespace")
-    parser.add_argument("--output",    "-o", default=str(OUTPUT_PATH), help="Output HTML path")
-    parser.add_argument("--no-open",   action="store_true", help="Don't open in browser")
-    args = parser.parse_args()
+def _write_atomic(path, text):
+    """Write `text` to `path` via a temp file in the same directory and `os.replace`, so a
+    browser reloading the page mid-write sees the old file or the new one, never half of it."""
+    path = Path(path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
-    namespaces = discover_namespaces(filter_ns=args.namespace)
 
+def _generate_once(filter_ns, out_path, watch_seconds):
+    """One discover -> generate -> atomic write pass: the summary dict, or an error dict."""
+    namespaces = discover_namespaces(filter_ns=filter_ns)
     if not namespaces:
-        msg = (f"Namespace '{args.namespace}' not found" if args.namespace
+        msg = (f"Namespace '{filter_ns}' not found" if filter_ns
                else "No compass namespaces found in ~/.claude/loop/")
-        print(json.dumps({"ok": False, "error": msg}))
-        sys.exit(1)
-
-    html      = generate(namespaces)
-    out_path  = Path(args.output)
-    out_path.write_text(html, encoding="utf-8")
-
-    if not args.no_open:
-        import sys as _sys
-        if _sys.platform == "darwin":
-            subprocess.run(["open", str(out_path)], check=False)
-        else:
-            subprocess.run(["xdg-open", str(out_path)], check=False)
-
-    print(json.dumps({
+        return {"ok": False, "error": msg}
+    _write_atomic(out_path, generate(namespaces, watch_seconds=watch_seconds))
+    return {
         "ok":        True,
         "path":      str(out_path),
         "namespaces": len(namespaces),
         "learnings": sum(len(n["learnings"]) for n in namespaces),
         "sessions":  sum(n["session_count"] for n in namespaces),
-    }))
+    }
+
+
+def _watch(filter_ns, out_path, seconds):
+    """Regenerate every `seconds` until interrupted. A failed pass leaves the last good file in
+    place and is reported on stderr; the page's own timer reloads it (Live strip step 4)."""
+    try:
+        while True:
+            time.sleep(seconds)
+            try:
+                result = _generate_once(filter_ns, out_path, seconds)
+            except Exception as e:  # keep watching: the next pass may succeed
+                result = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+            if not result["ok"]:
+                print(json.dumps(result), file=sys.stderr, flush=True)
+    except KeyboardInterrupt:
+        pass
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Generate compass HTML dashboard")
+    parser.add_argument("--namespace", "-n", help="Focus on a single namespace")
+    parser.add_argument("--output",    "-o", default=str(OUTPUT_PATH), help="Output HTML path")
+    parser.add_argument("--no-open",   action="store_true", help="Don't open in browser")
+    parser.add_argument("--watch",     nargs="?", type=int, const=30, metavar="SECONDS",
+                        help="Regenerate every SECONDS (default 30) until Ctrl-C; the page reloads to match")
+    args = parser.parse_args()
+    if args.watch is not None and args.watch < 1:
+        parser.error("--watch SECONDS must be at least 1")
+
+    out_path = Path(args.output)
+    result = _generate_once(args.namespace, out_path, args.watch)
+    if not result["ok"]:
+        print(json.dumps(result))
+        sys.exit(1)
+
+    if not args.no_open:
+        if sys.platform == "darwin":
+            subprocess.run(["open", str(out_path)], check=False)
+        else:
+            subprocess.run(["xdg-open", str(out_path)], check=False)
+
+    if args.watch:
+        result["watch_seconds"] = args.watch
+    print(json.dumps(result), flush=True)
+    if args.watch:
+        _watch(args.namespace, out_path, args.watch)
 
 
 if __name__ == "__main__":

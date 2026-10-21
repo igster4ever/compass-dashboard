@@ -161,7 +161,7 @@ class TestRenderHtml(unittest.TestCase):
     def test_placeholder_markers_all_replaced(self):
         for placeholder in ("[[GENERATED_AT]]", "[[N_NS]]", "[[N_OPEN]]",
                             "[[N_LEARNINGS]]", "[[N_SESSIONS]]", "[[CARDS]]",
-                            "[[NS_DATA]]", "[[BLOCKING_EDGES]]"):
+                            "[[NS_DATA]]", "[[BLOCKING_EDGES]]", "[[WATCH_SECONDS]]"):
             self.assertNotIn(placeholder, self.html,
                              msg=f"Unreplaced placeholder found: {placeholder}")
 
@@ -218,7 +218,7 @@ class TestTemplateFile(unittest.TestCase):
         content = self._template.read_text(encoding="utf-8")
         for marker in ("[[GENERATED_AT]]", "[[N_NS]]", "[[N_OPEN]]",
                        "[[N_LEARNINGS]]", "[[N_SESSIONS]]", "[[CARDS]]",
-                       "[[NS_DATA]]", "[[BLOCKING_EDGES]]"):
+                       "[[NS_DATA]]", "[[BLOCKING_EDGES]]", "[[WATCH_SECONDS]]"):
             self.assertIn(marker, content, msg=f"Missing placeholder in template.html: {marker}")
 
 
@@ -634,6 +634,78 @@ class TestMindMap(unittest.TestCase):
     def test_mindmap_script_tag_injection_escaped(self):
         html = self._html({"namespace": "evil</script><script>alert(1)</script>"})
         self.assertNotIn("</script><script>", html)
+
+
+class TestWatchMode(unittest.TestCase):
+    """Live strip step 4: --watch regenerates atomically and bakes its interval into the page."""
+
+    def setUp(self):
+        import tempfile
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+        self.out = self.dir / "dash.html"
+
+    def _generate(self, **kw):
+        from unittest.mock import patch
+        with patch.object(_mod, "load_community", return_value={"enabled": False, "feed": [], "inbox": [],
+                                                                 "adoptions": [], "subscriptions": [],
+                                                                 "trust_registry": []}):
+            return _mod.generate([_minimal_ns()], **kw)
+
+    def test_watch_seconds_baked_as_null_by_default(self):
+        self.assertIn("const WATCH_SECONDS = null;", self._generate())
+
+    def test_watch_seconds_baked_when_watching(self):
+        self.assertIn("const WATCH_SECONDS = 30;", self._generate(watch_seconds=30))
+
+    def test_write_atomic_replaces_and_leaves_no_temp_file(self):
+        self.out.write_text("old")
+        _mod._write_atomic(self.out, "new")
+        self.assertEqual(self.out.read_text(), "new")
+        self.assertEqual([p.name for p in self.dir.iterdir()], ["dash.html"])
+
+    def test_write_atomic_failure_keeps_old_file(self):
+        from unittest.mock import patch
+        self.out.write_text("old")
+        with patch.object(_mod.os, "replace", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                _mod._write_atomic(self.out, "new")
+        self.assertEqual(self.out.read_text(), "old")
+        self.assertEqual([p.name for p in self.dir.iterdir()], ["dash.html"])
+
+    def test_watch_regenerates_then_stops_on_interrupt(self):
+        from unittest.mock import patch
+        sleeps = []
+
+        def fake_sleep(s):
+            sleeps.append(s)
+            if len(sleeps) > 2:
+                raise KeyboardInterrupt
+
+        with patch.object(_mod.time, "sleep", side_effect=fake_sleep), \
+             patch.object(_mod, "_generate_once", return_value={"ok": True}) as gen:
+            _mod._watch(None, self.out, 7)
+        self.assertEqual(sleeps, [7, 7, 7])
+        self.assertEqual(gen.call_count, 2)
+        gen.assert_called_with(None, self.out, 7)
+
+    def test_watch_survives_a_failed_pass(self):
+        import io
+        from unittest.mock import patch
+        calls = iter([RuntimeError("boom"), KeyboardInterrupt])
+
+        def fake_sleep(_s):
+            nxt = next(calls)
+            if nxt is KeyboardInterrupt:
+                raise nxt
+
+        err = io.StringIO()
+        with patch.object(_mod.time, "sleep", side_effect=fake_sleep), \
+             patch.object(_mod, "_generate_once", side_effect=RuntimeError("boom")), \
+             patch.object(_mod.sys, "stderr", err):
+            _mod._watch(None, self.out, 5)
+        self.assertIn("RuntimeError: boom", err.getvalue())
 
 
 if __name__ == "__main__":

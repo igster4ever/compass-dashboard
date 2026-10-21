@@ -648,3 +648,7 @@ Run: `python3 -m pytest tests/ -q` from the repo root.
 *Alternative considered, not adopted:* a `<script type="application/json">` data island
 parsed by `render(data)` would remove the JS-literal escaping surface; `const NS` plus
 `generate()`'s `</script>` escaping and `esc()` in `innerHTML` covers it today.
+- **Live strip step 4 (`--watch`).** Adding its rule pushed CLAUDE.md to 20,092 bytes. The smoke test caught `restoreUiHash()` at the boot block hitting `RADAR_AXIS_DEFS` before initialisation (TDZ), so restore runs last in the IIFE. Reload plus restore of namespace, sub-tab and scroll verified in a browser over `http://` (the pane cannot open `file://` here). The dated Decision Guidance note moved here verbatim:
+
+> No live namespace had data as of
+2026-08-30; re-verify the visual treatment once real data exists.

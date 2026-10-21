@@ -1004,7 +1004,12 @@
 const NS = [[NS_DATA]];
 const COMMUNITY = [[COMMUNITY_DATA]];
 const BLOCKING_EDGES = [[BLOCKING_EDGES]];
+const WATCH_SECONDS = [[WATCH_SECONDS]]; // null unless generated with --watch
 const Search = { selected: -1, index: null, activeFilter: 'all', focusIdx: -1, flatResults: [] };
+// Page state mirrored into location.hash (see restoreUiHash)
+const _ui = { view: 'overview', tab: 'state' };
+const UI_HASH_KEYS = ['ns', 'view', 'tab', 'y'];
+const PAGE_LOADED_AT = Date.now();
 
 // ── Markdown renderer (headings, lists, bold, inline code) ───────────────────
 
@@ -1054,11 +1059,12 @@ function fmtYM(period) {
 
 // ── Card selection ────────────────────────────────────────────────────────────
 
-function selectCard(i, {force = false} = {}) {
+function selectCard(i, {force = false, scroll = true} = {}) {
   if (!force && Search.selected === i) {
     document.getElementById(`card-${i}`).classList.remove('selected');
     document.getElementById('detail').classList.remove('visible');
     Search.selected = -1;
+    saveUiHash();
     return;
   }
   if (Search.selected >= 0 && Search.selected !== i) {
@@ -1067,9 +1073,11 @@ function selectCard(i, {force = false} = {}) {
   Search.selected = i;
   document.getElementById(`card-${i}`).classList.add('selected');
   renderDetail(NS[i]);
+  _ui.tab = 'state';
+  saveUiHash();
   const detail = document.getElementById('detail');
   detail.classList.add('visible');
-  requestAnimationFrame(() => detail.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
+  if (scroll) requestAnimationFrame(() => detail.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
 }
 
 // ── Detail panel ──────────────────────────────────────────────────────────────
@@ -1122,6 +1130,8 @@ function switchTab(t) {
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
   document.getElementById(`tab-btn-${t}`).classList.add('active');
   document.getElementById(`tab-${t}`).classList.add('active');
+  _ui.tab = t;
+  saveUiHash();
 }
 
 // ── Tab renderers ─────────────────────────────────────────────────────────────
@@ -2146,6 +2156,8 @@ function switchView(v) {
     document.getElementById('view-' + id).style.display = id === v ? '' : 'none';
     document.getElementById('vtab-' + id).classList.toggle('active', id === v);
   });
+  _ui.view = v;
+  saveUiHash();
   if (v === 'priorities') renderPriorities();
   if (v === 'scorecard')  renderScorecard();
   if (v === 'dag')        renderDAG();
@@ -2274,7 +2286,8 @@ function renderLiveStrip(nowMs) {
   const summary = rows.length
     ? `${idle.length} idle${lastClose}`
     : `No open loops &middot; ${idle.length} idle${lastClose}`;
-  el.innerHTML = rows.join('') + `<div class="live-foot"><span>${summary}</span><span>${asOfTxt}</span></div>`;
+  const refresh = WATCH_SECONDS ? ` &middot; refreshes every ${WATCH_SECONDS} s` : '';
+  el.innerHTML = rows.join('') + `<div class="live-foot"><span>${summary}</span><span>${asOfTxt}${refresh}</span></div>`;
 }
 function refreshOverviewVisibility() {
   const visible = globalVisibleNames();
@@ -2876,6 +2889,75 @@ document.addEventListener('click', e => {
     document.getElementById('gfilter-btn')?.classList.remove('active');
   }
 });
+
+// ── Page state in location.hash (Live strip step 4) ─────────────────────────────
+// The selected namespace (by name: card order changes between regenerations), view and sub-tab
+// live in the hash so a --watch reload lands where the viewer was. Hash, not localStorage, which
+// can throw or come back empty. The scroll offset `y` is written only just before a reload and
+// dropped once restored, so a manual refresh doesn't jump back to a stale position.
+function encodeUiHash(state) {
+  const parts = UI_HASH_KEYS
+    .filter(k => state[k] !== undefined && state[k] !== null && state[k] !== '')
+    .map(k => `${k}=${encodeURIComponent(state[k])}`);
+  return parts.length ? '#' + parts.join('&') : '';
+}
+
+function parseUiHash(hash) {
+  const out = {};
+  String(hash || '').replace(/^#/, '').split('&').forEach(part => {
+    const eq = part.indexOf('=');
+    if (eq <= 0) return;
+    const k = part.slice(0, eq);
+    if (!UI_HASH_KEYS.includes(k)) return;
+    try { out[k] = decodeURIComponent(part.slice(eq + 1)); } catch (_) { /* malformed: skip */ }
+  });
+  return out;
+}
+
+function saveUiHash({ withScroll = false } = {}) {
+  const loc = window.location;
+  if (!loc) return;
+  const sel = Search.selected >= 0 ? NS[Search.selected] : null;
+  const hash = encodeUiHash({
+    ns:   sel ? sel.namespace : null,
+    view: _ui.view !== 'overview' ? _ui.view : null,
+    tab:  sel && _ui.tab !== 'state' ? _ui.tab : null,
+    y:    withScroll ? Math.round(window.scrollY || 0) || null : null,
+  });
+  try {
+    window.history.replaceState(null, '', hash || loc.pathname + loc.search);
+  } catch (_) {
+    loc.hash = hash;
+  }
+}
+
+function restoreUiHash() {
+  const loc = window.location;
+  if (!loc || !loc.hash) return;
+  const s = parseUiHash(loc.hash);
+  if (s.view && s.view !== 'overview' && document.getElementById('view-' + s.view)) switchView(s.view);
+  const idx = s.ns ? NS.findIndex(n => n.namespace === s.ns) : -1;
+  if (idx >= 0) {
+    selectCard(idx, { force: true, scroll: false });
+    if (s.tab && document.getElementById(`tab-btn-${s.tab}`)) switchTab(s.tab);
+  }
+  const y = parseInt(s.y, 10);
+  if (y > 0) requestAnimationFrame(() => window.scrollTo(0, y));
+  saveUiHash(); // rewrites without `y` (and without an unknown namespace)
+}
+
+// Reload once the page is a full interval old, unless the viewer is mid-search or typing.
+function watchTick(nowMs) {
+  if (!WATCH_SECONDS) return false;
+  if (nowMs == null) nowMs = Date.now();
+  if ((nowMs - PAGE_LOADED_AT) / 1000 < WATCH_SECONDS) return false;
+  if (document.getElementById('search-modal')?.style.display !== 'none') return false;
+  const tag = (document.activeElement && document.activeElement.tagName) || '';
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return false;
+  saveUiHash({ withScroll: true });
+  window.location.reload();
+  return true;
+}
 
 initAttentionQueue();
 refreshOverviewVisibility();
@@ -5455,6 +5537,11 @@ Object.assign(window, {
   radarToggleAxis,
   toggleGlobalFilter, globalToggleNamespace, globalSetAllNamespaces,
 });
+
+// Last, once every top-level const is initialised: restoring a selection renders the detail
+// panel, which reaches declarations further down (e.g. RADAR_AXIS_DEFS).
+restoreUiHash();
+if (WATCH_SECONDS && typeof window.setInterval === 'function') window.setInterval(() => watchTick(), 5000);
 })();
 </script>
 </body>
