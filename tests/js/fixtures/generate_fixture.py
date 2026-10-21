@@ -161,7 +161,7 @@ def build():
             "goals": [{"text": "Do a thing", "done": True}] if is_open else [],
             "reality_changes": [], "reality_delta": {"appended": 1, "removed": 0, "achieved_added": 1, "backlog_removed": 0},
             "cadences": [{"name": "dream", "sessions_since": 5, "interval_sessions": 5, "due": True}],
-            "quality": None, "git": {"repo": "/tmp/example", "ahead": 0, "dirty_files": 1},
+            "quality": None, "git": {"repo": "/tmp/example", "ahead": 0, "dirty_files": 1, "errors": {}},
         }
 
     community = {

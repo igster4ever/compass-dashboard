@@ -90,7 +90,11 @@ class TestPulseParity(unittest.TestCase):
             for field in EXACT_FIELDS:
                 with self.subTest(namespace=d.name, field=field):
                     self.assertIn(field, ours)
-                    self.assertEqual(ours[field], theirs[field])
+                    mine = ours[field]
+                    if field == "git" and mine is not None:
+                        # `errors` is dashboard-only; core's keys must still match exactly.
+                        mine = {k: v for k, v in mine.items() if k != "errors"}
+                    self.assertEqual(mine, theirs[field])
 
     def test_cadences_per_name(self):
         """Field-by-field so a drifting gate names itself instead of failing as one list."""

@@ -15,6 +15,7 @@ import re
 import statistics
 import subprocess
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
@@ -1313,24 +1314,41 @@ def _pulse_cadences(state, config, reality_md, claude_md_size):
             for n, s, i, d in out]
 
 
+_PULSE_GIT_TIMEOUT_S = 3
+
+
 def _pulse_git(repo_path):
-    """Unpushed commits and dirty files for the namespace's repo; None without one."""
+    """Unpushed commits and dirty files for the namespace's repo; None without one.
+    `repo`/`ahead`/`dirty_files` mirror core's pulse exactly (a failed probe is None there
+    too). `errors` is dashboard-only: {field: reason} for each probe that failed, so a
+    timeout or a missing upstream is told apart from "nothing to report"."""
     if not repo_path:
         return None
     repo = str(Path(repo_path).expanduser())
+    errors = {}
 
-    def run(*args):
+    def run(field, *args):
         try:
-            p = subprocess.run(["git", "--no-optional-locks", "-C", repo, *args], capture_output=True, text=True, timeout=3)
-        except (OSError, subprocess.TimeoutExpired):
+            p = subprocess.run(["git", "--no-optional-locks", "-C", repo, *args],
+                               capture_output=True, text=True, timeout=_PULSE_GIT_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            errors[field] = f"timeout after {_PULSE_GIT_TIMEOUT_S}s"
             return None
-        return p.stdout if p.returncode == 0 else None
+        except OSError as e:
+            errors[field] = f"git not runnable: {e.strerror or e}"
+            return None
+        if p.returncode != 0:
+            first = (p.stderr.strip().splitlines() or [""])[0]
+            errors[field] = f"exit {p.returncode}: {first}".rstrip(": ")
+            return None
+        return p.stdout
 
-    ahead = run("rev-list", "--count", "@{u}..HEAD")
-    status = run("status", "--porcelain")
+    ahead = run("ahead", "rev-list", "--count", "@{u}..HEAD")
+    status = run("dirty_files", "status", "--porcelain")
     return {"repo": repo,
             "ahead": int(ahead.strip()) if ahead and ahead.strip().isdigit() else None,
-            "dirty_files": len(status.splitlines()) if status is not None else None}
+            "dirty_files": len(status.splitlines()) if status is not None else None,
+            "errors": errors}
 
 
 def _build_pulse(namespace, raw):
@@ -1826,7 +1844,7 @@ def discover_namespaces(filter_ns=None):
     if not LOOP_DIR.exists():
         return []
 
-    result = []
+    dirs = []
     for d in sorted(LOOP_DIR.iterdir()):
         if not d.is_dir() or d.name.startswith("_") or d.name.startswith("."):
             continue
@@ -1834,7 +1852,12 @@ def discover_namespaces(filter_ns=None):
             continue
         if filter_ns and d.name != filter_ns:
             continue
-        result.append(load_namespace(d))
+        dirs.append(d)
+
+    # Namespaces load concurrently: each spends most of its time waiting on git probes
+    # (`_pulse_git`, code-review churn) and file reads, and load_namespace() shares no state.
+    with ThreadPoolExecutor(max_workers=min(8, len(dirs) or 1)) as pool:
+        result = list(pool.map(load_namespace, dirs))
 
     def sort_key(n):
         if n["open_session"]:

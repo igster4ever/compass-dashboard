@@ -1329,5 +1329,66 @@ class TestSkillOptInterval(unittest.TestCase):
         self.assertFalse(pf["skill_opt"])
 
 
+class TestPulseGitErrors(unittest.TestCase):
+    """`_pulse_git` keeps core's {repo, ahead, dirty_files} and adds a dashboard-only
+    `errors` map naming why a probe came back None."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def test_no_repo_path_is_none(self):
+        self.assertIsNone(_mod._pulse_git(None))
+        self.assertIsNone(_mod._pulse_git(""))
+
+    def test_not_a_repo_records_exit_code_for_both_probes(self):
+        g = _mod._pulse_git(str(self.dir))
+        self.assertIsNone(g["ahead"])
+        self.assertIsNone(g["dirty_files"])
+        self.assertEqual(set(g["errors"]), {"ahead", "dirty_files"})
+        self.assertTrue(g["errors"]["dirty_files"].startswith("exit 128"))
+
+    def test_repo_without_upstream_only_fails_ahead(self):
+        import subprocess
+        subprocess.run(["git", "init", "-q", str(self.dir)], check=True)
+        (self.dir / "f.txt").write_text("x")
+        g = _mod._pulse_git(str(self.dir))
+        self.assertEqual(g["dirty_files"], 1)
+        self.assertIsNone(g["ahead"])
+        self.assertEqual(list(g["errors"]), ["ahead"])
+
+    def test_timeout_is_named(self):
+        import subprocess
+        with patch.object(_mod.subprocess, "run", side_effect=subprocess.TimeoutExpired("git", 3)):
+            g = _mod._pulse_git(str(self.dir))
+        self.assertEqual(g["errors"], {"ahead": "timeout after 3s", "dirty_files": "timeout after 3s"})
+
+    def test_missing_git_binary_is_named(self):
+        with patch.object(_mod.subprocess, "run", side_effect=FileNotFoundError(2, "No such file or directory")):
+            g = _mod._pulse_git(str(self.dir))
+        self.assertEqual(g["errors"]["ahead"], "git not runnable: No such file or directory")
+
+
+class TestDiscoverNamespacesConcurrent(unittest.TestCase):
+    """The thread-pooled loader returns exactly what loading each namespace serially would."""
+
+    def test_matches_serial_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            loop = Path(tmp)
+            for i, name in enumerate(["alpha", "beta", "gamma", "_community", ".hidden"]):
+                d = loop / name
+                d.mkdir()
+                (d / "state.json").write_text(json.dumps(
+                    {"open_session": False, "last_close": f"2026-10-0{i + 1}T09:00:00Z"}))
+            (loop / "no-state").mkdir()
+            with patch.object(_mod, "LOOP_DIR", loop):
+                got = _mod.discover_namespaces()
+                serial = [_mod.load_namespace(loop / n) for n in ("gamma", "beta", "alpha")]
+        strip = lambda ns: [{k: v for k, v in n.items() if k != "pulse"} for n in ns]
+        self.assertEqual([n["namespace"] for n in got], ["gamma", "beta", "alpha"])
+        self.assertEqual(strip(got), strip(serial))
+
+
 if __name__ == "__main__":
     unittest.main()

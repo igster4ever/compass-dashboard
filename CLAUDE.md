@@ -254,7 +254,8 @@ only ticks the clock: elapsed is the baked `elapsed_seconds` plus time since pag
 viewer's clock against `last_open`), re-rendered every 30 s with no polling or requests. The footer
 says `snapshot as of HH:MM (N min ago)` and turns amber from 10 min, so it never claims to be live.
 `renderLiveStrip(nowMs)` takes an injectable clock for tests. `_build_pulse(namespace, raw)` reads
-no files (inputs come from `_read_namespace_files()`); its only I/O is `_pulse_git()`. Spec:
+no files (inputs come from `_read_namespace_files()`); its only I/O is `_pulse_git()`.
+`pulse.git.errors` is dashboard-only; parity compares core's keys only. Spec:
 `docs/superpowers/specs/2026-10-12-live-strip-design.md` (steps 1–3 shipped; `--watch` remains). `generate_fixture.py` injects a synthetic `pulse` per namespace.
 
 **Tasks sub-tab** (`deriveTasks(ns)`, pure JS over `ns.reality`) — reads `## What is next`,
