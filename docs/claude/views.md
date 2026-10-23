@@ -71,4 +71,6 @@ nsId)` over `data-ltype`/`data-zone`; never set `row.style.display` from a secon
 filter. `filterLearningZone` (click-to-toggle) is exported; `applyLearningFilters` is not.
 
 **Decision Guidance** (P65) — rendered inside the Decisions sub-tab by
-`renderDecisionGuidance(ns)`, returns `''` when empty.
+`renderDecisionGuidance(ns)`, returns `''` when empty. It renders before the decisions empty state,
+so a guidance-only namespace still shows its pairs. `qualityDelta` is `null` unless both evidence
+qualities are numbers (`_guidance_quality_delta()`); core stores `evidence` unvalidated.

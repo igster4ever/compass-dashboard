@@ -535,6 +535,32 @@ class TestDecisionGuidance(unittest.TestCase):
         self.assertIn("Use event-driven append", html)
         self.assertIn("decisionGuidance", html)
 
+    def test_quality_delta_only_for_numeric_evidence(self):
+        # core's log-decision-guidance stores `evidence` unvalidated; one bad row used to raise
+        # TypeError and kill the whole generation (P65 findings 2026-10-23, finding 1).
+        import json
+        cases = [
+            ({"preferred_quality": 0.86, "avoided_quality": 0.61}, 0.25),
+            ({"preferred_quality": None, "avoided_quality": 0.4}, None),
+            ({"preferred_quality": "0.9", "avoided_quality": 0.4}, None),
+            ({"preferred_quality": True, "avoided_quality": 0.4}, None),
+            ({"preferred_quality": 0.9}, None),
+            ("not a dict", None),
+            (None, None),
+        ]
+        ns = _minimal_ns({"decision_guidance": [
+            {"guidance_id": f"g{i}", "preferred_decision_text": "p", "avoided_decision_text": "a",
+             "evidence": ev, "status": "active"}
+            for i, (ev, _) in enumerate(cases)
+        ]})
+        rows = json.loads(_mod._js_data([ns]))[0]["decisionGuidance"]
+        for (ev, want), row in zip(cases, rows):
+            with self.subTest(evidence=ev):
+                if want is None:
+                    self.assertIsNone(row["qualityDelta"])
+                else:
+                    self.assertAlmostEqual(row["qualityDelta"], want)
+
     def test_defaults_when_absent(self):
         # _minimal_ns() has no decision_guidance key — must not crash the .get() default path.
         html = render_html([_minimal_ns()])

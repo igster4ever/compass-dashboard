@@ -58,7 +58,7 @@ function extractConst(name) {
   return html.slice(start, i + 1);
 }
 
-const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'globalVisibleNames', 'visibleNS', 'renderCompare', 'deriveTasks'];
+const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'globalVisibleNames', 'visibleNS', 'renderCompare', 'deriveTasks', 'renderDecisionGuidance', 'renderDecisions', 'detailTabs'];
 const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES', 'NS_PALETTE', 'COMPARE_AXIS_DEFS', 'GLOBAL_NS_KEY'];
 // A minimal in-memory localStorage — radarActiveAxes() reads it; no test here
 // relies on cross-call persistence, so a single shared instance is fine.
@@ -350,4 +350,44 @@ test('deriveTasks() stops attributing bullets to a backlog bucket once a new hea
   const tasks = helpers.deriveTasks(ns);
   assert.ok(tasks.some(t => t.text === 'fix the flaky heatmap test'));
   assert.ok(!tasks.some(t => t.text === 'unrelated bullet should not be a task'));
+});
+
+test('renderDecisionGuidance() renders a card per pair, signed deltas, no pill without evidence, escaped text', () => {
+  // Synthetic shapes from the 2026-10-23 P65 browser check (docs/backlog/p65-decision-guidance-ui-findings.md).
+  const html = helpers.renderDecisionGuidance({ decisionGuidance: [
+    { preferredDecisionText: 'Mirror core', avoidedDecisionText: 'Re-derive', qualityDelta: 0.17,
+      contextSummary: 'Surfacing a metric', createdAt: '2026-10-20T10:00:00Z' },
+    { preferredDecisionText: 'One commit', avoidedDecisionText: 'Four commits', qualityDelta: -0.12 },
+    { preferredDecisionText: 'Probe first', avoidedDecisionText: 'Trust docs', qualityDelta: null },
+    { preferredDecisionText: '<b>bold?</b>', avoidedDecisionText: '</script><script>x()</script>' },
+  ]});
+  assert.equal((html.match(/class="guidance-item"/g) || []).length, 4);
+  assert.ok(html.includes('Δ+17%</span>'));
+  assert.ok(html.includes('Δ-12%</span>'));
+  assert.equal((html.match(/guidance-delta">/g) || []).length, 2, 'null/absent qualityDelta renders no pill');
+  assert.ok(html.includes('&lt;b&gt;bold?&lt;/b&gt;'));
+  assert.ok(!html.includes('<script>'));
+  assert.ok(html.includes('2026-10-20</span>'));
+  assert.equal(helpers.renderDecisionGuidance({ decisionGuidance: [] }), '');
+});
+
+test('detailTabs() shows the Decisions sub-tab for decisions or guidance, not for neither', () => {
+  // P65 finding 2 (2026-10-23): a guidance-only namespace had no Decisions tab, so its pairs were unreachable.
+  const g = [{ preferredDecisionText: 'p', avoidedDecisionText: 'a' }];
+  assert.ok(helpers.detailTabs({ decisions: [{ decision: 'd' }] }).includes('decisions'));
+  assert.ok(helpers.detailTabs({ decisions: [], decisionGuidance: g }).includes('decisions'));
+  assert.ok(!helpers.detailTabs({ decisions: [], decisionGuidance: [] }).includes('decisions'));
+  assert.ok(!helpers.detailTabs({}).includes('decisions'));
+  assert.deepEqual(helpers.detailTabs({ externalSignals: ['s'] }),
+    ['state', 'learnings', 'history', 'tasks', 'radar', 'signals']);
+});
+
+test('renderDecisions() still renders guidance when there are no decisions', () => {
+  const g = [{ preferredDecisionText: 'Guidance only pair', avoidedDecisionText: 'a' }];
+  const html = helpers.renderDecisions({ decisions: [], decisionGuidance: g });
+  assert.ok(html.includes('Guidance only pair'));
+  assert.ok(html.includes('No decisions logged for this namespace yet.'));
+  assert.ok(html.indexOf('Guidance only pair') < html.indexOf('No decisions logged'));
+  const none = helpers.renderDecisions({ decisions: [] });
+  assert.ok(!none.includes('guidance-item'));
 });

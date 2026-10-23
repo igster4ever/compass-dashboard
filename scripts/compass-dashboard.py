@@ -2401,6 +2401,17 @@ def _apply_camel_case_renames(n, mapping):
     return out
 
 
+def _guidance_quality_delta(evidence):
+    """P65 preferred-minus-avoided quality, or None unless both are real numbers. core's
+    log-decision-guidance stores `evidence` unvalidated, so one bad row must not raise."""
+    if not isinstance(evidence, dict):
+        return None
+    pref, avoid = evidence.get("preferred_quality"), evidence.get("avoided_quality")
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (pref, avoid)):
+        return None
+    return pref - avoid
+
+
 def _js_data(namespaces):
     data = []
     for n in namespaces:
@@ -2429,13 +2440,7 @@ def _js_data(namespaces):
                     "preferredDecisionText": g.get("preferred_decision_text"),
                     "avoidedDecisionText":   g.get("avoided_decision_text"),
                     "evidence":              g.get("evidence", {}),
-                    "qualityDelta": (
-                        g["evidence"]["preferred_quality"] - g["evidence"]["avoided_quality"]
-                        if isinstance(g.get("evidence"), dict)
-                        and "preferred_quality" in g["evidence"]
-                        and "avoided_quality" in g["evidence"]
-                        else None
-                    ),
+                    "qualityDelta":          _guidance_quality_delta(g.get("evidence")),
                     "createdAt": g.get("created_at"),
                 }
                 for g in n.get("decision_guidance", [])

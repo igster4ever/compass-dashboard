@@ -64,8 +64,8 @@ name in `switchView()`'s `forEach`, an `if (v === '<name>') render<Name>();` bra
 `render<Name>()` function.
 
 **Namespace detail sub-tabs** (`.tab-btn`, `switchTab(t)`) — panels within a selected namespace.
-`renderDetail()`'s `tabs` array is the authoritative list (`decisions` only when present,
-`signals` only when `externalSignals` is non-empty).
+`detailTabs(ns)` is the authoritative list (`decisions` when there are decisions *or* P65 guidance
+pairs, `signals` only when `externalSignals` is non-empty).
 
 Long panels use collapsible `stateGroup(title, headline, bodyHtml)` drawers with a one-line
 data-derived headline in the `<summary>`; `stateGroup` renders nothing when its body is empty.

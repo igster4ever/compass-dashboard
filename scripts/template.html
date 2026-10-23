@@ -1082,14 +1082,20 @@ function selectCard(i, {force = false, scroll = true} = {}) {
 
 // ── Detail panel ──────────────────────────────────────────────────────────────
 
-function renderDetail(ns) {
-  const derivedTasks = deriveTasks(ns);
+// Sub-tab ids for a namespace. Decisions shows when there are decisions or P65 guidance
+// pairs (guidance renders inside that tab, so without it the pairs were unreachable).
+function detailTabs(ns) {
   const hasSignals   = (ns.externalSignals || []).length > 0;
-  const hasDecisions = ns.decisions && ns.decisions.length;
+  const hasDecisions = (ns.decisions || []).length > 0 || (ns.decisionGuidance || []).length > 0;
   const baseTabs     = hasDecisions
     ? ['state', 'learnings', 'decisions', 'history']
     : ['state', 'learnings', 'history'];
-  const tabs   = [...baseTabs, 'tasks', 'radar', ...(hasSignals ? ['signals'] : [])];
+  return [...baseTabs, 'tasks', 'radar', ...(hasSignals ? ['signals'] : [])];
+}
+
+function renderDetail(ns) {
+  const derivedTasks = deriveTasks(ns);
+  const tabs   = detailTabs(ns);
   const labels = {
     state:     'State',
     learnings: `Learnings (${ns.learnings.length})`,
@@ -1974,10 +1980,10 @@ function renderDecisionGuidance(ns) {
 }
 
 function renderDecisions(ns) {
-  if (!ns.decisions || !ns.decisions.length) {
-    return '<div class="empty-state">No decisions logged for this namespace yet.<br>Use <code>compass log-decision</code> mid-session to capture them.</div>';
-  }
   const guidanceHtml = renderDecisionGuidance(ns);
+  if (!ns.decisions || !ns.decisions.length) {
+    return guidanceHtml + '<div class="empty-state">No decisions logged for this namespace yet.<br>Use <code>compass log-decision</code> mid-session to capture them.</div>';
+  }
   const items = [...ns.decisions].reverse().map((d, dIdx) => {
     const date = (d.timestamp || d.logged_at || '').slice(0, 10) || '—';
     const ratHtml = d.rationale
