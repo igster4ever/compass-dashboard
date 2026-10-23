@@ -652,3 +652,8 @@ parsed by `render(data)` would remove the JS-literal escaping surface; `const NS
 
 > No live namespace had data as of
 2026-08-30; re-verify the visual treatment once real data exists.
+
+
+## 2026-10-23 archival pass
+
+- **Split by location (progressive disclosure).** The root CLAUDE.md was at 19,993 of 20,000 bytes, and each of the last two rules needed an archival pass first. Design: `docs/backlog/claude-md-progressive-disclosure.md`. First a probe checked that a nested `scripts/CLAUDE.md` is not in context at session start and arrives as a system reminder after the Read tool opens a file in `scripts/` (checked in a fresh subagent and in the main session; `claude -p` could not run because the CLI OAuth token had expired). Sections moved verbatim: `template.html` traps, Template substitution, Tab system, Data model and Stateful view tabs to `scripts/CLAUDE.md` (10,058 B); View-specific rules to `docs/claude/views.md` (5,129 B, reached through a pointer naming each view's functions); Tests to `tests/CLAUDE.md` (2,562 B). The root (4,367 B) keeps What this is, upkeep, Architecture and Security, plus a "Where the rules live" map. New root rule: a Bash-only `rg`/`sed` pass does not load a nested file, so Read it first. Pre-split copy of the file: git `b229aac:CLAUDE.md`.

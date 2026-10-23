@@ -1,6 +1,6 @@
 # CLAUDE.md progressive disclosure: split by location
 
-**Status:** proposal, not started. Tactical backlog item.
+**Status:** shipped 2026-10-23 (steps 1–9). Step 4 of Costs (the compass core hygiene-review prompt) is open, in the `compass` repo.
 **Date:** 2026-10-21 · **Source:** compass-dashboard session 2026-10-21 (CLAUDE.md at 19,993 of 20,000 bytes)
 
 ## Recommendation
@@ -74,6 +74,11 @@ and the hygiene review every 15 sessions. These are deliberate checks.
 1. Verify the load behaviour first. In a fresh session, put a marker rule in a test `scripts/CLAUDE.md`.
    Confirm that it is not in context at session start. Confirm that it loads after Claude reads a file in `scripts/`.
    If it loads at start, stop. Use pointer docs only.
+   **Result (2026-10-23): pass.** A fresh subagent did not have the marker before any tool call.
+   After it read the first lines of `scripts/compass-dashboard.py`, the marker arrived in a system reminder
+   that quoted `scripts/CLAUDE.md`. The main session showed the same result. After the split, with the CLI
+   re-authenticated, fresh `claude -p` sessions confirmed it on the real file: with no tools there was no
+   `overflow-anchor` rule; after one Read in `scripts/`, the model quoted trap 6 from `scripts/CLAUDE.md`.
 2. Save the current rule text. Run `archive_claude_md.py --list` to record the section sizes.
 3. Make `scripts/CLAUDE.md`, `tests/CLAUDE.md` and `docs/claude/views.md`. Move each section verbatim.
 4. Write the "where rules live" map in the root file. One line for each new file.
