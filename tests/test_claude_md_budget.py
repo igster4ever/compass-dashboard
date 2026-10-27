@@ -3,8 +3,8 @@ CLAUDE.md size gate.
 
 The root CLAUDE.md loads on every turn and the nested ones load whenever their folder is read,
 so each drifts toward a changelog unless something pushes back. compass core's CLAUDE.md review
-also fires early when the root or scripts/CLAUDE.md is over budget, but only when a compass
-session opens — this test catches overruns at commit time too, for every rules file. When it
+also fires early when any rules file it finds by convention (root, <dir>/CLAUDE.md,
+docs/claude/*.md) is over budget, but only when a compass session opens — this test catches overruns at commit time too, for every rules file. When it
 fails, run the hygiene pass described in the root CLAUDE.md's "Keeping these files lean" section
 (archive dated narratives verbatim into docs/claude-md-history.md), don't raise the budget.
 

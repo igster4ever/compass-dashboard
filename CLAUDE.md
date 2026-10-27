@@ -47,7 +47,7 @@ above it, and checks that no section of the pre-split file was dropped).
   or delete older sections of that file.
 - **Periodic hygiene pass:** compass core's CLAUDE.md review
   (`~/.claude/skills/compass/scripts/prompts/claude-md-hygiene-review.md`) fires for this
-  namespace every 15 sessions, or early once the root or `scripts/CLAUDE.md` is over budget. When it fires — or when
+  namespace every 15 sessions, or early once any rules file above is over budget (core finds them by convention: root, `<dir>/CLAUDE.md`, `docs/claude/*.md`). When it fires — or when
   the budget test fails — run it: correct stale facts against the code, archive dated narratives
   verbatim with `~/.claude/skills/compass/scripts/archive_claude_md.py` (`--list` for the size
   table; it refuses to write unless nothing was lost), then

@@ -115,7 +115,7 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
   `_normalise_validation_entry()`, `_check_reality_compaction_due()`,
   `_compaction_eligible_count()` (steady-state only), `_contract_coverage()`,
   `_compute_confidence_calibration()`, and the cadence gates `_check_dream_due()`,
-  `_check_claude_review_due()` (per-file budget over root + `scripts/CLAUDE.md` via `_claude_md_files()`, shared with the pulse), research/code-review/skill-opt due
+  `_check_claude_review_due()` (per-file budget over every rules file `_claude_md_files()` finds by core's convention scan, shared with the pulse), research/code-review/skill-opt due
   are local copies of `~/.claude/skills/compass/scripts/compass/*.py` (can't import —
   stdlib-only, separate repo). Read thresholds from `config` with core's defaults, never
   hard-code them. `tests/test_core_parity.py` imports core and checks every mirror against it

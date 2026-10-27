@@ -1291,6 +1291,19 @@ class TestCheckClaudeReviewDue(unittest.TestCase):
         self.assertEqual(r["claude_md_bytes"], 20_001)
         self.assertEqual(r["claude_md_files"], {"CLAUDE.md": 4_000, "scripts/CLAUDE.md": 20_001})
 
+    def test_convention_scan_counts_every_rules_file(self):
+        # Mirrors core's orient._claude_md_files (2026-10-27): top-level <dir>/CLAUDE.md and
+        # docs/claude/*.md count; hidden dirs and deeper nesting do not.
+        self._write(4_000)
+        for rel, size in (("tests/CLAUDE.md", 300), ("docs/claude/views.md", 20_001),
+                          (".git/CLAUDE.md", 50_000), ("a/b/CLAUDE.md", 50_000)):
+            (self.repo / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.repo / rel).write_text("x" * size)
+        r = _mod._check_claude_review_due(self.ns_dir, {"sessions_since_claude_review": 2}, {}, str(self.repo))
+        self.assertTrue(r["pulled_forward_by_size"])
+        self.assertEqual(r["claude_md_files"],
+                         {"CLAUDE.md": 4_000, "docs/claude/views.md": 20_001, "tests/CLAUDE.md": 300})
+
     def test_size_gate_waits_for_min_sessions(self):
         self._write(50_000)
         r = _mod._check_claude_review_due(self.ns_dir, {"sessions_since_claude_review": 1}, {}, str(self.repo))

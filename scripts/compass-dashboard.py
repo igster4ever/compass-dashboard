@@ -1098,15 +1098,25 @@ def _check_research_due(state, config, complexity_signal=None):
 
 
 def _claude_md_files(ns_dir, repo_path):
-    """{label: bytes} for the root CLAUDE.md and the nested scripts/CLAUDE.md beside it.
-    Base is `repo_path`, else ~/.claude/skills/<namespace> (mirrors core's
+    """{repo-relative label: bytes} for the rules files the CLAUDE.md budget covers. Mirrors
+    core's orient._claude_md_files: the root CLAUDE.md, every top-level `<dir>/CLAUDE.md`, and
+    every `docs/claude/*.md`; hidden dirs and deeper nesting skipped; root first, the rest
+    sorted. Base is `repo_path`, else ~/.claude/skills/<namespace> (mirrors core's
     _resolve_claude_md_path). Shared by the review-due gate and the Live strip pulse."""
     base = Path(repo_path).expanduser() if repo_path else Path.home() / ".claude" / "skills" / ns_dir.name
+    candidates = []
+    try:
+        candidates += [d / "CLAUDE.md" for d in base.iterdir()
+                       if d.is_dir() and not d.name.startswith(".")]
+    except OSError:
+        pass
+    candidates += list((base / "docs" / "claude").glob("*.md"))
     files = {}
-    for label, path in (("CLAUDE.md", base / "CLAUDE.md"),
-                        ("scripts/CLAUDE.md", base / "scripts" / "CLAUDE.md")):
+    for label, path in [("CLAUDE.md", base / "CLAUDE.md")] + sorted(
+            (p.relative_to(base).as_posix(), p) for p in candidates):
         try:
-            files[label] = path.stat().st_size
+            if path.is_file():
+                files[label] = path.stat().st_size
         except OSError:
             continue
     return files
@@ -1116,8 +1126,8 @@ def _check_claude_review_due(ns_dir, state, config, repo_path):
     """CLAUDE.md hygiene review status. Mirrors compass/orient.py's
     _check_claude_review_due() + _resolve_claude_md_path(): the CLAUDE.md is
     `repo_path/CLAUDE.md`, else ~/.claude/skills/<namespace>/CLAUDE.md only when repo_path
-    is unset. The size budget applies per file: the root CLAUDE.md and the nested
-    `scripts/CLAUDE.md` beside it; `claude_md_bytes` is the largest, `claude_md_files` each.
+    is unset. The size budget applies per file, over every rules file `_claude_md_files`
+    finds; `claude_md_bytes` is the largest, `claude_md_files` each.
     Due on the session cadence (`claude_review_interval_sessions`, default 15), or pulled
     forward once the largest file exceeds `claude_md_size_budget_bytes` (default 20000) and at
     least `claude_review_size_min_sessions` (default 2) sessions have passed.
