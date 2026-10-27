@@ -1,6 +1,6 @@
 # Maturity-ladder scorecard with catalogue completeness: design note
 
-**Status:** exploration, not scheduled. Strategic backlog candidate.
+**Status:** adopted 2026-10-27; build scheduled for the next session (Tactical backlog). Open questions decided below.
 **Date:** 2026-10-23 · **Source:** compass-dashboard session 2026-10-23 (goal 5, explore), from two
 research signals in reality.md: scorecards move from one score to a maturity-level ladder; portals
 track catalogue completeness (missing metadata, missing ownership) as a metric.
@@ -50,7 +50,7 @@ Provisional ladder, run once over the live data (scratch script, not committed):
 |---|---|
 | L1 Registered | `intent.md` not empty · `reality.md` exists · ≥ 1 closed session |
 | L2 Wired | `repo_path` set · `CLAUDE.md` exists · `code_context.md` exists · ≥ 3 sessions |
-| L3 Instrumented | every active learning tagged · ≥ 90% with `learning_id` · ≥ 50% with `zone` · goal types in ≥ 3 of the last 5 sessions · ≥ 1 decision |
+| L3 Instrumented | every active learning tagged · ~~≥ 90% with `learning_id`~~ (removed, see Decisions 4) · ≥ 50% with `zone` (learnings since 2026-07-05 only; see Decisions) · goal types in ≥ 3 of the last 5 sessions · ≥ 1 decision |
 | L4 Calibrated | ≥ 5 goal contracts · outcome rate ≥ 30% · no stale reality bullets |
 
 | Result | Namespaces |
@@ -106,7 +106,34 @@ Most inputs are already in `NS`: `intent`, `codeContext`, `learnings[]` (`tags`,
 2. Reality structure warnings: `_check_reality_structure()` is core-only. Mirror it and add a parity
    case in `test_core_parity.py`, or drop the check from L1.
 
-## Open questions (decide before implementation)
+## Decisions (2026-10-27)
+
+1. **Zone check: count only learnings logged since zone tagging shipped (2026-07-05).** A namespace
+   with none fails with the reason "no learnings since 2026-07-05" (changed by Decision 5; it was
+   N/A). Live data: 0 of ~290 active learnings from before that date carry a zone, and no
+   backfill exists, so the raw check measured recent activity, not maturity (`gps-adr-dashboard`:
+   67 learnings, 0 zoned). Learnings since the ship date still separate namespaces: `compass` 17/54,
+   `compass-dashboard` 26/31, `standards-compliance-audit` 37/61, `agentic-loopkit` 1/21.
+2. **Placement: both.** The Scorecard gets the table column and the next-step drawer. Each Overview
+   card gets one `L2 · 64%` chip. The same `ladderLevel(ns)` call feeds both.
+3. **Chart: completeness replaces the Maturity axis.** It is absolute (no min-max), so it does not
+   change with the filter. P22 reality completeness stays in the State sub-tab.
+
+Amendments from `catalogue-completeness-spike.md`, accepted the same day:
+
+4. **Remove `≥ 90% learning_id` from L3.** Core sets the id at write time: 0 of 240 learnings from
+   before 2026-06-15 have one, and 376 of 376 since that date have one. So the check measures only
+   learning age.
+5. **Each check returns pass, fail or N/A. "No data" is a fail with its own reason. N/A means only
+   that `applies(ns)` is false.** With zone N/A for namespaces with no learnings since the ship date,
+   three dormant namespaces ranked L3, above `compass` (L2).
+6. **`global` has its own profile.** The session-count and repo checks are N/A for the namespace
+   `global` (named, not inferred). Before the build, check its `repo_path` (`be-hkjc-mono`; it looks
+   stale).
+
+Effort changes to about 4 h: add about 20 min for the Overview chip.
+
+## Open questions (decided 2026-10-27; kept for the record)
 
 1. Is L3's `zone ≥ 50%` correct? Today it is the check that holds 8 namespaces at L2. Zone tagging
    is new, so it can measure "adopted the new feature" and not "maturity".
