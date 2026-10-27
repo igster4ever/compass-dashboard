@@ -487,6 +487,13 @@
     .guidance-vs { font-size: .62rem; color: var(--subtle); text-transform: uppercase; margin: .2rem 0 .2rem 1.3rem; }
     .guidance-meta { display: flex; gap: .5rem; align-items: baseline; margin-top: .3rem; }
     .guidance-delta { font-size: .68rem; font-weight: 700; color: var(--blue); background: var(--blue-bg); padding: .1em .5em; border-radius: 999px; }
+    .guidance-delta.neg { color: var(--amber); background: var(--amber-bg); }
+    .guidance-heading {
+      font-size: .72rem; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .07em; margin-bottom: .5rem;
+      border-bottom: 1px solid var(--border); padding-bottom: .35rem;
+    }
+    .guidance-context { font-size: .75rem; color: var(--text); line-height: 1.4; margin-bottom: .4rem; }
 
     /* ── Zone distribution (P56) ── */
     .zone-dist { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .6rem; }
@@ -1093,13 +1100,23 @@ function detailTabs(ns) {
   return [...baseTabs, 'tasks', 'radar', ...(hasSignals ? ['signals'] : [])];
 }
 
+// "Decisions (N)", plus the P65 guidance-pair count when there are pairs (both render in the tab).
+// Non-breaking spaces, like the other tab labels, so the label never wraps inside its button.
+function decisionsTabLabel(ns) {
+  const nDec = (ns.decisions || []).length;
+  const nGuide = (ns.decisionGuidance || []).length;
+  return nGuide
+    ? `Decisions\u00a0(${nDec}\u00a0·\u00a0${nGuide}\u00a0guidance)`
+    : `Decisions\u00a0(${nDec})`;
+}
+
 function renderDetail(ns) {
   const derivedTasks = deriveTasks(ns);
   const tabs   = detailTabs(ns);
   const labels = {
     state:     'State',
     learnings: `Learnings (${ns.learnings.length})`,
-    decisions: `Decisions (${(ns.decisions || []).length})`,
+    decisions: decisionsTabLabel(ns),
     history:   `History (${ns.sessionCount})`,
     tasks:     derivedTasks.length ? `Tasks (${derivedTasks.length})` : 'Tasks',
     radar:     'Radar',
@@ -1962,21 +1979,24 @@ function renderDecisionGuidance(ns) {
   const guidance = ns.decisionGuidance || [];
   if (!guidance.length) return '';
   const items = guidance.map(g => {
+    // qualityDelta is a difference of 0-1 scores, so it reads in percentage points. A negative
+    // delta means the avoided option scored higher: amber, so it doesn't pass for a ✓ endorsement.
+    const neg = g.qualityDelta != null && g.qualityDelta < 0;
     const deltaHtml = g.qualityDelta != null
-      ? `<span class="guidance-delta">Δ${g.qualityDelta > 0 ? '+' : ''}${Math.round(g.qualityDelta * 100)}%</span>`
+      ? `<span class="guidance-delta${neg ? ' neg' : ''}"${neg ? ' title="avoided option scored higher"' : ''}>Δ${g.qualityDelta > 0 ? '+' : ''}${Math.round(g.qualityDelta * 100)}pp</span>`
       : '';
     const date = g.createdAt ? `<span class="decision-date">${esc(g.createdAt.slice(0, 10))}</span>` : '';
-    const rationale = g.contextSummary
-      ? `<div class="decision-rationale">${esc(g.contextSummary)}</div>` : '';
+    const context = g.contextSummary
+      ? `<div class="guidance-context">${esc(g.contextSummary)}</div>` : '';
     return `<div class="guidance-item">
+      ${context}
       <div class="guidance-row guidance-preferred"><span class="guidance-icon">✓</span><span class="guidance-text">${esc(g.preferredDecisionText || '')}</span></div>
       <div class="guidance-vs">vs</div>
       <div class="guidance-row guidance-dispreferred"><span class="guidance-icon">✗</span><span class="guidance-text">${esc(g.avoidedDecisionText || '')}</span></div>
       <div class="guidance-meta">${deltaHtml}${date}</div>
-      ${rationale}
     </div>`;
   }).join('');
-  return `<div class="guidance-list">${items}</div>`;
+  return `<div class="guidance-heading">Guidance (${guidance.length})</div><div class="guidance-list">${items}</div>`;
 }
 
 function renderDecisions(ns) {
@@ -2000,7 +2020,8 @@ function renderDecisions(ns) {
         ${altHtml}
       </div>`;
   }).join('');
-  return guidanceHtml + `<div class="decision-list">${items}</div>`;
+  const listHeading = guidanceHtml ? `<div class="guidance-heading">Decisions (${ns.decisions.length})</div>` : '';
+  return guidanceHtml + listHeading + `<div class="decision-list">${items}</div>`;
 }
 
 // ── External signals ──────────────────────────────────────────────────────────

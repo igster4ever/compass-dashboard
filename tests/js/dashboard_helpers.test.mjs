@@ -58,7 +58,7 @@ function extractConst(name) {
   return html.slice(start, i + 1);
 }
 
-const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'globalVisibleNames', 'visibleNS', 'renderCompare', 'deriveTasks', 'renderDecisionGuidance', 'renderDecisions', 'detailTabs'];
+const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'globalVisibleNames', 'visibleNS', 'renderCompare', 'deriveTasks', 'renderDecisionGuidance', 'renderDecisions', 'detailTabs', 'decisionsTabLabel'];
 const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES', 'NS_PALETTE', 'COMPARE_AXIS_DEFS', 'GLOBAL_NS_KEY'];
 // A minimal in-memory localStorage — radarActiveAxes() reads it; no test here
 // relies on cross-call persistence, so a single shared instance is fine.
@@ -362,9 +362,16 @@ test('renderDecisionGuidance() renders a card per pair, signed deltas, no pill w
     { preferredDecisionText: '<b>bold?</b>', avoidedDecisionText: '</script><script>x()</script>' },
   ]});
   assert.equal((html.match(/class="guidance-item"/g) || []).length, 4);
-  assert.ok(html.includes('Δ+17%</span>'));
-  assert.ok(html.includes('Δ-12%</span>'));
-  assert.equal((html.match(/guidance-delta">/g) || []).length, 2, 'null/absent qualityDelta renders no pill');
+  // P65 findings 3-6 (2026-10-27): heading with pair count, pp unit, amber pill for a negative delta, context first.
+  assert.ok(html.includes('Guidance (4)'));
+  assert.ok(html.includes('Δ+17pp</span>'));
+  assert.ok(html.includes('Δ-12pp</span>'));
+  assert.ok(!html.includes('%</span>'));
+  assert.equal((html.match(/class="guidance-delta( neg)?"/g) || []).length, 2, 'null/absent qualityDelta renders no pill');
+  assert.equal((html.match(/class="guidance-delta neg"/g) || []).length, 1, 'only the negative delta is amber');
+  assert.ok(html.includes('avoided option scored higher'));
+  const first = html.slice(html.indexOf('guidance-item'));
+  assert.ok(first.indexOf('Surfacing a metric') < first.indexOf('Mirror core'), 'context line renders before the pair');
   assert.ok(html.includes('&lt;b&gt;bold?&lt;/b&gt;'));
   assert.ok(!html.includes('<script>'));
   assert.ok(html.includes('2026-10-20</span>'));
@@ -380,6 +387,23 @@ test('detailTabs() shows the Decisions sub-tab for decisions or guidance, not fo
   assert.ok(!helpers.detailTabs({}).includes('decisions'));
   assert.deepEqual(helpers.detailTabs({ externalSignals: ['s'] }),
     ['state', 'learnings', 'history', 'tasks', 'radar', 'signals']);
+});
+
+test('decisionsTabLabel() counts guidance pairs alongside decisions', () => {
+  // Tab labels use non-breaking spaces so a label never wraps inside its button.
+  const g = [{ preferredDecisionText: 'p', avoidedDecisionText: 'a' }];
+  assert.equal(helpers.decisionsTabLabel({ decisions: [{}, {}] }), 'Decisions\u00a0(2)');
+  assert.equal(helpers.decisionsTabLabel({ decisions: [{}], decisionGuidance: g }), 'Decisions\u00a0(1\u00a0·\u00a01\u00a0guidance)');
+  assert.equal(helpers.decisionsTabLabel({ decisionGuidance: [...g, ...g] }), 'Decisions\u00a0(0\u00a0·\u00a02\u00a0guidance)');
+});
+
+test('renderDecisions() heads the decision list only when guidance sits above it', () => {
+  const g = [{ preferredDecisionText: 'p', avoidedDecisionText: 'a' }];
+  const both = helpers.renderDecisions({ decisions: [{ decision: 'd1' }], decisionGuidance: g });
+  assert.ok(both.includes('Decisions (1)</div>'));
+  assert.ok(both.indexOf('Guidance (1)') < both.indexOf('Decisions (1)</div>'));
+  const plain = helpers.renderDecisions({ decisions: [{ decision: 'd1' }] });
+  assert.ok(!plain.includes('guidance-heading'));
 });
 
 test('renderDecisions() still renders guidance when there are no decisions', () => {

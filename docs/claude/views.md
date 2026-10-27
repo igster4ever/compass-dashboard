@@ -74,3 +74,7 @@ filter. `filterLearningZone` (click-to-toggle) is exported; `applyLearningFilter
 `renderDecisionGuidance(ns)`, returns `''` when empty. It renders before the decisions empty state,
 so a guidance-only namespace still shows its pairs. `qualityDelta` is `null` unless both evidence
 qualities are numbers (`_guidance_quality_delta()`); core stores `evidence` unvalidated.
+The tab label counts pairs via `decisionsTabLabel(ns)`. A "Guidance (N)" heading sits above the cards,
+and a "Decisions (N)" heading above the list only when guidance is present. Each card leads with
+`contextSummary`. The delta shows in `pp` (a difference of 0–1 scores), and a negative delta gets the
+amber `.guidance-delta.neg` pill.

@@ -1,6 +1,6 @@
 # P65 Decision Guidance UI: findings from a synthetic-data check
 
-**Status:** findings 1 and 2 fixed 2026-10-23; findings 3–6 open (tactical backlog candidate).
+**Status:** findings 1 and 2 fixed 2026-10-23; findings 3–6 fixed 2026-10-27. All closed.
 **Date:** 2026-10-23 · **Source:** compass-dashboard session 2026-10-23 (goal 4)
 
 ## Why
@@ -44,7 +44,20 @@ This check used synthetic data in a real browser.
   Browser re-check: `dg-no-decisions` now shows all 5 active pairs, including the `null`-quality
   row, with no delta pill. Generation with that row no longer crashes.
 
-## Proposed fixes (1 and 2 done)
+## Fixed (2026-10-27)
+
+- **3:** a "Guidance (N)" heading above the cards, plus a "Decisions (N)" heading above the list when
+  guidance is present. The tab label comes from `decisionsTabLabel(ns)`: `Decisions (9 · 3 guidance)`.
+- **4:** a negative delta gets the amber `.guidance-delta.neg` pill and the tooltip "avoided option
+  scored higher".
+- **5:** `contextSummary` is the first line of each card (`.guidance-context`, body colour).
+- **6:** the delta shows in `pp`.
+- Pinned by updated `renderDecisionGuidance()` and new `decisionsTabLabel()`/`renderDecisions()`
+  heading cases in `dashboard_helpers.test.mjs`. Browser re-check on a synthetic
+  `dg-with-decisions` copy with 3 rows (positive, negative, no evidence): all four render as described,
+  with no console errors.
+
+## Proposed fixes (all done)
 
 1. Compute `qualityDelta` only when both values are `int`/`float` (not `bool`); otherwise `None`.
    Add a `test_data_loading.py` case with a `null` quality. (~15 min)
