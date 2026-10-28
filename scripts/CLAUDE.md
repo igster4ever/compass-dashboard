@@ -114,12 +114,15 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
   `_stale_bullet_count()` (whole-day threshold), `_parse_section_bullets()`,
   `_normalise_validation_entry()`, `_check_reality_compaction_due()`,
   `_compaction_eligible_count()` (steady-state only), `_contract_coverage()`,
+  `_suggested_goal_count()` (trailing FIVE sessions, as core's trend), `_check_cadence_pull_forward()`,
   `_compute_confidence_calibration()`, and the cadence gates `_check_dream_due()`,
   `_check_claude_review_due()` (per-file budget over every rules file `_claude_md_files()` finds by core's convention scan, shared with the pulse), research/code-review/skill-opt due
   are local copies of `~/.claude/skills/compass/scripts/compass/*.py` (can't import —
   stdlib-only, separate repo). Read thresholds from `config` with core's defaults, never
   hard-code them. `tests/test_core_parity.py` imports core and checks every mirror against it
   on all live namespaces; add a case there whenever you mirror something new.
+- **Dashboard-only, no core counterpart (checked 2026-10-28):** `_corpus_health()`, `_zone_distribution()`,
+  `_verification_durability()`, `_goal_by_month()`. Don't add parity cases for them; if core grows an equivalent, mirror it.
 - **Re-audit against compass core** by running `test_core_parity.py`; a failure means core
   changed, so port the change rather than loosening the test. It can't see *new* core fields,
   so still skim core's git log for new persisted fields now and then. Last manual audit:

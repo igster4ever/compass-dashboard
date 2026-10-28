@@ -188,6 +188,28 @@ class TestCoreParity(unittest.TestCase):
             self.assertEqual(dash._compute_confidence_calibration(learnings),
                              core["learnings"]._compute_confidence_calibration(learnings))
 
+    def test_suggested_goal_count(self):
+        for name, _, state, _, _ in self._each():
+            theirs = core["orient"]._compute_suggested_goal_count(
+                core["state"]._get_goal_completion_trend(state))
+            self.assertEqual(dash._suggested_goal_count(state), theirs)
+
+    def test_goal_stats_dots_follow_core_trend(self):
+        # The dots are the trailing five hit rates, oldest first, as whole percentages.
+        for name, _, state, _, _ in self._each():
+            rate, dots = dash._goal_stats(state)
+            trend = core["state"]._get_goal_completion_trend(state)
+            self.assertEqual([d["rate"] for d in dots], [int(r) for r in trend["trend"]])
+            if trend["sessions"]:
+                self.assertEqual(rate, int(trend["latest_hit_rate"]))
+
+    def test_cadence_pull_forward(self):
+        # Core computes this inline while building the ORIENT context, so that is the oracle.
+        for name, d, state, _, _ in self._each():
+            ctx = core["orient"]._build_orient_context(d, name)
+            self.assertEqual(dash.load_namespace(d)["cadence_pull_forward"],
+                             ctx["cadence_pull_forward"])
+
     def test_contract_coverage(self):
         for name, _, state, _, _ in self._each():
             self.assertEqual(dash._contract_coverage(state),

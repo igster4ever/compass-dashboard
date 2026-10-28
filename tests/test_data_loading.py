@@ -23,6 +23,7 @@ _spec.loader.exec_module(_mod)
 _reality_completeness  = _mod._reality_completeness
 _corpus_health         = _mod._corpus_health
 _goal_stats            = _mod._goal_stats
+_suggested_goal_count  = _mod._suggested_goal_count
 _stale_bullet_count    = _mod._stale_bullet_count
 _retrieval_stale_texts = _mod._retrieval_stale_texts
 _load_watch_signals    = _mod._load_watch_signals
@@ -345,6 +346,58 @@ class TestGoalStats(unittest.TestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 # _stale_bullet_count
 # ─────────────────────────────────────────────────────────────────────────────
+
+class TestSuggestedGoalCount(unittest.TestCase):
+    """Mirrors compass core's trailing-window suggestion (state._get_goal_completion_trend
+    feeding orient._compute_suggested_goal_count): the LAST FIVE sessions by timestamp, the
+    average rounded to one decimal BEFORE the 80/60 thresholds, fractional hit rates kept."""
+
+    @staticmethod
+    def _state(rates):
+        """Oldest first; ISO timestamps sort chronologically."""
+        return {"goal_completions": {
+            f"2026-10-{i + 1:02d}T09:00:00Z": {"hit_rate": r, "total_goals": 5}
+            for i, r in enumerate(rates)}}
+
+    def test_no_history_uses_the_default(self):
+        self.assertEqual(_suggested_goal_count({}),
+                         {"count": 4, "basis": "no history \u2014 using default"})
+
+    def test_averages_only_the_five_most_recent_sessions(self):
+        # Three old 0% sessions must not drag down five strong recent ones.
+        result = _suggested_goal_count(self._state([0, 0, 0, 100, 100, 100, 100, 100]))
+        self.assertEqual(result["count"], 5)
+        self.assertIn("(100.0%)", result["basis"])
+
+    def test_window_follows_timestamps_not_insertion_order(self):
+        newest_first = dict(reversed(list(self._state([0, 0, 0, 100, 100, 100, 100, 100])["goal_completions"].items())))
+        result = _suggested_goal_count({"goal_completions": newest_first})
+        self.assertEqual(result["count"], 5)
+        self.assertIn("(100.0%)", result["basis"])
+
+    def test_fractional_hit_rates_are_not_truncated(self):
+        result = _suggested_goal_count(self._state([83.3] * 5))
+        self.assertIn("(83.3%)", result["basis"])
+
+    def test_average_is_rounded_to_one_decimal_before_the_threshold(self):
+        # 79.96 rounds to 80.0, so core suggests 5 goals; an unrounded compare would say 4.
+        result = _suggested_goal_count(self._state([79.96] * 5))
+        self.assertEqual(result["count"], 5)
+        self.assertIn("(80.0%)", result["basis"])
+
+    def test_calibrated_band_is_sixty_to_below_eighty(self):
+        self.assertEqual(_suggested_goal_count(self._state([60] * 5))["count"], 4)
+        self.assertEqual(_suggested_goal_count(self._state([79] * 5))["count"], 4)
+
+    def test_below_sixty_reduces_scope(self):
+        result = _suggested_goal_count(self._state([59] * 5))
+        self.assertEqual(result["count"], 3)
+        self.assertIn("reduce scope", result["basis"])
+
+    def test_a_legacy_list_entry_does_not_raise(self):
+        state = {"goal_completions": {"2026-10-01T09:00:00Z": ["completed", "blocked"]}}
+        self.assertEqual(_suggested_goal_count(state)["count"], 3)  # 50% -> reduce scope
+
 
 class TestStaleBulletCount(unittest.TestCase):
 

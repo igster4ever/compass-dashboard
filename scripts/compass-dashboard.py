@@ -518,23 +518,32 @@ def _parse_goal_entry(entry):
 
 
 def _suggested_goal_count(state):
+    """P-DC2 goal-count suggestion. Mirrors compass core's `_get_goal_completion_trend`
+    (the trailing FIVE sessions by timestamp, fractional hit rates kept) feeding
+    `_compute_suggested_goal_count` (average rounded to one decimal, then the 80/60
+    thresholds). Parity-tested in tests/test_core_parity.py."""
+    default = {"count": 4, "basis": "no history \u2014 using default"}
     completions = state.get("goal_completions", {})
     if not completions:
-        return {"count": 4, "basis": "no history — using default"}
+        return default
+    recent = sorted(completions.items(), key=lambda kv: kv[0], reverse=True)[:5]
     rates = []
-    for v in completions.values():
-        if not v:
+    for _, entry in recent:
+        if not entry:
             continue
-        _, rate = _parse_goal_entry(v)
-        rates.append(rate)
+        raw = entry.get("hit_rate") if isinstance(entry, dict) else None
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            rates.append(float(raw))
+        else:
+            rates.append(float(_parse_goal_entry(entry)[1]))  # legacy list-shaped entries
     if not rates:
-        return {"count": 4, "basis": "no history — using default"}
-    avg = sum(rates) / len(rates)
+        return default
+    avg = round(sum(rates) / len(rates), 1)
     if avg >= 80:
-        return {"count": 5, "basis": f"≥80% avg hit-rate ({avg:.1f}%) — capacity to spare"}
+        return {"count": 5, "basis": f"\u226580% avg hit-rate ({avg:.1f}%) \u2014 capacity to spare"}
     if avg >= 60:
-        return {"count": 4, "basis": f"60–79% avg hit-rate ({avg:.1f}%) — calibrated"}
-    return {"count": 3, "basis": f"<60% avg hit-rate ({avg:.1f}%) — reduce scope"}
+        return {"count": 4, "basis": f"60\u201379% avg hit-rate ({avg:.1f}%) \u2014 calibrated"}
+    return {"count": 3, "basis": f"<60% avg hit-rate ({avg:.1f}%) \u2014 reduce scope"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
