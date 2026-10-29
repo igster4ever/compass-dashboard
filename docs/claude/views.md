@@ -28,6 +28,15 @@ each normalised 0–100 per namespace, min 3 active, persisted to
 `localStorage['compass-radar-axes']`. Insufficient-data axes render hollow at 50, not dropped.
 `healthColor()` (≥68 green / ≥40 amber / red) is module-scope and shared with Scorecard.
 
+**Scorecard maturity ladder** (`LADDER`, `ladderLevel(ns)`) — one pure call feeds the Scorecard's
+Ladder column + row drawer (`<details class="scard-item">`, the summary is the `.scard-row`) and the
+Overview card chips. A check's `test` returns `true` or a reason string; no data is a fail with a
+reason, N/A only via `applies(ns)` (today only `sessions` for `global`). Overview cards are static
+HTML, so `renderLadderChips()` fills their empty `.ladder-chip` spans; it runs just before the
+auto-open at the end of the IIFE because `LADDER` is declared after the other start-up calls.
+The Completeness axis is absolute and is not min-max normalised. Design and decisions:
+`docs/backlog/maturity-ladder-scorecard-design-note.md`.
+
 **Compare** (`renderCompare()`) — 6 fixed macro axes (`COMPARE_AXIS_DEFS`), no axis picker;
 min-max normalisation across the currently visible namespaces only. `nsColor(namespace)` is the
 single shared palette function — don't re-duplicate it.
@@ -65,6 +74,9 @@ Goal tracking, Cross-namespace signals, Feedback & failure analysis, Intent hist
 sections go in the matching drawer, not the flat top. The Reality drawer's upkeep lines
 (`renderRealityUpkeep()`) show compaction cadence, eligible/archived counts with a `file://`
 link to `reality_archive.md`, and verification durability over bullets still in reality.md.
+The Goal tracking drawer opens with Goal statuses (`renderStateSection_GoalStatuses()`), and its
+headline comes from `goalStatusHeadline()`. A history `## Incomplete` bullet usually restates the goal,
+so the row shows only the part after the dash, and nothing when the goal already contains the bullet.
 
 **Learnings sub-tab** — type and zone filters compose through `applyLearningFilters(table,
 nsId)` over `data-ltype`/`data-zone`; never set `row.style.display` from a second independent

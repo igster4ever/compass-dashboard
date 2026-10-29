@@ -141,6 +141,17 @@ def _iter_reality_bullets(reality_md):
             yield text, excluded
 
 
+def _check_reality_structure(reality_md):
+    """P17 missing-section warnings, a mirror of compass core's reality._check_reality_structure:
+    any `#`-depth header counts, matched case-insensitively."""
+    headers_found = {line.strip().lstrip("#").strip().lower()
+                     for line in reality_md.splitlines() if line.strip().startswith("##")}
+    return [f"Missing section: {label}"
+            for label, variant in (("## What exists and works", "what exists and works"),
+                                   ("## Backlog", "backlog"))
+            if variant not in headers_found]
+
+
 def _reality_completeness(reality_md):
     """P22 completeness %, a line-for-line mirror of compass core's section-aware
     reality.py::_compute_reality_completeness (2026-09-30): only `##` headers change
@@ -928,6 +939,62 @@ def _goal_stats(state):
     return (rate if total else None), dots
 
 
+_GOAL_STATUSES = ("completed", "partial", "skipped", "blocked", "abandoned")
+
+
+def _match_incomplete_reasons(missed, reasons):
+    """Attach each history `## Incomplete` bullet to the goal it explains: first by a shared
+    30-character prefix (the bullet usually restates the goal, then adds why), then, when the
+    leftovers pair up one to one, in order."""
+    pool = list(reasons)
+    for item in missed:
+        key = (item["goal"] or "").lower()[:30]
+        hit = next((r for r in pool if key and r.lower().startswith(key)), None)
+        if hit is not None:
+            item["reason"] = hit
+            pool.remove(hit)
+    unmatched = [m for m in missed if m["reason"] is None]
+    if unmatched and len(unmatched) == len(pool):
+        for item, r in zip(unmatched, pool):
+            item["reason"] = r
+
+
+def _goal_status_breakdown(state, history_by_opened=None, recent=10):
+    """Per-status goal counts over every goal_completions entry, plus the `recent` latest goals
+    that did not complete, newest first. Statuses are core-normalised strings; older entries
+    hold {goal, status} dicts or are a bare status list. Unknown statuses count as `other`, so
+    the counts sum to `total`. None when there are no completions.
+
+    `history_by_opened` maps a history file's **Opened:** timestamp (the goal_completions key)
+    to its parsed file. It supplies goal text when state has no planned_actions (status i is
+    `## Planned` bullet i, used only when the counts agree) and each goal's reason from
+    `## Incomplete`."""
+    completions = state.get("goal_completions") or {}
+    if not completions:
+        return None
+    history_by_opened = history_by_opened or {}
+    counts = dict.fromkeys(_GOAL_STATUSES + ("other",), 0)
+    not_completed = []
+    for ts, entry in sorted(completions.items()):
+        statuses = entry if isinstance(entry, list) else (entry.get("statuses") or []) if isinstance(entry, dict) else []
+        planned = (entry.get("planned_actions") or []) if isinstance(entry, dict) else []
+        hist = history_by_opened.get(ts) or {}
+        if not planned and len(hist.get("planned") or []) == len(statuses):
+            planned = hist["planned"]
+        missed = []
+        for i, s in enumerate(statuses):
+            status = s.get("status") if isinstance(s, dict) else s
+            goal = s.get("goal") if isinstance(s, dict) else (planned[i] if i < len(planned) else None)
+            key = status if status in _GOAL_STATUSES else "other"
+            counts[key] += 1
+            if key != "completed":
+                missed.append({"date": str(ts)[:10], "status": key, "goal": goal, "reason": None})
+        _match_incomplete_reasons(missed, hist.get("incomplete") or [])
+        not_completed += missed
+    return {"counts": counts, "total": sum(counts.values()), "sessions": len(completions),
+            "not_completed": not_completed[::-1][:recent]}
+
+
 def _goal_by_month(state):
     completions = state.get("goal_completions", {})
     monthly = {}
@@ -1055,7 +1122,7 @@ def _goal_type_by_session(state):
         else:
             exploit = entry.get("total_goals", 0)
             explore = 0
-        result.append({"date": date, "exploit": exploit, "explore": explore})
+        result.append({"date": date, "exploit": exploit, "explore": explore, "typed": bool(types)})
     return result
 
 
@@ -1651,10 +1718,13 @@ def _assemble_namespace_dict(ns_dir, raw):
         date = str(ts)[:10]
         if isinstance(entry, dict):
             completions_by_date[date] = entry.get("hit_rate")
+    history_by_opened = {}
     if history_dir.exists():
         for f in sorted(history_dir.glob("*.md")):
             parsed = _parse_history_file(f)
             if parsed:
+                if parsed["opened"]:
+                    history_by_opened[parsed["opened"]] = parsed
                 carry_forward_trend.append({
                     "date":           f.stem[:10],
                     "carryForward":   len(parsed["incomplete"]),
@@ -1772,6 +1842,8 @@ def _assemble_namespace_dict(ns_dir, raw):
         "watch_signals":             watch_signals,
         "intent_version":            intent_version,
         "stale_bullet_count":        stale_bullet_count,
+        "has_repo_path":             bool(repo_path),
+        "reality_structure_warnings": _check_reality_structure(reality),
         "back_refs_by_text":         back_refs_by_text,
         "conflicts_by_text":         conflicts_by_text,
         "intent_history":            intent_history,
@@ -1789,6 +1861,7 @@ def _assemble_namespace_dict(ns_dir, raw):
         "criteria_hit_rate":         contract_stats["criteria_hit_rate"],
         "decision_guidance":         decision_guidance,
         "goal_type_by_session":      goal_type_by_session,
+        "goal_status_breakdown":     _goal_status_breakdown(state, history_by_opened),
         "carry_forward_trend":       carry_forward_trend,
         "quality_dist":              quality_dist,
         "decay_history":             decay_history,
@@ -2013,6 +2086,7 @@ def _card_html(n, i, community_published=None):
       <div class="card-time">{_e(time_label)}</div>
       <div class="card-intent">{_e(summary)}</div>
       <div class="card-stats">
+        <span class="rate-pill ladder-chip" data-ladder-idx="{i}"></span>
         <span>{n["session_count"]} sessions</span>
         <span>{len(n["learnings"])} learnings</span>
         {rate_html}
@@ -2349,6 +2423,8 @@ _JS_DATA_RENAME_FIELDS = [
     ("watchSignals",               "watch_signals",              {"bootstrapped": False, "signals": [], "total_signals": 0, "empty": True}),
     ("intentVersion",              "intent_version",            _MISSING),
     ("staleBulletCount",           "stale_bullet_count",        _MISSING),
+    ("hasRepoPath",                "has_repo_path",             False),
+    ("realityStructureWarnings",   "reality_structure_warnings", []),
     ("backRefsByText",             "back_refs_by_text",         _MISSING),
     ("conflictsByText",            "conflicts_by_text",         _MISSING),
     ("intentHistory",              "intent_history",            _MISSING),
@@ -2365,6 +2441,7 @@ _JS_DATA_RENAME_FIELDS = [
     ("contractCoverage",           "contract_coverage",          None),
     ("criteriaHitRate",            "criteria_hit_rate",          None),
     ("goalTypeBySession",          "goal_type_by_session",      _MISSING),
+    ("goalStatusBreakdown",        "goal_status_breakdown",     None),
     ("carryForwardTrend",          "carry_forward_trend",       _MISSING),
     ("qualityDist",                "quality_dist",              _MISSING),
     ("decayHistory",               "decay_history",             _MISSING),

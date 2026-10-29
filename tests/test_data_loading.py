@@ -1280,6 +1280,120 @@ class TestFailureDimensionDistribution(unittest.TestCase):
 # Cadence mirrors of compass core (2026-09-30 drift audit)
 # ---------------------------------------------------------------------------
 
+class TestLadderDataFields(unittest.TestCase):
+    """Inputs the maturity ladder needs that were not yet in NS: reality structure (mirrors
+    core's reality._check_reality_structure), hasRepoPath, and a `typed` flag per session."""
+
+    def test_reality_structure_complete(self):
+        md = "# Reality\n## What exists and works\n- a\n## Backlog\n- b\n"
+        self.assertEqual(_mod._check_reality_structure(md), [])
+
+    def test_reality_structure_reports_each_missing_section(self):
+        self.assertEqual(_mod._check_reality_structure("## What exists and works\n"),
+                         ["Missing section: ## Backlog"])
+        self.assertEqual(_mod._check_reality_structure(""),
+                         ["Missing section: ## What exists and works",
+                          "Missing section: ## Backlog"])
+
+    def test_reality_structure_header_match_is_case_and_depth_insensitive(self):
+        self.assertEqual(_mod._check_reality_structure("### what exists and works\n## BACKLOG"), [])
+
+    def test_goal_type_by_session_marks_typed_sessions(self):
+        state = {"goal_completions": {
+            "2026-10-01T10:00:00Z": {"total_goals": 3},
+            "2026-10-02T10:00:00Z": {"total_goals": 2, "types": ["exploit", "explore"]},
+        }}
+        rows = _mod._goal_type_by_session(state)
+        self.assertEqual([r["typed"] for r in rows], [False, True])
+
+    def test_js_data_carries_ladder_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ns_dir = Path(tmp) / "demo"
+            ns_dir.mkdir()
+            (ns_dir / "state.json").write_text(json.dumps({"repo_path": "/somewhere"}))
+            (ns_dir / "reality.md").write_text("## What exists and works\n- a\n")
+            n = _mod.load_namespace(ns_dir)
+            js = json.loads(_mod._js_data([n]))[0]
+        self.assertIs(js["hasRepoPath"], True)
+        self.assertEqual(js["realityStructureWarnings"], ["Missing section: ## Backlog"])
+        self.assertNotIn("/somewhere", json.dumps(js.get("hasRepoPath")))
+
+
+class TestGoalStatusBreakdown(unittest.TestCase):
+    """goal_completions[].statuses as a per-status count plus the recent goals that did not
+    complete (data-model audit Rank 6a). Counts sum to the total; unknown statuses go to other."""
+
+    def test_none_without_completions(self):
+        self.assertIsNone(_mod._goal_status_breakdown({}))
+
+    def test_counts_every_status_and_sum_to_total(self):
+        state = {"goal_completions": {
+            "2026-10-01T10:00:00Z": {"statuses": ["completed", "abandoned", "weird"]},
+            "2026-10-02T10:00:00Z": {"statuses": ["completed", "blocked", "skipped", "partial"]},
+        }}
+        b = _mod._goal_status_breakdown(state)
+        self.assertEqual(b["counts"], {"completed": 2, "partial": 1, "skipped": 1, "blocked": 1,
+                                       "abandoned": 1, "other": 1})
+        self.assertEqual(b["total"], 7)
+        self.assertEqual(b["sessions"], 2)
+
+    def test_not_completed_newest_first_with_goal_text(self):
+        state = {"goal_completions": {
+            "2026-10-01T10:00:00Z": {"statuses": ["abandoned"], "planned_actions": ["Old goal"]},
+            "2026-10-02T10:00:00Z": {"statuses": ["completed", "blocked"],
+                                     "planned_actions": ["Done goal", "Blocked goal"]},
+        }}
+        b = _mod._goal_status_breakdown(state)
+        self.assertEqual(b["not_completed"], [
+            {"date": "2026-10-02", "status": "blocked", "goal": "Blocked goal", "reason": None},
+            {"date": "2026-10-01", "status": "abandoned", "goal": "Old goal", "reason": None},
+        ])
+
+    def test_legacy_shapes(self):
+        state = {"goal_completions": {
+            "2026-06-01T10:00:00Z": ["completed", "abandoned"],
+            "2026-06-02T10:00:00Z": {"statuses": [{"goal": "Dict goal", "status": "skipped"}]},
+        }}
+        b = _mod._goal_status_breakdown(state)
+        self.assertEqual(b["counts"]["abandoned"], 1)
+        self.assertEqual(b["not_completed"][0], {"date": "2026-06-02", "status": "skipped", "goal": "Dict goal", "reason": None})
+        self.assertEqual(b["not_completed"][1]["goal"], None)
+
+    def test_history_supplies_goal_text_and_reason(self):
+        state = {"goal_completions": {
+            "2026-05-13T07:10:51Z": {"statuses": ["completed", "completed", "abandoned"]},
+        }}
+        history = {"2026-05-13T07:10:51Z": {
+            "planned": ["Reality correction", "Graph spike", "Bulk-delete article management UI"],
+            "incomplete": ["Bulk-delete article management UI — deferred by agreement"],
+        }}
+        b = _mod._goal_status_breakdown(state, history)
+        self.assertEqual(b["not_completed"], [{
+            "date": "2026-05-13", "status": "abandoned", "goal": "Bulk-delete article management UI",
+            "reason": "Bulk-delete article management UI — deferred by agreement"}])
+
+    def test_reason_falls_back_to_order_when_counts_match(self):
+        state = {"goal_completions": {"2026-05-13T07:10:51Z": {"statuses": ["blocked", "completed", "skipped"]}}}
+        history = {"2026-05-13T07:10:51Z": {"planned": ["A goal", "B goal", "C goal"],
+                                            "incomplete": ["first reworded — waiting on API", "third reworded"]}}
+        b = _mod._goal_status_breakdown(state, history)
+        self.assertEqual([g["reason"] for g in b["not_completed"]], ["third reworded", "first reworded — waiting on API"])
+
+    def test_history_planned_ignored_when_lengths_differ(self):
+        state = {"goal_completions": {"2026-05-13T07:10:51Z": {"statuses": ["completed", "abandoned"]}}}
+        history = {"2026-05-13T07:10:51Z": {"planned": ["Only one"], "incomplete": []}}
+        b = _mod._goal_status_breakdown(state, history)
+        self.assertEqual(b["not_completed"][0]["goal"], None)
+        self.assertEqual(b["not_completed"][0]["reason"], None)
+
+    def test_not_completed_capped_at_ten(self):
+        state = {"goal_completions": {f"2026-10-{d:02d}T10:00:00Z": {"statuses": ["abandoned"]}
+                                      for d in range(1, 16)}}
+        b = _mod._goal_status_breakdown(state)
+        self.assertEqual(len(b["not_completed"]), 10)
+        self.assertEqual(b["counts"]["abandoned"], 15)
+
+
 class TestCheckDreamDue(unittest.TestCase):
     """Mirrors compass/dream.py::_check_dream_due -- sessions OR corpus_delta, both
     thresholds from config. There is no absolute corpus-size gate upstream."""

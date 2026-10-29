@@ -1,6 +1,9 @@
 # Maturity-ladder scorecard with catalogue completeness: design note
 
-**Status:** adopted 2026-10-27; build scheduled for the next session (Tactical backlog). Open questions decided below.
+**Status:** built 2026-10-29 (`LADDER`/`ladderLevel()` in `template.html`). One change from the table
+below: the reality-structure check (P17 sections) is an L2 check, and L1 only needs `reality.md` to be
+non-empty. At L1 it put 8 of 14 namespaces at L0, most of them dormant ones that predate the
+2026-07-29 `## Backlog` rename.
 **Date:** 2026-10-23 · **Source:** compass-dashboard session 2026-10-23 (goal 5, explore), from two
 research signals in reality.md: scorecards move from one score to a maturity-level ladder; portals
 track catalogue completeness (missing metadata, missing ownership) as a metric.
@@ -127,9 +130,11 @@ Amendments from `catalogue-completeness-spike.md`, accepted the same day:
 5. **Each check returns pass, fail or N/A. "No data" is a fail with its own reason. N/A means only
    that `applies(ns)` is false.** With zone N/A for namespaces with no learnings since the ship date,
    three dormant namespaces ranked L3, above `compass` (L2).
-6. **`global` has its own profile.** The session-count and repo checks are N/A for the namespace
-   `global` (named, not inferred). Before the build, check its `repo_path` (`be-hkjc-mono`; it looks
-   stale).
+6. **`global` has its own profile.** The session-count check is N/A for the namespace `global`
+   (named, not inferred). *Amended 2026-10-29:* the repo checks apply to `global`. Its `repo_path`
+   (`be-hkjc-mono`) is not stale: the repo exists, has a `CLAUDE.md`, has had 3,083 commits since
+   2026-04-01, and matches `global`'s intent (HKJC ATS). So `repo_path` and `CLAUDE.md` pass and
+   `code_context.md` fails. The "no repo" premise in the live-data findings above was wrong.
 
 Effort changes to about 4 h: add about 20 min for the Overview chip.
 

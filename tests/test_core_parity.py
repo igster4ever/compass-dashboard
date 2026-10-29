@@ -95,6 +95,11 @@ class TestCoreParity(unittest.TestCase):
             self.assertEqual(dash._stale_bullet_count(md, state),
                              len(core["reality"]._get_stale_bullets(md, state)))
 
+    def test_reality_structure(self):
+        for name, _, _, _, md in self._each():
+            self.assertEqual(dash._check_reality_structure(md),
+                             core["reality"]._check_reality_structure(md))
+
     def test_reality_compaction_due(self):
         for name, _, state, config, md in self._each():
             ours = dash._check_reality_compaction_due(md, state, config)

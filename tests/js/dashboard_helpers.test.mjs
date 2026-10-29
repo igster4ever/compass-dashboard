@@ -58,8 +58,8 @@ function extractConst(name) {
   return html.slice(start, i + 1);
 }
 
-const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'globalVisibleNames', 'visibleNS', 'renderCompare', 'deriveTasks', 'renderDecisionGuidance', 'renderDecisions', 'detailTabs', 'decisionsTabLabel'];
-const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES', 'NS_PALETTE', 'COMPARE_AXIS_DEFS', 'GLOBAL_NS_KEY'];
+const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'globalVisibleNames', 'visibleNS', 'renderCompare', 'deriveTasks', 'renderDecisionGuidance', 'renderDecisions', 'detailTabs', 'decisionsTabLabel', 'ladderLevel', 'renderStateSection_GoalStatuses', 'goalStatusHeadline'];
+const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES', 'NS_PALETTE', 'COMPARE_AXIS_DEFS', 'GLOBAL_NS_KEY', 'ZONE_SHIP_DATE', 'LADDER'];
 // A minimal in-memory localStorage — radarActiveAxes() reads it; no test here
 // relies on cross-call persistence, so a single shared instance is fine.
 const localStorageShim = `
@@ -414,4 +414,155 @@ test('renderDecisions() still renders guidance when there are no decisions', () 
   assert.ok(html.indexOf('Guidance only pair') < html.indexOf('No decisions logged'));
   const none = helpers.renderDecisions({ decisions: [] });
   assert.ok(!none.includes('guidance-item'));
+});
+
+// ── Maturity ladder (docs/backlog/maturity-ladder-scorecard-design-note.md) ──
+
+function matureNs(over = {}) {
+  return {
+    namespace: 'ns-x',
+    intent: '# Intent\nDo the thing',
+    reality: '## What exists and works\n- a\n## Backlog\n- b',
+    realityStructureWarnings: [],
+    sessionCount: 6,
+    hasRepoPath: true,
+    claudeReviewStatus: { claude_md_files: { 'CLAUDE.md': 1200 } },
+    codeContext: '## Last updated: 2026-10-01',
+    learnings: [
+      { tags: ['a'], date: '2026-08-01T00:00:00Z', zone: 'golden' },
+      { tags: ['b'], date: '2026-09-01T00:00:00Z' },
+      { tags: ['c'], date: '2026-05-01T00:00:00Z' },
+    ],
+    goalTypeBySession: [1, 2, 3, 4, 5].map(i => ({ date: `2026-10-0${i}`, typed: true })),
+    decisions: [{}],
+    contracts: [{}, {}, {}, {}, {}],
+    outcomeRate: 0.5,
+    staleBulletCount: 0,
+    ...over,
+  };
+}
+
+const failing = r => r.checks.filter(c => c.status === 'fail').map(c => c.id);
+
+test('ladderLevel(): a namespace passing every check is L4 at 100%', () => {
+  const r = helpers.ladderLevel(matureNs());
+  assert.equal(r.level, 4);
+  assert.equal(r.completeness, 100);
+  assert.deepEqual(r.next, []);
+});
+
+test('ladderLevel(): an empty namespace is L0, and no data fails with a reason, never N/A', () => {
+  const r = helpers.ladderLevel({ namespace: 'empty' });
+  assert.equal(r.level, 0);
+  assert.equal(r.checks.filter(c => c.status === 'na').length, 0);
+  const zone = r.checks.find(c => c.id === 'zone');
+  assert.equal(zone.status, 'fail');
+  assert.match(zone.reason, /no learnings since 2026-07-05/);
+  assert.equal(r.checks.find(c => c.id === 'outcome').status, 'fail');
+});
+
+test('ladderLevel(): level is the highest tier with every lower tier passing; completeness counts all tiers', () => {
+  const r = helpers.ladderLevel(matureNs({ codeContext: '' }));
+  assert.equal(r.level, 1);
+  assert.deepEqual(failing(r), ['code_context']);
+  assert.equal(r.completeness, Math.round((r.applicable - 1) / r.applicable * 100));
+  assert.deepEqual(r.next.map(c => c.id), ['code_context']);
+});
+
+test('ladderLevel(): next lists only the failing checks one tier up', () => {
+  const r = helpers.ladderLevel(matureNs({ decisions: [], contracts: [] }));
+  assert.equal(r.level, 2);
+  assert.deepEqual(r.next.map(c => c.id), ['decision']);
+});
+
+test('ladderLevel(): global has the session-count check N/A, and its repo checks still apply', () => {
+  const r = helpers.ladderLevel(matureNs({ namespace: 'global', sessionCount: 1, hasRepoPath: false }));
+  assert.equal(r.checks.find(c => c.id === 'sessions').status, 'na');
+  assert.equal(r.checks.find(c => c.id === 'repo_path').status, 'fail');
+  assert.equal(r.applicable, r.checks.length - 1);
+});
+
+test('ladderLevel(): zone counts only learnings dated on or after the ship date', () => {
+  // 1 of 2 post-ship learnings is zoned = 50%: passes. The pre-ship one is ignored.
+  assert.equal(helpers.ladderLevel(matureNs()).checks.find(c => c.id === 'zone').status, 'pass');
+  const r = helpers.ladderLevel(matureNs({ learnings: [
+    { tags: ['a'], date: '2026-08-01T00:00:00Z' },
+    { tags: ['b'], date: '2026-09-01T00:00:00Z' },
+    { tags: ['c'], date: '2026-05-01T00:00:00Z', zone: 'golden' },
+  ] }));
+  const zone = r.checks.find(c => c.id === 'zone');
+  assert.equal(zone.status, 'fail');
+  assert.match(zone.reason, /0 of 2/);
+});
+
+test('ladderLevel(): untagged learnings fail at L3 and reality structure warnings at L2, with reasons', () => {
+  const r = helpers.ladderLevel(matureNs({
+    learnings: [{ tags: [], date: '2026-08-01', zone: 'golden' }, { tags: ['x'], date: '2026-08-01', zone: 'golden' }],
+    realityStructureWarnings: ['Missing section: ## Backlog'],
+  }));
+  assert.match(r.checks.find(c => c.id === 'tagged').reason, /1 of 2 untagged/);
+  assert.equal(r.checks.find(c => c.id === 'reality').status, 'pass');
+  assert.match(r.checks.find(c => c.id === 'reality_sections').reason, /Missing section: ## Backlog/);
+  assert.equal(r.level, 1);
+});
+
+test('ladderLevel(): goal types need 3 of the last 5 sessions typed', () => {
+  const gt = flags => flags.map((typed, i) => ({ date: `2026-10-0${i + 1}`, typed }));
+  const status = flags => helpers.ladderLevel(matureNs({ goalTypeBySession: gt(flags) }))
+    .checks.find(c => c.id === 'goal_types').status;
+  assert.equal(status([true, true, true, false, false, false, false, false]), 'fail');
+  assert.equal(status([false, false, true, true, true]), 'pass');
+  assert.equal(status([true, true]), 'fail');
+  assert.match(helpers.ladderLevel(matureNs({ goalTypeBySession: [] })).checks.find(c => c.id === 'goal_types').reason, /no goal records/);
+});
+
+test('ladderLevel(): outcome rate and stale bullets gate L4', () => {
+  assert.match(helpers.ladderLevel(matureNs({ outcomeRate: null })).checks.find(c => c.id === 'outcome').reason,
+    /no goal-outcome links/);
+  assert.equal(helpers.ladderLevel(matureNs({ outcomeRate: 0.29 })).level, 3);
+  assert.equal(helpers.ladderLevel(matureNs({ staleBulletCount: 2 })).level, 3);
+});
+
+// ── Goal status breakdown (data-model audit Rank 6a) ──
+
+const gsb = {
+  counts: { completed: 8, partial: 0, skipped: 1, blocked: 0, abandoned: 1, other: 0 },
+  total: 10, sessions: 3,
+  not_completed: [
+    { date: '2026-10-02', status: 'abandoned', goal: 'Ship <b>it</b>', reason: 'Ship <b>it</b> — waiting on <API>' },
+    { date: '2026-10-01', status: 'skipped', goal: null, reason: null },
+    { date: '2026-09-30', status: 'blocked', goal: 'Other goal', reason: 'Reworded entirely' },
+  ],
+};
+
+test('renderStateSection_GoalStatuses(): empty without data', () => {
+  assert.equal(helpers.renderStateSection_GoalStatuses({}), '');
+  assert.equal(helpers.renderStateSection_GoalStatuses({ goalStatusBreakdown: { ...gsb, total: 0 } }), '');
+});
+
+test('renderStateSection_GoalStatuses(): shows each non-zero status and the recent non-completed goals, escaped', () => {
+  const html = helpers.renderStateSection_GoalStatuses({ goalStatusBreakdown: gsb });
+  assert.match(html, /8 completed/);
+  assert.match(html, /1 abandoned/);
+  assert.match(html, /1 skipped/);
+  assert.doesNotMatch(html, /0 blocked/);
+  assert.match(html, /Ship &lt;b&gt;it&lt;\/b&gt;/);
+  assert.match(html, /goal text not recorded/);
+  // The restated goal is stripped from the reason; a reworded reason is shown whole.
+  assert.match(html, /<div class="gs-why">waiting on &lt;API&gt;<\/div>/);
+  assert.match(html, /<div class="gs-why">Reworded entirely<\/div>/);
+  // A shortened restatement before the dash still counts as the goal.
+  const short = helpers.renderStateSection_GoalStatuses({ goalStatusBreakdown: { ...gsb, not_completed: [
+    { date: '2026-09-29', status: 'abandoned', goal: 'Bulk-delete UI — panel for deleting articles', reason: 'Bulk-delete UI — deferred by agreement' },
+    { date: '2026-09-28', status: 'abandoned', goal: 'Exact goal', reason: 'Exact goal' },
+    { date: '2026-09-27', status: 'skipped', goal: 'Session H — Freshness strip', reason: 'Freshness strip' },
+  ] } });
+  assert.match(short, /<div class="gs-why">deferred by agreement<\/div>/);
+  assert.equal((short.match(/gs-why/g) || []).length, 1);
+});
+
+test('goalStatusHeadline(): counts goals that did not complete', () => {
+  assert.equal(helpers.goalStatusHeadline({ goalStatusBreakdown: gsb }), '2 of 10 goals not completed');
+  assert.equal(helpers.goalStatusHeadline({ goalStatusBreakdown: { ...gsb, counts: { completed: 10 }, total: 10 } }), 'all 10 goals completed');
+  assert.equal(helpers.goalStatusHeadline({}), '');
 });

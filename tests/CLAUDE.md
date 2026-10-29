@@ -13,6 +13,7 @@ Run `python3 -m pytest tests/ -q` **and** `node --test tests/js/` before calling
 | `test_integration_pipeline.py` | End-to-end: on-disk synthetic namespace → `load_namespace()` → `_js_data()`/`generate()` |
 | `test_claude_md_budget.py` | Each rules file (root, `scripts/`, `tests/` CLAUDE.md, `docs/claude/views.md`) under 20KB; every pre-split section in exactly one file; root links each nested file; `scripts/CLAUDE.md` points to `views.md` |
 | `test_core_parity.py` | Imports compass core; asserts every dashboard mirror matches it on all live namespaces (skips when absent) |
+| `test_surface_inventory.py` | Every state key, history/learning entry key and loop file core writes (from core source + live data) is read by the dashboard or in `IGNORED` with a reason (skips when absent) |
 | `js/dashboard_helpers.test.mjs` | Pure JS helpers extracted from `template.html` by brace-matching (`extractFunction()` — mind its default-parameter gotcha); add new pure helpers to `PURE_HELPERS` |
 | `js/render_smoke.test.mjs` | Runs the whole `<script>` IIFE in `node:vm` against a hand-rolled DOM stub and `js/fixtures/dashboard_fixture.json`; calls every view/sub-tab entrypoint and asserts "does not throw" |
 
