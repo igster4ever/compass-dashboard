@@ -25,6 +25,9 @@ Run `python3 -m pytest tests/ -q` **and** `node --test tests/js/` before calling
   parent's `innerHTML` is invisible to `getElementById`/`querySelectorAll`. Assert content only
   on elements whose `innerHTML` is set directly; otherwise assert "does not throw" and verify by
   hand in a real browser.
+- **Agent browsers can't open `file://`.** Neither the desktop app's built-in browser pane nor
+  Claude in Chrome loads a `file://` page, so a `file://` check (e.g. `--watch` reload) needs the
+  user to open the page; serving it over http is a substitute, but it doesn't test `file://`.
 - **New `_js_data()` fields use `n.get("field")`, never `n["field"]`** — fixture dicts don't
   carry every key.
 - **Assert on rendered content, not CSS class names** — a class name appears in the `<style>`
