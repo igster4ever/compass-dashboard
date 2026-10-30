@@ -100,17 +100,6 @@ class TestCoreParity(unittest.TestCase):
             self.assertEqual(dash._check_reality_structure(md),
                              core["reality"]._check_reality_structure(md))
 
-    def test_reality_compaction_due(self):
-        for name, _, state, config, md in self._each():
-            ours = dash._check_reality_compaction_due(md, state, config)
-            theirs = core["reality"]._check_reality_compaction_due(md, state, config)
-            self.assertEqual({k: ours[k] for k in theirs}, theirs)
-
-    def test_compaction_eligible_count(self):
-        for name, _, state, config, md in self._each():
-            self.assertEqual(dash._compaction_eligible_count(md, state, config),
-                             len(core["reality"]._find_compaction_candidates(md, state, config)))
-
     def test_normalise_validation_entry(self):
         for name, _, state, _, _ in self._each():
             for h, raw in state.get("reality_validation", {}).items():
@@ -179,14 +168,6 @@ class TestCoreParity(unittest.TestCase):
                 dash._check_assumption_audit_due(state, config, _read_jsonl(d / "learnings.jsonl"))[0],
                 core["orient"]._check_assumption_audit_due(state, config)["due"])
 
-    def test_quality_plateau(self):
-        for name, _, state, _, _ in self._each():
-            ours = dash._check_quality_plateau(state.get("quality_history", []))
-            theirs = core["state"]._get_quality_plateau_signal(state)
-            self.assertEqual(ours["plateaued"], theirs["plateaued"])
-
-    # ── corpus / goal statistics ────────────────────────────────────────────
-
     def test_confidence_calibration(self):
         for name, d, _, _, _ in self._each():
             learnings = _read_jsonl(d / "learnings.jsonl")
@@ -207,13 +188,6 @@ class TestCoreParity(unittest.TestCase):
             self.assertEqual([d["rate"] for d in dots], [int(r) for r in trend["trend"]])
             if trend["sessions"]:
                 self.assertEqual(rate, int(trend["latest_hit_rate"]))
-
-    def test_cadence_pull_forward(self):
-        # Core computes this inline while building the ORIENT context, so that is the oracle.
-        for name, d, state, _, _ in self._each():
-            ctx = core["orient"]._build_orient_context(d, name)
-            self.assertEqual(dash.load_namespace(d)["cadence_pull_forward"],
-                             ctx["cadence_pull_forward"])
 
     def test_contract_coverage(self):
         for name, _, state, _, _ in self._each():

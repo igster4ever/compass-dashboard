@@ -150,8 +150,8 @@ class TestFullPipelineRealLoadNamespace(unittest.TestCase):
             "codeReviewDeferCount", "researchDeferCount", "artefacts", "skillFeedback",
             "failureDimensionDistribution", "sessionsSinceSkillOpt", "skillOptDue",
             "qualityHistory", "skilloptHoldoutFrozen", "skilloptHoldoutMean",
-            "skilloptRoundsCompleted", "skilloptRwi", "qualityPlateau",
-            "cadencePullForward", "skillOptFrictionGate", "assumptionAuditDue",
+            "skilloptRoundsCompleted", "skilloptRwi",
+            "skillOptFrictionGate", "assumptionAuditDue",
             "assumptionAuditCandidates", "claudeReviewDue", "dreamDeferCount",
             "complexityClusteringSignals", "mindmap",
         }

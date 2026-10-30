@@ -471,59 +471,6 @@ def _normalise_validation_entry(raw):
     return {"verified_at": raw, "confidence": 1.0, "times_verified": 1, "first_verified_at": raw}
 
 
-def _check_reality_compaction_due(reality_md, state, config):
-    """Reality-compaction cadence. Mirrors compass/reality.py's
-    _check_reality_compaction_due(): OR gate of `reality_compaction_interval_sessions`
-    (default 8) and a '## What exists and works' bullet count of at least
-    `reality_compaction_size_threshold` (default 120). `pulled_forward_by_size` is
-    dashboard-only: due by size while the session cadence alone is not."""
-    sessions_since = state.get("sessions_since_reality_compaction", 0)
-    interval = int(config.get("reality_compaction_interval_sessions", 8))
-    bullet_count = len(_parse_section_bullets(reality_md, "## What exists and works"))
-    size_threshold = int(config.get("reality_compaction_size_threshold", 120))
-    cadence_due = sessions_since >= interval
-    by_size = bullet_count >= size_threshold
-    return {
-        "due": cadence_due or by_size,
-        "sessions_since_reality_compaction": sessions_since,
-        "interval_sessions": interval,
-        "last_reality_compaction_at": state.get("last_reality_compaction_at"),
-        "bullet_count": bullet_count,
-        "size_threshold": size_threshold,
-        "pulled_forward_by_size": by_size and not cadence_due,
-    }
-
-
-def _compaction_eligible_count(reality_md, state, config):
-    """How many '## What exists and works' bullets a steady-state compaction pass would
-    archive now. Mirrors compass/reality.py's _find_compaction_candidates() (bootstrap=False):
-    times_verified >= `reality_compaction_min_verifications` (default 3) and
-    first_verified_at at least `reality_compaction_min_age_days` (default 90) whole days old.
-    An unverified bullet is a staleness case, never a candidate."""
-    validation = state.get("reality_validation", {})
-    min_verifications = int(config.get("reality_compaction_min_verifications", 3))
-    min_age_days = int(config.get("reality_compaction_min_age_days", 90))
-    now = _now_utc()
-    count = 0
-    for bullet_hash, _ in _parse_section_bullets(reality_md, "## What exists and works"):
-        raw = validation.get(bullet_hash)
-        if raw is None:
-            continue
-        entry = _normalise_validation_entry(raw)
-        if entry["times_verified"] < min_verifications:
-            continue
-        first = _parse_iso(entry["first_verified_at"])
-        if first and (now - first).days >= min_age_days:
-            count += 1
-    return count
-
-
-def _reality_archive_count(archive_md):
-    """Bullets compaction has moved to reality_archive.md. Each archived bullet is one
-    top-level '- ' line; its '(archived_at: ...)' provenance line is indented beneath it."""
-    return sum(1 for line in archive_md.splitlines() if line.startswith("- "))
-
-
 def _verification_durability(reality_md, state):
     """How durable reality verification is across the bullets currently in reality.md
     (the same set _stale_bullet_count scans): `{verified, reverified, max_times,
@@ -1428,55 +1375,6 @@ def _check_assumption_audit_due(state, config, learnings):
     return due, candidates
 
 
-def _check_quality_plateau(quality_history):
-    """P61b: quality-plateau signal — mirrors compass/state.py's
-    _get_quality_plateau_signal() (window=3, ±0.03 threshold).
-    """
-    window = 3
-    if len(quality_history) < window:
-        return {"plateaued": False, "insufficient_sample": True, "sessions_checked": len(quality_history)}
-    recent = quality_history[-window:]
-    scores = [e.get("score", 0) for e in recent]
-    delta = scores[-1] - scores[0]
-    if delta < -0.03:
-        trend = "declining"
-    elif delta <= 0.03:
-        trend = "flat"
-    else:
-        trend = "improving"
-    return {
-        "plateaued":           trend in ("flat", "declining"),
-        "insufficient_sample": False,
-        "sessions_checked":    window,
-        "trend":               trend,
-        "delta":               round(delta, 3),
-    }
-
-
-def _check_cadence_pull_forward(quality_plateau, repo_path, code_review_due, state,
-                                 review_interval, skill_opt_due, sessions_since_skill_opt,
-                                 skill_opt_interval=10):
-    """P61b cadence pull-forward advisory — mirrors compass/_monolith.py's
-    cadence_pull_forward gating (~line 1200-1215). Advisory only — never mutates
-    sessions_since_review/sessions_since_skill_opt.
-    """
-    pull_forward = {"review": False, "skill_opt": False}
-    if not quality_plateau["plateaued"]:
-        return pull_forward
-    if (
-        bool(repo_path)
-        and not code_review_due
-        and state.get("sessions_since_review", 0) >= max(review_interval - 2, 1)
-    ):
-        pull_forward["review"] = True
-    if (
-        not skill_opt_due
-        and sessions_since_skill_opt >= max(skill_opt_interval - 2, 1)
-    ):
-        pull_forward["skill_opt"] = True
-    return pull_forward
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Live strip: a baked `pulse` object per namespace
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1557,12 +1455,6 @@ def _pulse_cadences(state, config, reality_md, claude_md_size):
             and not due and since >= int(config.get("claude_review_size_min_sessions", 2))):
         due = True
     out.append(("claude_review", since, interval, due))
-
-    since, interval, due = base("sessions_since_reality_compaction",
-                                "reality_compaction_interval_sessions", 8)
-    bullets = len(_parse_section_bullets(reality_md, "## What exists and works"))
-    due = due or bullets >= int(config.get("reality_compaction_size_threshold", 120))
-    out.append(("reality_compaction", since, interval, due))
 
     return [{"name": n, "sessions_since": s, "interval_sessions": i, "due": bool(d)}
             for n, s, i, d in out]
@@ -1676,7 +1568,6 @@ def _read_namespace_files(ns_dir):
             _l["confidence"] = _normalize_confidence(_l["confidence"])
     decisions    = _read_jsonl(ns_dir / "decisions.jsonl", problems)
     code_context = _read_file(ns_dir / "code_context.md")
-    reality_archive = _read_file(ns_dir / "reality_archive.md")
     config       = _read_json(ns_dir / "config.json", problems)
 
     history_dir   = ns_dir / "history"
@@ -1753,7 +1644,6 @@ def _read_namespace_files(ns_dir):
         "learnings":               learnings,
         "decisions":               decisions,
         "code_context":            code_context,
-        "reality_archive":         reality_archive,
         "config":                  config,
         "history_dir":             history_dir,
         "history_files":           history_files,
@@ -1855,12 +1745,6 @@ def _assemble_namespace_dict(ns_dir, raw):
     intent_version     = state.get("intent_versions", 1)
     stale_bullet_count = _stale_bullet_count(reality, state)
     verification_durability = _verification_durability(reality, state)
-    reality_compaction_status = _check_reality_compaction_due(reality, state, config)
-    reality_compaction_status["eligible_count"] = _compaction_eligible_count(reality, state, config)
-    reality_compaction_status["archived_count"] = _reality_archive_count(raw.get("reality_archive") or "")
-    reality_compaction_status["archive_path"] = (
-        str(ns_dir / "reality_archive.md") if raw.get("reality_archive") else None
-    )
     corpus_health      = _corpus_health(active_learnings, superseded_count)
     zone_distribution  = _zone_distribution(active_learnings)
     confidence_calibration = _compute_confidence_calibration(all_learnings)
@@ -1932,12 +1816,6 @@ def _assemble_namespace_dict(ns_dir, raw):
     holdout_scores           = [holdout_score_map[s] for s in holdout_session_ids if s in holdout_score_map]
     holdout_mean             = round(sum(holdout_scores) / len(holdout_scores), 3) if holdout_scores else None
 
-    # P61b: quality-plateau signal + cadence pull-forward advisory
-    quality_plateau = _check_quality_plateau(quality_history)
-    cadence_pull_forward = _check_cadence_pull_forward(
-        quality_plateau, repo_path, code_review_due, state,
-        review_interval, skill_opt_due, sessions_since_skill_opt, skill_opt_interval,
-    )
 
     artefacts          = raw["artefacts"]
     decision_guidance  = raw["decision_guidance"]
@@ -2043,15 +1921,12 @@ def _assemble_namespace_dict(ns_dir, raw):
         "skillopt_holdout_mean":      holdout_mean,
         "skillopt_rounds_completed":  len(skillopt_rounds),
         "skillopt_rwi":               skillopt_rwi,
-        "quality_plateau":            quality_plateau,
-        "cadence_pull_forward":       cadence_pull_forward,
         "skill_opt_friction_gate":    skill_opt_friction_gate,
         "assumption_audit_due":         assumption_audit_due,
         "assumption_audit_candidates": assumption_audit_candidates,
         "claude_review_due":          claude_review_due,
         "claude_review_status":       claude_review_status,
         "verification_durability":    verification_durability,
-        "reality_compaction_status":  reality_compaction_status,
         "dream_defer_count":          dream_defer_count,
         "complexity_clustering_signals": complexity_clustering_signals,
         "pulse":                      _build_pulse(ns_dir.name, raw),
@@ -2639,8 +2514,6 @@ _JS_DATA_RENAME_FIELDS = [
     ("skilloptHoldoutMean",        "skillopt_holdout_mean",     _MISSING),
     ("skilloptRoundsCompleted",    "skillopt_rounds_completed", _MISSING),
     ("skilloptRwi",                "skillopt_rwi",              _MISSING),
-    ("qualityPlateau",             "quality_plateau",            None),
-    ("cadencePullForward",         "cadence_pull_forward",       None),
     ("skillOptFrictionGate",       "skill_opt_friction_gate",    None),
     ("assumptionAuditDue",         "assumption_audit_due",       False),
     ("assumptionAuditCandidates",  "assumption_audit_candidates", []),
@@ -2651,7 +2524,6 @@ _JS_DATA_RENAME_FIELDS = [
     }),
     ("dreamDeferCount",            "dream_defer_count",          0),
     ("verificationDurability",     "verification_durability",    None),
-    ("realityCompactionStatus",    "reality_compaction_status",  None),
     ("complexityClusteringSignals", "complexity_clustering_signals", []),
     ("pulse",                      "pulse",                      None),
 ]
@@ -2727,8 +2599,6 @@ def _js_data(namespaces):
     raw = json.dumps(data, ensure_ascii=False, default=str)
     # Prevent </script> from breaking the embedding
     return raw.replace("</script>", r"<\/script>").replace("<!--", r"<\!--")
-
-
 
 
 # ─────────────────────────────────────────────────────────────────────────────

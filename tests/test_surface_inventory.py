@@ -83,6 +83,7 @@ IGNORED = {
         "SKILL.md": _NOT_LOOP_FILE,
         "skill.md": _NOT_LOOP_FILE,
         "readme.md": _NOT_LOOP_FILE,
+        "code-review-agent.md": "core prompt template under scripts/prompts, not a loop file",
         "agents.md": _NOT_LOOP_FILE,
         "changelog.md": _NOT_LOOP_FILE,
         "package.json": _NOT_LOOP_FILE,

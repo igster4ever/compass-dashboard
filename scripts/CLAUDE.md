@@ -118,9 +118,8 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
 - **Mirrored compass-core logic:** `_COMPLETION_MARKERS`, `_BACKLOG_HEADERS`,
   `_NON_ACHIEVEMENT_HEADERS`, `_reality_completeness()` (section-aware P22), `_check_reality_structure()` (P17), `_iter_reality_bullets()`,
   `_stale_bullet_count()` (whole-day threshold), `_parse_section_bullets()`,
-  `_normalise_validation_entry()`, `_check_reality_compaction_due()`,
-  `_compaction_eligible_count()` (steady-state only), `_contract_coverage()`,
-  `_suggested_goal_count()` (trailing FIVE sessions, as core's trend), `_check_cadence_pull_forward()`,
+  `_normalise_validation_entry()`, `_contract_coverage()`,
+  `_suggested_goal_count()` (trailing FIVE sessions, as core's trend),
   `_compute_confidence_calibration()`, and the cadence gates `_check_dream_due()`,
   `_check_claude_review_due()` (per-file budget over every rules file `_claude_md_files()` finds by core's convention scan, shared with the pulse), research/code-review/skill-opt due
   are local copies of `~/.claude/skills/compass/scripts/compass/*.py` (can't import —
@@ -136,8 +135,8 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
   `compass/docs/roadmap-status.md` as the index; it lags the code.
 - **Computed-at-read-time fields:** some compass fields are computed fresh in compass's `read()`
   and never persisted (`dream_due`, `exploration_ratio` — stored as `None`,
-  `quality_plateau`/`cadence_pull_forward`, the `skill_opt` friction gate,
-  `claude_review_status.pulled_forward_by_size`, reality-compaction-due, P78
+  the `skill_opt` friction gate,
+  `claude_review_status.pulled_forward_by_size`, P78
   contradiction warnings). Grep the compass
   source for how a field is produced before wiring a plain `state.get(...)`; replicate the
   derivation if it isn't persisted.
