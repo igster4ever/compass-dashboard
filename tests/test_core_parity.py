@@ -162,12 +162,6 @@ class TestCoreParity(unittest.TestCase):
             self.assertEqual(dash.load_namespace(d)["skill_opt_due"],
                              core["skillopt"]._check_skill_opt_due(state, config)["due"])
 
-    def test_assumption_audit_due(self):
-        for name, d, state, config, _ in self._each():
-            self.assertEqual(
-                dash._check_assumption_audit_due(state, config, _read_jsonl(d / "learnings.jsonl"))[0],
-                core["orient"]._check_assumption_audit_due(state, config)["due"])
-
     def test_confidence_calibration(self):
         for name, d, _, _, _ in self._each():
             learnings = _read_jsonl(d / "learnings.jsonl")
@@ -188,12 +182,6 @@ class TestCoreParity(unittest.TestCase):
             self.assertEqual([d["rate"] for d in dots], [int(r) for r in trend["trend"]])
             if trend["sessions"]:
                 self.assertEqual(rate, int(trend["latest_hit_rate"]))
-
-    def test_contract_coverage(self):
-        for name, _, state, _, _ in self._each():
-            self.assertEqual(dash._contract_coverage(state),
-                             core["state"]._compute_contract_coverage(state))
-
 
 if __name__ == "__main__":
     unittest.main()

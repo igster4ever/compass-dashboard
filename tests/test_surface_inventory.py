@@ -43,7 +43,6 @@ IGNORED = {
         "goal_types": "per-session types already reach the dashboard via goal_completions",
         "prompt_tally": "prompt-count instrumentation for core's own overhead metric",
         "prompt_screens": "prompt-count instrumentation for core's own overhead metric",
-        "pending_raw_impulse": "transient: held between open and close, then moved to cycle_history",
         "last_backlog_match": "transient: written at close-prepare, popped at close-apply",
         "declined_opportunities": "core-side suppression list for skill-opportunity prompts",
         "session_command_count": "loop-overhead counter; cycle_history carries the per-session value",
@@ -74,7 +73,6 @@ IGNORED = {
         "superseded_reason": "superseded rows are filtered out by the active filter",
     },
     "files": {
-        "impulses.jsonl": f"{_UNREAD_AUDIT} Rank 5 (P74)",
         "learning_applications.jsonl": f"{_UNREAD_AUDIT} Rank 5 (P64)",
         "section_loads.jsonl": f"{_UNREAD_AUDIT} Rank 7 (loop root, not per namespace)",
         "skill_edit_rejections.jsonl": "SkillOpt-internal rejection log",

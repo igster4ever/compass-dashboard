@@ -1447,8 +1447,6 @@ def _pulse_cadences(state, config, reality_md, claude_md_size):
     out.append(("dream", since, interval, due))
 
     out.append(("skill_opt", *base("sessions_since_skill_opt", "skill_opt_interval_sessions", 10)))
-    out.append(("assumption_audit",
-                *base("sessions_since_assumption_audit", "assumption_audit_interval_sessions", 10)))
 
     since, interval, due = base("sessions_since_claude_review", "claude_review_interval_sessions", 15)
     if (claude_md_size is not None and claude_md_size > int(config.get("claude_md_size_budget_bytes", 20000))
