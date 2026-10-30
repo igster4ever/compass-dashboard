@@ -58,8 +58,8 @@ function extractConst(name) {
   return html.slice(start, i + 1);
 }
 
-const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'globalVisibleNames', 'visibleNS', 'renderCompare', 'deriveTasks', 'renderDecisionGuidance', 'renderDecisions', 'detailTabs', 'decisionsTabLabel', 'ladderLevel', 'renderStateSection_GoalStatuses', 'goalStatusHeadline'];
-const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES', 'NS_PALETTE', 'COMPARE_AXIS_DEFS', 'GLOBAL_NS_KEY', 'ZONE_SHIP_DATE', 'LADDER'];
+const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'globalVisibleNames', 'visibleNS', 'renderCompare', 'deriveTasks', 'renderDecisionGuidance', 'renderDecisions', 'detailTabs', 'decisionsTabLabel', 'ladderLevel', 'renderStateSection_GoalStatuses', 'goalStatusHeadline', '_complexityProbeErrors', 'renderStateSection_DataProblems', 'renderStateSection_BacklogMatch', 'backlogMatchHeadline', '_cadenceLastRun', '_cooldownOverrides'];
+const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES', 'NS_PALETTE', 'COMPARE_AXIS_DEFS', 'GLOBAL_NS_KEY', 'ZONE_SHIP_DATE', 'LADDER', 'CADENCE_LAST_RUN_LABELS'];
 // A minimal in-memory localStorage — radarActiveAxes() reads it; no test here
 // relies on cross-call persistence, so a single shared instance is fine.
 const localStorageShim = `
@@ -565,4 +565,60 @@ test('goalStatusHeadline(): counts goals that did not complete', () => {
   assert.equal(helpers.goalStatusHeadline({ goalStatusBreakdown: gsb }), '2 of 10 goals not completed');
   assert.equal(helpers.goalStatusHeadline({ goalStatusBreakdown: { ...gsb, counts: { completed: 10 }, total: 10 } }), 'all 10 goals completed');
   assert.equal(helpers.goalStatusHeadline({}), '');
+});
+
+test('_complexityProbeErrors(): names each failed git probe, escaped; empty otherwise', () => {
+  assert.equal(helpers._complexityProbeErrors(undefined), '');
+  assert.equal(helpers._complexityProbeErrors({ complexity_signal: { errors: {} } }), '');
+  assert.equal(helpers._complexityProbeErrors({}), '');
+  const html = helpers._complexityProbeErrors({ complexity_signal: { errors: {
+    lines_changed: 'timeout after 10s', new_files: "exit 128: fatal: not a git repository <x>" } } });
+  assert.match(html, /complexity probe failed \(lines_changed: timeout after 10s; new_files: exit 128: fatal: not a git repository &lt;x&gt;\)/);
+});
+
+test('renderStateSection_DataProblems(): lists each corrupt file, escaped; empty without problems', () => {
+  assert.equal(helpers.renderStateSection_DataProblems({}), '');
+  assert.equal(helpers.renderStateSection_DataProblems({ dataProblems: [] }), '');
+  const html = helpers.renderStateSection_DataProblems({ dataProblems: [
+    { file: 'learnings.jsonl', issue: '2 malformed lines dropped (first: line 4)' },
+    { file: 'state.json', issue: 'invalid JSON at line 1 <x>' }] });
+  assert.match(html, /<code>learnings\.jsonl<\/code> — 2 malformed lines dropped \(first: line 4\)/);
+  assert.match(html, /invalid JSON at line 1 &lt;x&gt;/);
+});
+
+const bms = { closes: 3, with_candidates: 1, offered: 2, still_open: 1, excluded: 1,
+  by_basis: { ratio: 1, identifier: 1, rare: 0, other: 0 },
+  recent: [{ date: '2026-10-22', context: 'shipped <A>', candidates: [
+    { text: 'Build <A>', section: 'tactical', match_basis: 'identifier', overlap: 5, still_open: true },
+    { text: 'Vague', section: 'strategic', match_basis: 'ratio', overlap: 2, still_open: false }] }] };
+
+test('renderStateSection_BacklogMatch(): summary, per-candidate state, escaped; empty without data', () => {
+  assert.equal(helpers.renderStateSection_BacklogMatch({}), '');
+  const html = helpers.renderStateSection_BacklogMatch({ backlogMatchSummary: bms });
+  assert.match(html, /3 closes ran a match; 1 offered candidates \(2: 1 ratio, 1 identifier; 1 still in reality\); 1 excluded/);
+  assert.match(html, /2026-10-22 — shipped &lt;A&gt;/);
+  assert.match(html, /Build &lt;A&gt; <span[^>]*>\[tactical, identifier, overlap 5 · still in reality\]/);
+  assert.match(html, /\[strategic, ratio, overlap 2 · gone since\]/);
+});
+
+test('backlogMatchHeadline(): offered and gone counts; empty when nothing offered', () => {
+  assert.equal(helpers.backlogMatchHeadline({ backlogMatchSummary: bms }), '2 backlog matches offered, 1 gone since');
+  assert.equal(helpers.backlogMatchHeadline({ backlogMatchSummary: { ...bms, offered: 0 } }), '');
+  assert.equal(helpers.backlogMatchHeadline({}), '');
+});
+
+test('_cadenceLastRun(): lists each cadence with its age in a fixed order; empty without data', () => {
+  assert.equal(helpers._cadenceLastRun({}), '');
+  const html = helpers._cadenceLastRun({ cadenceLastRun: {
+    skill_opt: { at: 'x', ago: '81d ago' }, dream: { at: 'y', ago: '0d ago' }, research: { at: null, ago: 'never' } } });
+  assert.match(html, /Last run: dream 0d ago · research never · SkillOpt 81d ago</);
+});
+
+test('_cooldownOverrides(): count, rate and escaped reasons; empty without violations', () => {
+  assert.equal(helpers._cooldownOverrides({}), '');
+  const html = helpers._cooldownOverrides({ cooldownViolationSummary: { count: 4, rate: 0.1,
+    recent: [{ timestamp: '2026-09-14T08:38:26Z', reason: 'retro <now>' }] } });
+  assert.match(html, /4 cooldown overrides \(10% of sessions\)/);
+  assert.match(html, /2026-09-14<\/span> retro &lt;now&gt;/);
+  assert.match(helpers._cooldownOverrides({ cooldownViolationSummary: { count: 1, rate: null, recent: [] } }), /1 cooldown override<\/summary>/);
 });

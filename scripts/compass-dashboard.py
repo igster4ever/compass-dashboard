@@ -66,26 +66,56 @@ def _read_file(path):
         return ""
 
 
-def _read_jsonl(path):
-    items = []
+def _read_jsonl(path, problems=None):
+    """Dict records of a JSONL file; [] when it is absent. Lines that are not valid JSON,
+    or not a JSON object, are dropped. When `problems` is a list, each file with dropped
+    lines or a read error adds one {file, issue} entry, so corruption is counted rather
+    than rendered as "no data"."""
+    items, bad = [], []
     try:
-        for line in Path(path).read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line:
-                try:
-                    items.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-    except OSError:
-        pass
+        text = Path(path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return items
+    except (OSError, UnicodeDecodeError) as e:
+        if problems is not None:
+            problems.append({"file": Path(path).name, "issue": f"unreadable: {e.__class__.__name__}"})
+        return items
+    for n, line in enumerate(text.splitlines(), 1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            bad.append(n)
+            continue
+        if isinstance(rec, dict):
+            items.append(rec)
+        else:
+            bad.append(n)
+    if bad and problems is not None:
+        noun = "line" if len(bad) == 1 else "lines"
+        problems.append({"file": Path(path).name,
+                         "issue": f"{len(bad)} malformed {noun} dropped (first: line {bad[0]})"})
     return items
 
 
-def _read_json(path):
-    try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+def _read_json(path, problems=None):
+    """A JSON object file as a dict; {} when it is absent. A corrupt or non-object file
+    also gives {}, and adds one {file, issue} entry to `problems` when that is a list."""
+    def fail(issue):
+        if problems is not None:
+            problems.append({"file": Path(path).name, "issue": issue})
         return {}
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError as e:
+        return fail(f"invalid JSON at line {e.lineno}")
+    except (OSError, UnicodeDecodeError) as e:
+        return fail(f"unreadable: {e.__class__.__name__}")
+    return data if isinstance(data, dict) else fail(f"not a JSON object ({type(data).__name__})")
 
 
 def _e(s):
@@ -561,7 +591,25 @@ def _suggested_goal_count(state):
 # Data loading
 # ─────────────────────────────────────────────────────────────────────────────
 
+_BACKLOG_MATCH_ITEM_RE = re.compile(
+    r"^\[(?P<section>[^,\]]*),\s*(?P<basis>[^,\]]*),\s*overlap\s+(?P<overlap>\d+),\s*(?P<hash>[^\]]*)\]\s*(?P<text>.*)$")
+
+
+def _parse_backlog_match_item(item):
+    """One `## Backlog match` candidate line, as core's history._backlog_match_lines()
+    writes it: `[section, match_basis, overlap N, bullet_hash|no-hash] text`."""
+    m = _BACKLOG_MATCH_ITEM_RE.match(item)
+    if not m:
+        return {"section": "?", "match_basis": "?", "overlap": 0, "bullet_hash": None, "text": item}
+    h = m["hash"].strip()
+    return {"section": m["section"].strip(), "match_basis": m["basis"].strip(),
+            "overlap": int(m["overlap"]), "bullet_hash": None if h in ("", "no-hash") else h,
+            "text": m["text"].strip()}
+
+
 def _parse_history_file(path):
+    """A session history file, as core's history.py writes it. Sections the parser does not
+    model are kept verbatim in `other_sections` ({heading: text}) rather than dropped."""
     text = _read_file(path)
     if not text:
         return None
@@ -570,20 +618,31 @@ def _parse_history_file(path):
         "filename": Path(path).name,
         "opened": "",
         "closed": "",
+        "duration_minutes": None,
+        "close_mode": "",
         "planned": [],
         "completed": [],
         "incomplete": [],
         "notes": "",
         "learnings_extracted": [],
+        "backlog_match": None,
+        "other_sections": {},
     }
 
     section = None
+    match_part = None   # "candidates" | "excluded" inside ## Backlog match
+    other = None        # heading of an unmodelled ## section
     for line in text.splitlines():
         s = line.strip()
         if s.startswith("**Opened:**"):
             result["opened"] = s.replace("**Opened:**", "").strip()
         elif s.startswith("**Closed:**"):
             result["closed"] = s.replace("**Closed:**", "").strip()
+        elif s.startswith("**Duration:**"):
+            m = re.match(r"(\d+)\s*m\b", s.replace("**Duration:**", "").strip())
+            result["duration_minutes"] = int(m.group(1)) if m else None
+        elif s.startswith("**Close mode:**"):
+            result["close_mode"] = s.replace("**Close mode:**", "").strip()
         elif s == "## Planned":
             section = "planned"
         elif s == "## Completed":
@@ -594,8 +653,27 @@ def _parse_history_file(path):
             section = "notes"
         elif s == "## Learnings extracted":
             section = "learnings_extracted"
+        elif s == "## Backlog match":
+            section, match_part = "backlog_match", None
+            result["backlog_match"] = {"context": "", "candidates": [], "excluded": []}
         elif s.startswith("## "):
-            section = None
+            section, other = "other", s[3:].strip()
+            result["other_sections"].setdefault(other, "")
+        elif section == "backlog_match":
+            bm = result["backlog_match"]
+            if s.startswith("**Context:**"):
+                bm["context"] = s.replace("**Context:**", "").strip()
+            elif s == "**Candidates:**":
+                match_part = "candidates"
+            elif s.startswith("**Excluded"):
+                match_part = "excluded"
+            elif s.startswith("- ") and match_part:
+                item = s[2:].strip()
+                if item and not item.lower().startswith("(none"):
+                    bm[match_part].append(_parse_backlog_match_item(item))
+        elif section == "other":
+            if s:
+                result["other_sections"][other] += s + "\n"
         elif (s.startswith("- ") or s.startswith("* ")) and section in (
             "planned", "completed", "incomplete", "learnings_extracted"
         ):
@@ -606,6 +684,80 @@ def _parse_history_file(path):
             result["notes"] += s + " "
 
     return result
+
+
+_MATCH_BASES = ("ratio", "identifier", "rare")
+
+
+def _backlog_match_summary(history_parsed, reality_md, recent=5):
+    """`## Backlog match` across every close: backlog bullets offered as done at close, and
+    whether each is still in reality.md (by core's sha256(text)[:8] bullet hash) or gone
+    since, i.e. acted on. None when no close recorded a match. `recent` holds the newest
+    closes that offered candidates."""
+    matched = [h for h in history_parsed if h.get("backlog_match")]
+    if not matched:
+        return None
+    live = {hashlib.sha256(t.encode()).hexdigest()[:8] for t, _ in _iter_reality_bullets(reality_md)}
+    by_basis = {b: 0 for b in _MATCH_BASES} | {"other": 0}
+    offered = still_open = excluded = 0
+    sessions = []
+    for h in matched:
+        bm = h["backlog_match"]
+        excluded += len(bm["excluded"])
+        cands = []
+        for c in bm["candidates"]:
+            offered += 1
+            by_basis[c["match_basis"] if c["match_basis"] in _MATCH_BASES else "other"] += 1
+            open_ = c["bullet_hash"] in live if c["bullet_hash"] else None
+            still_open += bool(open_)
+            cands.append({**c, "still_open": open_})
+        if cands:
+            sessions.append({"date": h["filename"][:10], "context": bm["context"], "candidates": cands})
+    return {
+        "closes":          len(matched),
+        "with_candidates": len(sessions),
+        "offered":         offered,
+        "still_open":      still_open,
+        "excluded":        excluded,
+        "by_basis":        by_basis,
+        "recent":          sessions[::-1][:recent],
+    }
+
+
+# (label, state key[, legacy key]) for each cadence whose last run core timestamps.
+_CADENCE_LAST_RUN = (
+    ("dream",            "last_dream_at"),
+    ("code_review",      "last_review_at"),
+    ("research",         "last_research_at"),
+    ("skill_opt",        "last_skill_opt_at", "last_skillopt_at"),
+    ("assumption_audit", "last_assumption_audit_at"),
+    ("claude_review",    "last_claude_review_at"),
+)
+
+
+def _cadence_last_run(state):
+    """{cadence: {at, ago}} from core's last-run timestamps, so a cadence card can say
+    'last run 18d ago' beside its session-counter verdict. `at` is None (ago "never")
+    when the cadence has never run."""
+    out = {}
+    for name, key, *legacy in _CADENCE_LAST_RUN:
+        at = state.get(key) or next((state.get(k) for k in legacy if state.get(k)), None)
+        out[name] = {"at": at, "ago": _time_ago(_parse_iso(at)) if at else "never"}
+    return out
+
+
+def _cooldown_violation_summary(violations, session_count, recent=5):
+    """Session-hygiene overrides: opens acknowledged inside the cooldown window
+    (core's acknowledge-cooldown-violation). `rate` is per recorded session; None
+    without sessions. None when there are no violations."""
+    if not violations:
+        return None
+    return {
+        "count":  len(violations),
+        "rate":   round(len(violations) / session_count, 3) if session_count else None,
+        "recent": [{"timestamp": v.get("timestamp"), "reason": v.get("reason", "")}
+                   for v in reversed(violations[-recent:])],
+    }
 
 
 def _classify_session(session, hit_rate=None):
@@ -635,17 +787,40 @@ def _top_tags(learnings, n=5):
     return [t for t, _ in sorted(counts.items(), key=lambda x: -x[1])[:n]]
 
 
+_REVIEW_GIT_TIMEOUT_S = 10
+
+
+def _git(repo, *args, timeout):
+    """Run one read-only git command in `repo`: (stdout, None) on success, else
+    (None, reason). The reason names a timeout, an unrunnable git, or a non-zero exit with
+    the first stderr line. `--no-optional-locks` keeps a probe from contending with the
+    user's own git commands for the index lock."""
+    repo = str(Path(repo).expanduser())
+    try:
+        p = subprocess.run(["git", "--no-optional-locks", "-C", repo, *args],
+                           capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None, f"timeout after {timeout}s"
+    except OSError as e:
+        return None, f"git not runnable: {e.strerror or e}"
+    if p.returncode != 0:
+        first = (p.stderr.strip().splitlines() or [""])[0]
+        return None, f"exit {p.returncode}: {first}".rstrip(": ")
+    return p.stdout, None
+
+
 def _review_complexity_signal(ns_dir, state, config):
     """Measure code-change complexity since the last review, independent of elapsed
     session count. Mirrors compass/_monolith.py's _get_review_complexity_signal() — same
     four proxies (lines changed, new files, new design docs, clustered complex/chaotic
     decisions), same score = max(ratio) with high = score >= 1.0. Degrades to a zero/False
     signal rather than raising when repo_path is unset, git is unavailable, or the window
-    has no history.
+    has no history. `errors` is dashboard-only, as in `_pulse_git`: {field: reason} for each
+    git probe that failed, so a failed probe is told apart from a quiet window.
     """
     empty = {
         "lines_changed": 0, "new_files": 0, "new_design_docs": 0,
-        "complex_decisions": 0, "score": 0.0, "high": False,
+        "complex_decisions": 0, "score": 0.0, "high": False, "errors": {},
     }
     repo_path = state.get("repo_path")
     if not repo_path:
@@ -655,23 +830,20 @@ def _review_complexity_signal(ns_dir, state, config):
     since_arg = f"--since={last_review_at}" if last_review_at else \
         f"--since={config.get('review_interval_days', 7)} days ago"
 
-    try:
-        numstat = subprocess.run(
-            ["git", "log", since_arg, "--numstat", "--format="],
-            cwd=repo_path, capture_output=True, text=True, timeout=10,
-        )
-        added = subprocess.run(
-            ["git", "log", since_arg, "--diff-filter=A", "--name-only", "--format="],
-            cwd=repo_path, capture_output=True, text=True, timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return empty
-
-    if numstat.returncode != 0 or added.returncode != 0:
-        return empty
+    errors = {}
+    numstat, err = _git(repo_path, "log", since_arg, "--numstat", "--format=",
+                        timeout=_REVIEW_GIT_TIMEOUT_S)
+    if err:
+        errors["lines_changed"] = err
+    added, err = _git(repo_path, "log", since_arg, "--diff-filter=A", "--name-only", "--format=",
+                      timeout=_REVIEW_GIT_TIMEOUT_S)
+    if err:
+        errors["new_files"] = err
+    if errors:
+        return {**empty, "errors": errors}
 
     lines_changed = 0
-    for line in numstat.stdout.splitlines():
+    for line in numstat.splitlines():
         parts = line.split("\t")
         if len(parts) != 3:
             continue
@@ -679,7 +851,7 @@ def _review_complexity_signal(ns_dir, state, config):
             if n.isdigit():
                 lines_changed += int(n)
 
-    new_paths = [p for p in added.stdout.splitlines() if p.strip()]
+    new_paths = [p for p in added.splitlines() if p.strip()]
     new_files = len(new_paths)
     new_design_docs = sum(1 for p in new_paths if p.startswith("docs/"))
 
@@ -707,6 +879,7 @@ def _review_complexity_signal(ns_dir, state, config):
         "complex_decisions": complex_decisions,
         "score":             round(score, 2),
         "high":              score >= 1.0,
+        "errors":            {},
     }
 
 
@@ -721,7 +894,7 @@ def _check_code_review_due(ns_dir, state, config):
     repo_path = state.get("repo_path", "")
     empty_signal = {
         "lines_changed": 0, "new_files": 0, "new_design_docs": 0,
-        "complex_decisions": 0, "score": 0.0, "high": False,
+        "complex_decisions": 0, "score": 0.0, "high": False, "errors": {},
     }
     if not repo_path:
         return False, {
@@ -793,7 +966,7 @@ def _complexity_clustering_signals(decisions):
     return sorted(signals, key=lambda s: -s["count"])
 
 
-def _goal_outcomes_breakdown(ns_dir, state, reality_md, limit=20):
+def _goal_outcomes_breakdown(history_parsed, state, reality_md, limit=20):
     """P49: per-goal reality-outcome links, newest first.
 
     state["goal_outcomes"] is {goal_hash: [bullet_hash, ...]} (compass/_monolith.py's
@@ -813,16 +986,9 @@ def _goal_outcomes_breakdown(ns_dir, state, reality_md, limit=20):
         for text, _ in _iter_reality_bullets(reality_md)
     }
 
-    history_dir = ns_dir / "history"
-    if not history_dir.exists():
-        return []
-
     breakdown = []
     seen_hashes = set()
-    for f in sorted(history_dir.glob("*.md"), reverse=True):
-        parsed = _parse_history_file(f)
-        if not parsed:
-            continue
+    for parsed in reversed(history_parsed):
         for goal_text in parsed.get("planned", []):
             gh = hashlib.sha256(goal_text.encode()).hexdigest()[:8]
             if gh not in goal_outcomes or gh in seen_hashes:
@@ -830,7 +996,7 @@ def _goal_outcomes_breakdown(ns_dir, state, reality_md, limit=20):
             seen_hashes.add(gh)
             breakdown.append({
                 "goal_text": goal_text,
-                "date":      f.stem[:10],
+                "date":      parsed["filename"][:10],
                 "linked_bullets": [
                     {"hash": h, "text": bullet_hash_to_text.get(h, "(bullet no longer in reality.md)")}
                     for h in goal_outcomes[gh]
@@ -1416,20 +1582,10 @@ def _pulse_git(repo_path):
     errors = {}
 
     def run(field, *args):
-        try:
-            p = subprocess.run(["git", "--no-optional-locks", "-C", repo, *args],
-                               capture_output=True, text=True, timeout=_PULSE_GIT_TIMEOUT_S)
-        except subprocess.TimeoutExpired:
-            errors[field] = f"timeout after {_PULSE_GIT_TIMEOUT_S}s"
-            return None
-        except OSError as e:
-            errors[field] = f"git not runnable: {e.strerror or e}"
-            return None
-        if p.returncode != 0:
-            first = (p.stderr.strip().splitlines() or [""])[0]
-            errors[field] = f"exit {p.returncode}: {first}".rstrip(": ")
-            return None
-        return p.stdout
+        out, err = _git(repo, *args, timeout=_PULSE_GIT_TIMEOUT_S)
+        if err:
+            errors[field] = err
+        return out
 
     ahead = run("ahead", "rev-list", "--count", "@{u}..HEAD")
     status = run("dirty_files", "status", "--porcelain")
@@ -1510,25 +1666,29 @@ def _read_namespace_files(ns_dir):
     (Tactical backlog, code-review-2026-09-11) so the two concerns — I/O vs.
     derived-value computation — can be read, tested, and changed independently.
     """
-    state        = _read_json(ns_dir / "state.json")
+    problems     = []   # {file, issue} per corrupt file — surfaced as `data_problems`
+    state        = _read_json(ns_dir / "state.json", problems)
     intent       = _read_file(ns_dir / "intent.md")
     reality      = _read_file(ns_dir / "reality.md")
-    learnings    = _read_jsonl(ns_dir / "learnings.jsonl")
+    learnings    = _read_jsonl(ns_dir / "learnings.jsonl", problems)
     for _l in learnings:
         if "confidence" in _l:
             _l["confidence"] = _normalize_confidence(_l["confidence"])
-    decisions    = _read_jsonl(ns_dir / "decisions.jsonl")
+    decisions    = _read_jsonl(ns_dir / "decisions.jsonl", problems)
     code_context = _read_file(ns_dir / "code_context.md")
     reality_archive = _read_file(ns_dir / "reality_archive.md")
-    config       = _read_json(ns_dir / "config.json")
+    config       = _read_json(ns_dir / "config.json", problems)
 
     history_dir   = ns_dir / "history"
-    history_files = []
+    # Every history file parsed once, oldest first; consumers slice or filter this
+    # instead of re-reading the directory.
+    history_parsed = []
     if history_dir.exists():
-        for f in sorted(history_dir.glob("*.md"), reverse=True)[:5]:
+        for f in sorted(history_dir.glob("*.md")):
             parsed = _parse_history_file(f)
             if parsed:
-                history_files.append(parsed)
+                history_parsed.append(parsed)
+    history_files = list(reversed(history_parsed))[:5]
 
     session_count = len(list(history_dir.glob("*.md"))) if history_dir.exists() else 0
     session_dates = sorted(
@@ -1537,25 +1697,25 @@ def _read_namespace_files(ns_dir):
     ) if history_dir.exists() else []
 
     # Intent drift timeline
-    intent_history = _read_jsonl(ns_dir / "intent_history.jsonl")
+    intent_history = _read_jsonl(ns_dir / "intent_history.jsonl", problems)
 
     # Decay history — corpus maintenance events (newest first)
-    decay_history = list(reversed(_read_jsonl(ns_dir / "decay_history.jsonl")))
+    decay_history = list(reversed(_read_jsonl(ns_dir / "decay_history.jsonl", problems)))
 
     # Deferral escalation counts (used in Priorities scoring)
-    code_review_defer_count = len(_read_jsonl(ns_dir / "code_review_deferrals.jsonl"))
-    research_defer_count    = len(_read_jsonl(ns_dir / "research_deferrals.jsonl"))
+    code_review_defer_count = len(_read_jsonl(ns_dir / "code_review_deferrals.jsonl", problems))
+    research_defer_count    = len(_read_jsonl(ns_dir / "research_deferrals.jsonl", problems))
 
     # External research signals
-    external_signals = list(reversed(_read_jsonl(ns_dir / "external_signals.jsonl")))
+    external_signals = list(reversed(_read_jsonl(ns_dir / "external_signals.jsonl", problems)))
 
     # P51–P53: skill feedback (skillopt cadence/quality-history fields are read
     # straight off `state` in the assembly phase — no separate file for those)
-    skill_feedback = _read_jsonl(ns_dir / "skill_feedback.jsonl")
+    skill_feedback = _read_jsonl(ns_dir / "skill_feedback.jsonl", problems)
 
     # Session artefacts (P41) — resolve abs_file so JS can open/preview via file://
     artefacts = []
-    for _a in _read_jsonl(ns_dir / "artefacts.jsonl"):
+    for _a in _read_jsonl(ns_dir / "artefacts.jsonl", problems):
         _ac = dict(_a)
         _rel = _a.get("file", "")
         if _rel:
@@ -1572,17 +1732,18 @@ def _read_namespace_files(ns_dir):
     # command and this file's existing _community/feed.jsonl retraction-filtering
     # precedent (load_community(), above).
     decision_guidance = [
-        g for g in _read_jsonl(ns_dir / "decision_guidance.jsonl")
+        g for g in _read_jsonl(ns_dir / "decision_guidance.jsonl", problems)
         if g.get("status") != "retired"
     ]
 
     # Cross-namespace learning links — raw records only; the text-keyed lookup
     # dicts consumers actually want are built in the assembly phase.
-    back_refs_raw = _read_jsonl(ns_dir / "back_references.jsonl")
-    conflicts_raw = _read_jsonl(ns_dir / "conflict_resolutions.jsonl")
+    back_refs_raw = _read_jsonl(ns_dir / "back_references.jsonl", problems)
+    conflicts_raw = _read_jsonl(ns_dir / "conflict_resolutions.jsonl", problems)
 
     # Live strip pulse inputs: the session ledger and CLAUDE.md sizes
-    reality_changes = _read_jsonl(ns_dir / "reality_changes.jsonl")
+    reality_changes = _read_jsonl(ns_dir / "reality_changes.jsonl", problems)
+    cooldown_violations = _read_jsonl(ns_dir / "cooldown_violations.jsonl", problems)
     claude_md_files = _claude_md_files(ns_dir, state.get("repo_path"))
 
     return {
@@ -1596,6 +1757,7 @@ def _read_namespace_files(ns_dir):
         "config":                  config,
         "history_dir":             history_dir,
         "history_files":           history_files,
+        "history_parsed":          history_parsed,
         "session_count":           session_count,
         "session_dates":           session_dates,
         "intent_history":          intent_history,
@@ -1610,6 +1772,8 @@ def _read_namespace_files(ns_dir):
         "conflicts_raw":           conflicts_raw,
         "reality_changes":         reality_changes,
         "claude_md_files":         claude_md_files,
+        "cooldown_violations":     cooldown_violations,
+        "data_problems":           problems,
     }
 
 
@@ -1628,7 +1792,6 @@ def _assemble_namespace_dict(ns_dir, raw):
     decisions     = raw["decisions"]
     code_context  = raw["code_context"]
     config        = raw["config"]
-    history_dir   = raw["history_dir"]
     history_files = raw["history_files"]
     session_count = raw["session_count"]
     session_dates = raw["session_dates"]
@@ -1705,7 +1868,7 @@ def _assemble_namespace_dict(ns_dir, raw):
     exploration_ratio    = _compute_exploration_ratio(state)
     last_reality_score   = state.get("last_reality_score")
     outcome_rate         = state.get("outcome_rate")
-    goal_outcomes        = _goal_outcomes_breakdown(ns_dir, state, reality)
+    goal_outcomes        = _goal_outcomes_breakdown(raw["history_parsed"], state, reality)
     goal_contracts       = _parse_goal_contracts(state)
     contract_stats       = _contract_coverage(state)
     goal_type_by_session = _goal_type_by_session(state)
@@ -1719,19 +1882,16 @@ def _assemble_namespace_dict(ns_dir, raw):
         if isinstance(entry, dict):
             completions_by_date[date] = entry.get("hit_rate")
     history_by_opened = {}
-    if history_dir.exists():
-        for f in sorted(history_dir.glob("*.md")):
-            parsed = _parse_history_file(f)
-            if parsed:
-                if parsed["opened"]:
-                    history_by_opened[parsed["opened"]] = parsed
-                carry_forward_trend.append({
-                    "date":           f.stem[:10],
-                    "carryForward":   len(parsed["incomplete"]),
-                    "goalsCompleted": len(parsed["completed"]),
-                })
-                hit_rate = completions_by_date.get(f.stem[:10])
-                quality_dist[_classify_session(parsed, hit_rate)] += 1
+    for parsed in raw["history_parsed"]:
+        date = parsed["filename"][:10]
+        if parsed["opened"]:
+            history_by_opened[parsed["opened"]] = parsed
+        carry_forward_trend.append({
+            "date":           date,
+            "carryForward":   len(parsed["incomplete"]),
+            "goalsCompleted": len(parsed["completed"]),
+        })
+        quality_dist[_classify_session(parsed, completions_by_date.get(date))] += 1
 
     # All sessions' incomplete items, deduped — used by _extract_blocking_edges()
     _seen_items: set = set()
@@ -1844,6 +2004,10 @@ def _assemble_namespace_dict(ns_dir, raw):
         "stale_bullet_count":        stale_bullet_count,
         "has_repo_path":             bool(repo_path),
         "reality_structure_warnings": _check_reality_structure(reality),
+        "data_problems":             raw["data_problems"],
+        "cadence_last_run":          _cadence_last_run(state),
+        "cooldown_violation_summary": _cooldown_violation_summary(raw["cooldown_violations"],
+                                                                  raw["session_count"]),
         "back_refs_by_text":         back_refs_by_text,
         "conflicts_by_text":         conflicts_by_text,
         "intent_history":            intent_history,
@@ -1862,6 +2026,7 @@ def _assemble_namespace_dict(ns_dir, raw):
         "decision_guidance":         decision_guidance,
         "goal_type_by_session":      goal_type_by_session,
         "goal_status_breakdown":     _goal_status_breakdown(state, history_by_opened),
+        "backlog_match_summary":     _backlog_match_summary(raw["history_parsed"], reality),
         "carry_forward_trend":       carry_forward_trend,
         "quality_dist":              quality_dist,
         "decay_history":             decay_history,
@@ -2062,6 +2227,14 @@ def _card_html(n, i, community_published=None):
                         f'title="{er.get("sessionsWithTypes", 0)} typed sessions">'
                         f'{er["ratio"]:.0f}% explore</span>')
 
+    # Corrupt loop files would otherwise render as "no data"; name them on the card.
+    data_html = ""
+    dp = n.get("data_problems") or []
+    if dp:
+        title = "; ".join(f'{d["file"]}: {d["issue"]}' for d in dp)
+        data_html = (f'<span class="cadence-chip" style="color:var(--red)" title="{_e(title)}">'
+                     f'⚠ {len(dp)} corrupt file{"s" if len(dp) != 1 else ""}</span>')
+
     watching_html = ""
     if n.get("watches"):
         ws = n["watch_signals"]
@@ -2089,6 +2262,7 @@ def _card_html(n, i, community_published=None):
         <span class="rate-pill ladder-chip" data-ladder-idx="{i}"></span>
         <span>{n["session_count"]} sessions</span>
         <span>{len(n["learnings"])} learnings</span>
+        {data_html}
         {rate_html}
         {completeness_html}
         {outcome_html}
@@ -2425,6 +2599,9 @@ _JS_DATA_RENAME_FIELDS = [
     ("staleBulletCount",           "stale_bullet_count",        _MISSING),
     ("hasRepoPath",                "has_repo_path",             False),
     ("realityStructureWarnings",   "reality_structure_warnings", []),
+    ("dataProblems",               "data_problems",             []),
+    ("cadenceLastRun",             "cadence_last_run",          {}),
+    ("cooldownViolationSummary",   "cooldown_violation_summary", None),
     ("backRefsByText",             "back_refs_by_text",         _MISSING),
     ("conflictsByText",            "conflicts_by_text",         _MISSING),
     ("intentHistory",              "intent_history",            _MISSING),
@@ -2442,6 +2619,7 @@ _JS_DATA_RENAME_FIELDS = [
     ("criteriaHitRate",            "criteria_hit_rate",          None),
     ("goalTypeBySession",          "goal_type_by_session",      _MISSING),
     ("goalStatusBreakdown",        "goal_status_breakdown",     None),
+    ("backlogMatchSummary",        "backlog_match_summary",     None),
     ("carryForwardTrend",          "carry_forward_trend",       _MISSING),
     ("qualityDist",                "quality_dist",              _MISSING),
     ("decayHistory",               "decay_history",             _MISSING),

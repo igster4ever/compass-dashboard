@@ -1501,6 +1501,35 @@ function renderStateSection_GoalStatuses(ns) {
   </div>`;
 }
 
+// `## Backlog match` from every close: backlog bullets compass offered as done, and
+// whether each is still in reality.md or has gone since (acted on).
+function backlogMatchHeadline(ns) {
+  const b = ns.backlogMatchSummary;
+  if (!b || !b.offered) return '';
+  return `${b.offered} backlog match${b.offered !== 1 ? 'es' : ''} offered, ${b.offered - b.still_open} gone since`;
+}
+
+function renderStateSection_BacklogMatch(ns) {
+  const b = ns.backlogMatchSummary;
+  if (!b) return '';
+  const basis = Object.entries(b.by_basis).filter(([, n]) => n).map(([k, n]) => `${n} ${esc(k)}`).join(', ');
+  const summary = `${b.closes} close${b.closes !== 1 ? 's' : ''} ran a match; ${b.with_candidates} offered candidates`
+    + (b.offered ? ` (${b.offered}: ${basis}; ${b.still_open} still in reality)` : '')
+    + (b.excluded ? `; ${b.excluded} excluded as appended that session` : '');
+  const sessions = (b.recent || []).map(s => {
+    const items = s.candidates.map(c => {
+      const state = c.still_open == null ? 'no hash'
+        : c.still_open ? 'still in reality' : 'gone since';
+      const col = c.still_open ? 'var(--amber)' : 'var(--muted)';
+      return `<li>${esc(c.text)} <span style="font-size:.72rem;color:${col}">[${esc(c.section)}, ${esc(c.match_basis)}, overlap ${c.overlap} · ${state}]</span></li>`;
+    }).join('');
+    return `<div style="margin-top:.4rem"><div style="font-size:.78rem;color:var(--muted)">${esc(s.date)}${s.context ? ' — ' + esc(s.context) : ''}</div><ul style="font-size:.82rem;margin:.2rem 0 0 1.1rem">${items}</ul></div>`;
+  }).join('');
+  return `<div class="md-section"><h3>Backlog match at close</h3>
+    <div style="font-size:.78rem;color:var(--muted)">${summary}</div>${sessions}
+  </div>`;
+}
+
 function renderStateSection_GoalOutcomes(ns) {
   const items = ns.goalOutcomes || [];
   if (!items.length) return '';
@@ -1657,6 +1686,15 @@ function _cadenceLine(label, due, status, pulledForwardTitle, pfKey = 'pulled_fo
   return `<div style="font-size:.82rem;color:${col}"${titleAttr}>${icon} ${esc(label)} ${msg}${bolt}</div>`;
 }
 
+// A failed git probe zeroes the complexity signal, which would otherwise read as a quiet
+// window; name the failure so "not pulled forward" is not taken at face value.
+function _complexityProbeErrors(status) {
+  const errs = (status && status.complexity_signal && status.complexity_signal.errors) || {};
+  const parts = Object.entries(errs).map(([k, v]) => `${esc(k)}: ${esc(v)}`);
+  if (!parts.length) return '';
+  return `<div style="font-size:.75rem;color:var(--muted);padding-left:1.1rem">complexity probe failed (${parts.join('; ')})</div>`;
+}
+
 // P68 gap fix (2026-09-25, Strategic backlog gap-review-2026-09-11): `codeReviewStatus`/
 // `researchStatus`'s `pulled_forward_by_complexity` flag was fully computed by the Python
 // data layer and already rendered on the Overview card chip (⚡ + tooltip, compass-dashboard.py
@@ -1664,11 +1702,52 @@ function _cadenceLine(label, due, status, pulledForwardTitle, pfKey = 'pulled_fo
 // strip — a user already inside a namespace's detail panel had no way to tell a due chip
 // apart from a normal cadence one. Mirrors the Overview card's exact tooltip wording so the
 // two surfaces read consistently.
+// Files whose corrupt lines or content were dropped at generation time, so the panels
+// fed by them read as fewer records, or none, rather than as broken.
+function renderStateSection_DataProblems(ns) {
+  const dp = ns.dataProblems || [];
+  if (!dp.length) return '';
+  const rows = dp.map(d => `<li><code>${esc(d.file)}</code> — ${esc(d.issue)}</li>`).join('');
+  return `<div class="md-section"><h3 style="color:var(--red)">⚠ Data problems</h3>
+    <div style="font-size:.75rem;color:var(--muted)">Panels fed by these files show only the records that parsed.</div>
+    <ul style="font-size:.82rem;margin:.3rem 0 0 1.1rem">${rows}</ul>
+  </div>`;
+}
+
+const CADENCE_LAST_RUN_LABELS = [
+  ['dream', 'dream'], ['code_review', 'code review'], ['research', 'research'],
+  ['skill_opt', 'SkillOpt'], ['assumption_audit', 'assumption audit'], ['claude_review', 'CLAUDE.md review'],
+];
+
+// When each cadence last actually ran; the due/on-schedule lines above come from session
+// counters and cannot say this.
+function _cadenceLastRun(ns) {
+  const lr = ns.cadenceLastRun || {};
+  const parts = CADENCE_LAST_RUN_LABELS.filter(([k]) => lr[k])
+    .map(([k, label]) => `${esc(label)} ${esc(lr[k].ago)}`);
+  if (!parts.length) return '';
+  return `<div style="font-size:.75rem;color:var(--muted);margin-top:.3rem">Last run: ${parts.join(' · ')}</div>`;
+}
+
+// Opens acknowledged inside the session-cooldown window, with the reasons given.
+function _cooldownOverrides(ns) {
+  const cv = ns.cooldownViolationSummary;
+  if (!cv) return '';
+  const rate = cv.rate != null ? ` (${Math.round(cv.rate * 100)}% of sessions)` : '';
+  const rows = (cv.recent || []).map(v =>
+    `<li><span style="color:var(--muted)">${esc((v.timestamp || '').slice(0, 10))}</span> ${esc(v.reason)}</li>`).join('');
+  return `<details style="font-size:.75rem;margin-top:.3rem"><summary style="color:var(--amber)">⏱ ${cv.count} cooldown override${cv.count !== 1 ? 's' : ''}${rate}</summary>
+    <ul style="margin:.2rem 0 0 1.1rem">${rows}</ul></details>`;
+}
+
 function renderStateSection_CadenceStatus(ns) {
   return `<div class="md-section"><h3>Cadence</h3>
     ${_cadenceLine('Research', ns.researchDue, ns.researchStatus, 'Pulled forward by complex/chaotic decision clustering, not session cadence')}
     ${_cadenceLine('Code review', ns.codeReviewDue, ns.codeReviewStatus, 'Pulled forward by code-change complexity, not session cadence')}
+    ${_complexityProbeErrors(ns.codeReviewStatus)}
     ${_cadenceLine('CLAUDE.md review', ns.claudeReviewDue, ns.claudeReviewStatus, 'Pulled forward by CLAUDE.md size (over its byte budget), not session cadence', 'pulled_forward_by_size')}
+    ${_cadenceLastRun(ns)}
+    ${_cooldownOverrides(ns)}
   </div>`;
 }
 
@@ -1767,6 +1846,7 @@ function renderState(ns) {
   ].join('');
 
   const healthStrip = [
+    renderStateSection_DataProblems(ns),
     renderStateSection_CycleSparkline(ns),
     renderStateSection_CadenceStatus(ns),
     renderStateSection_DreamStatus(ns),
@@ -1794,9 +1874,11 @@ function renderState(ns) {
   if (goalStatusHeadline(ns)) goalTrackingHeadlineParts.push(goalStatusHeadline(ns));
   if (ns.outcomeRate != null) goalTrackingHeadlineParts.push(`${Math.round(ns.outcomeRate * 100)}% outcome-linked`);
   if (ns.contractCoverage != null) goalTrackingHeadlineParts.push(`${Math.round(ns.contractCoverage * 100)}% contract coverage`);
+  if (backlogMatchHeadline(ns)) goalTrackingHeadlineParts.push(backlogMatchHeadline(ns));
   const goalTracking = stateGroup(
     'Goal tracking', goalTrackingHeadlineParts.join(', '),
     renderStateSection_GoalStatuses(ns) + renderStateSection_GoalOutcomes(ns) + renderStateSection_GoalContracts(ns)
+      + renderStateSection_BacklogMatch(ns)
   );
 
   const ws = ns.watchSignals || {};

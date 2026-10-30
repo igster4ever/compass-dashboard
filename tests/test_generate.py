@@ -322,6 +322,21 @@ class TestClaudeReviewChip(unittest.TestCase):
         self.assertNotIn("CLAUDE.md review due", self._html(claude_review_due=False))
 
 
+class TestDataProblemsChip(unittest.TestCase):
+    """Corrupt loop files get a card chip naming each file and issue, escaped."""
+
+    def test_chip_names_count_and_issues(self):
+        html = _mod._card_html(_minimal_ns({"data_problems": [
+            {"file": "learnings.jsonl", "issue": "2 malformed lines dropped (first: line 4)"},
+            {"file": "state.json", "issue": "invalid JSON at line 1 <x>"}]}), 0, {})
+        self.assertIn("⚠ 2 corrupt files</span>", html)
+        self.assertIn("learnings.jsonl: 2 malformed lines dropped (first: line 4); "
+                      "state.json: invalid JSON at line 1 &lt;x&gt;", html)
+
+    def test_no_problems_no_chip(self):
+        self.assertNotIn("corrupt file", _mod._card_html(_minimal_ns({}), 0, {}))
+
+
 class TestCommunityChips(unittest.TestCase):
     """P40-D Phase 2 — community health chip rendering."""
 

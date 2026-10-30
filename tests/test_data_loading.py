@@ -1550,6 +1550,266 @@ class TestPulseGitErrors(unittest.TestCase):
         self.assertEqual(g["errors"]["ahead"], "git not runnable: No such file or directory")
 
 
+_HISTORY_WITH_MATCH = """# Session 2026-10-22T0834 — demo
+
+**Opened:** 2026-10-22T08:00:00Z
+**Closed:** 2026-10-22T08:34:00Z
+**Close mode:** bulk (close-all)
+**Duration:** 34m
+
+## Planned
+- Ship A
+
+## Completed
+- ✓ Ship A
+
+## Incomplete
+- (none)
+
+## Notes
+A note.
+
+## Backlog match
+**Context:** shipped A
+
+**Candidates:**
+- [tactical, identifier, overlap 5, {h}] Build A properly
+- [strategic, ratio, overlap 2, no-hash] Something vaguer
+
+**Excluded (appended this session):**
+- [tactical, rare, overlap 3, abcd1234] Appended today
+
+## Future section
+Kept verbatim.
+"""
+
+
+class TestHistoryParserSections(unittest.TestCase):
+    """The parser models every section core's history.py writes and keeps unknown ones."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+        self.hash = hashlib.sha256("Build A properly".encode()).hexdigest()[:8]
+        self.f = self.dir / "2026-10-22T0834.md"
+        self.f.write_text(_HISTORY_WITH_MATCH.replace("{h}", self.hash))
+
+    def test_header_fields(self):
+        r = _mod._parse_history_file(self.f)
+        self.assertEqual(r["duration_minutes"], 34)
+        self.assertEqual(r["close_mode"], "bulk (close-all)")
+        self.assertEqual(r["completed"], ["Ship A"])
+        self.assertEqual(r["notes"].strip(), "A note.")
+
+    def test_backlog_match_candidates_and_excluded(self):
+        bm = _mod._parse_history_file(self.f)["backlog_match"]
+        self.assertEqual(bm["context"], "shipped A")
+        self.assertEqual(bm["candidates"][0], {"section": "tactical", "match_basis": "identifier",
+                                               "overlap": 5, "bullet_hash": self.hash,
+                                               "text": "Build A properly"})
+        self.assertIsNone(bm["candidates"][1]["bullet_hash"])
+        self.assertEqual([c["text"] for c in bm["excluded"]], ["Appended today"])
+
+    def test_unknown_section_is_kept_not_dropped(self):
+        r = _mod._parse_history_file(self.f)
+        self.assertEqual(r["other_sections"], {"Future section": "Kept verbatim.\n"})
+
+    def test_file_without_new_sections_has_defaults(self):
+        f = self.dir / "old.md"
+        f.write_text("**Opened:** x\n\n## Planned\n- A\n")
+        r = _mod._parse_history_file(f)
+        self.assertIsNone(r["backlog_match"])
+        self.assertIsNone(r["duration_minutes"])
+        self.assertEqual((r["close_mode"], r["other_sections"]), ("", {}))
+
+    def test_malformed_candidate_line_kept_as_text(self):
+        c = _mod._parse_backlog_match_item("free text, no brackets")
+        self.assertEqual((c["match_basis"], c["text"]), ("?", "free text, no brackets"))
+
+    def test_summary_marks_still_open_against_reality(self):
+        parsed = [_mod._parse_history_file(self.f)]
+        reality = "## Backlog\n### Tactical\n- Build A properly\n"
+        b = _mod._backlog_match_summary(parsed, reality)
+        self.assertEqual((b["closes"], b["with_candidates"], b["offered"], b["still_open"], b["excluded"]),
+                         (1, 1, 2, 1, 1))
+        self.assertEqual(b["by_basis"], {"ratio": 1, "identifier": 1, "rare": 0, "other": 0})
+        self.assertEqual([c["still_open"] for c in b["recent"][0]["candidates"]], [True, None])
+        gone = _mod._backlog_match_summary(parsed, "")
+        self.assertEqual(gone["still_open"], 0)
+
+    def test_summary_none_without_match_sections(self):
+        self.assertIsNone(_mod._backlog_match_summary([{"backlog_match": None}], ""))
+
+    def test_load_namespace_parses_history_once(self):
+        ns = self.dir / "demo"
+        (ns / "history").mkdir(parents=True)
+        (ns / "state.json").write_text("{}")
+        for i in range(7):
+            (ns / "history" / f"2026-10-{10 + i}T0900.md").write_text(f"**Opened:** t{i}\n\n## Planned\n- g{i}\n")
+        calls = []
+        real = _mod._parse_history_file
+        with patch.object(_mod, "_parse_history_file", side_effect=lambda f: calls.append(f) or real(f)):
+            n = _mod.load_namespace(ns)
+        self.assertEqual(len(calls), 7)
+        self.assertEqual([h["planned"] for h in n["history"]], [["g6"], ["g5"], ["g4"], ["g3"], ["g2"]])
+        self.assertEqual(len(n["carry_forward_trend"]), 7)
+
+
+class TestCadenceLastRunAndCooldown(unittest.TestCase):
+    """Rank 6: cadence last-run timestamps and cooldown-violation overrides."""
+
+    def test_last_run_reads_each_key_and_legacy_skillopt_spelling(self):
+        now = datetime.now(timezone.utc)
+        ts = (now - timedelta(days=18)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        lr = _mod._cadence_last_run({"last_dream_at": ts, "last_skillopt_at": ts})
+        self.assertEqual(lr["dream"], {"at": ts, "ago": "18d ago"})
+        self.assertEqual(lr["skill_opt"]["at"], ts)
+        self.assertEqual(lr["research"], {"at": None, "ago": "never"})
+        self.assertEqual(set(lr), {"dream", "code_review", "research", "skill_opt",
+                                   "assumption_audit", "claude_review"})
+
+    def test_current_skillopt_key_wins_over_legacy(self):
+        lr = _mod._cadence_last_run({"last_skill_opt_at": "2026-10-01T00:00:00Z",
+                                     "last_skillopt_at": "2026-01-01T00:00:00Z"})
+        self.assertEqual(lr["skill_opt"]["at"], "2026-10-01T00:00:00Z")
+
+    def test_cooldown_summary(self):
+        self.assertIsNone(_mod._cooldown_violation_summary([], 10))
+        rows = [{"timestamp": f"2026-10-0{i}T00:00:00Z", "reason": f"r{i}"} for i in range(1, 8)]
+        cv = _mod._cooldown_violation_summary(rows, 28)
+        self.assertEqual((cv["count"], cv["rate"]), (7, 0.25))
+        self.assertEqual([r["reason"] for r in cv["recent"]], ["r7", "r6", "r5", "r4", "r3"])
+        self.assertIsNone(_mod._cooldown_violation_summary(rows, 0)["rate"])
+
+    def test_load_namespace_wires_both(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ns = Path(tmp) / "demo"
+            (ns / "history").mkdir(parents=True)
+            (ns / "state.json").write_text('{"last_dream_at": "2026-10-01T00:00:00Z"}')
+            (ns / "history" / "2026-10-01T0900.md").write_text("## Planned\n- a\n")
+            (ns / "cooldown_violations.jsonl").write_text('{"timestamp": "2026-10-01T00:00:00Z", "reason": "x"}\n')
+            n = _mod.load_namespace(ns)
+            self.assertEqual(n["cadence_last_run"]["dream"]["at"], "2026-10-01T00:00:00Z")
+            self.assertEqual((n["cooldown_violation_summary"]["count"],
+                              n["cooldown_violation_summary"]["rate"]), (1, 1.0))
+            js = _mod._js_data([n])
+            self.assertIn('"cadenceLastRun"', js)
+            self.assertIn('"cooldownViolationSummary"', js)
+
+
+class TestReaderProblems(unittest.TestCase):
+    """`_read_json`/`_read_jsonl` report corruption into `problems` instead of hiding it."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def test_missing_files_are_not_problems(self):
+        problems = []
+        self.assertEqual(_mod._read_jsonl(self.dir / "nope.jsonl", problems), [])
+        self.assertEqual(_mod._read_json(self.dir / "nope.json", problems), {})
+        self.assertEqual(problems, [])
+
+    def test_jsonl_counts_bad_and_non_object_lines_once_per_file(self):
+        f = self.dir / "learnings.jsonl"
+        f.write_text('{"a": 1}\n\n{broken\n[1, 2]\n{"b": 2}\n')
+        problems = []
+        self.assertEqual(_mod._read_jsonl(f, problems), [{"a": 1}, {"b": 2}])
+        self.assertEqual(problems, [{"file": "learnings.jsonl",
+                                     "issue": "2 malformed lines dropped (first: line 3)"}])
+
+    def test_jsonl_without_problems_list_still_drops_silently(self):
+        f = self.dir / "x.jsonl"
+        f.write_text('{broken\n{"ok": 1}\n')
+        self.assertEqual(_mod._read_jsonl(f), [{"ok": 1}])
+
+    def test_json_corrupt_and_non_object(self):
+        bad, arr = self.dir / "state.json", self.dir / "config.json"
+        bad.write_text('{"a":')
+        arr.write_text('[1]')
+        problems = []
+        self.assertEqual(_mod._read_json(bad, problems), {})
+        self.assertEqual(_mod._read_json(arr, problems), {})
+        self.assertEqual([p["file"] for p in problems], ["state.json", "config.json"])
+        self.assertTrue(problems[0]["issue"].startswith("invalid JSON at line 1"))
+        self.assertEqual(problems[1]["issue"], "not a JSON object (list)")
+
+    def test_load_namespace_surfaces_data_problems(self):
+        ns = self.dir / "demo"
+        ns.mkdir()
+        (ns / "state.json").write_text("{}")
+        (ns / "learnings.jsonl").write_text('{"text": "ok"}\nnot json\n')
+        (ns / "decisions.jsonl").write_text('{oops\n')
+        n = _mod.load_namespace(ns)
+        self.assertEqual(sorted(p["file"] for p in n["data_problems"]),
+                         ["decisions.jsonl", "learnings.jsonl"])
+        js = _mod._js_data([n])
+        self.assertIn('"dataProblems"', js)
+
+
+class TestGitHelper(unittest.TestCase):
+    """`_git` is the one git runner: (stdout, None) or (None, reason)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def test_success_returns_stdout(self):
+        import subprocess
+        subprocess.run(["git", "init", "-q", str(self.dir)], check=True)
+        out, err = _mod._git(str(self.dir), "status", "--porcelain", timeout=5)
+        self.assertEqual((out, err), ("", None))
+
+    def test_failure_names_exit_code(self):
+        out, err = _mod._git(str(self.dir), "status", timeout=5)
+        self.assertIsNone(out)
+        self.assertTrue(err.startswith("exit 128"))
+
+    def test_timeout_names_the_limit(self):
+        import subprocess
+        with patch.object(_mod.subprocess, "run", side_effect=subprocess.TimeoutExpired("git", 7)):
+            self.assertEqual(_mod._git(str(self.dir), "log", timeout=7), (None, "timeout after 7s"))
+
+    def test_uses_no_optional_locks(self):
+        with patch.object(_mod.subprocess, "run") as run:
+            run.return_value.returncode, run.return_value.stdout = 0, "x"
+            _mod._git("~/r", "log", timeout=1)
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[:4], ["git", "--no-optional-locks", "-C", str(Path("~/r").expanduser())])
+
+
+class TestReviewComplexitySignalErrors(unittest.TestCase):
+    """A failed git probe zeroes the signal but names why, instead of looking quiet."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def test_no_repo_path_has_empty_errors(self):
+        sig = _mod._review_complexity_signal(self.dir, {}, {})
+        self.assertEqual(sig["errors"], {})
+        self.assertFalse(sig["high"])
+
+    def test_not_a_repo_names_both_probes(self):
+        sig = _mod._review_complexity_signal(self.dir, {"repo_path": str(self.dir)}, {})
+        self.assertEqual(set(sig["errors"]), {"lines_changed", "new_files"})
+        self.assertEqual(sig["score"], 0.0)
+
+    def test_healthy_repo_has_empty_errors(self):
+        import subprocess
+        git = ["git", "-C", str(self.dir), "-c", "user.name=t", "-c", "user.email=t@t"]
+        subprocess.run(["git", "init", "-q", str(self.dir)], check=True)
+        (self.dir / "f.txt").write_text("x\n")
+        subprocess.run([*git, "add", "f.txt"], check=True)
+        subprocess.run([*git, "commit", "-qm", "init"], check=True)
+        sig = _mod._review_complexity_signal(self.dir, {"repo_path": str(self.dir)}, {})
+        self.assertEqual(sig["errors"], {})
+
+
 class TestDiscoverNamespacesConcurrent(unittest.TestCase):
     """The thread-pooled loader returns exactly what loading each namespace serially would."""
 

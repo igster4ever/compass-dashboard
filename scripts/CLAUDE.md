@@ -76,7 +76,8 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
 
 | Field | Source | Notes |
 |-------|--------|-------|
-| `history[]` | last 5 session files | parsed content (planned/completed/incomplete) |
+| `history[]` | last 5 session files | parsed content (planned/completed/incomplete, `duration_minutes`, `close_mode`, `backlog_match`, `other_sections`) |
+| `backlogMatchSummary` | all history files' `## Backlog match` + reality.md | `{closes, with_candidates, offered, still_open, excluded, by_basis, recent[≤5]}`; `still_open` = candidate's bullet hash still in reality.md; `null` with no match sections |
 | `sessionDates[]` | all session filenames | full history as `YYYY-MM-DD` — use this for time-series viz |
 | `sessionCount` | count of all history files | total, not capped |
 | `learnings[]` | learnings.jsonl | sorted by weight desc; **active only** (see filter below) |
@@ -87,6 +88,9 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
 | `explorationRatio` | state.json `goal_completions` | `{ratio, sessionsWithTypes, explore, total, low}`; `null` below 2 typed sessions |
 | `goalTypeBySession` | state.json `goal_completions` | `[{date, exploit, explore, typed}]` chronological; untyped sessions count as all exploit, so read `typed` |
 | `goalStatusBreakdown` | state.json `goal_completions` + all history files | `{counts, total, sessions, not_completed[≤10]}`, counts sum to total (`other`); goal text and `## Incomplete` reason joined via the history file's `**Opened:**` = the completions key; `null` with no completions |
+| `cadenceLastRun` | state.json `last_*_at` | `{dream, code_review, research, skill_opt, assumption_audit, claude_review: {at, ago}}`; `skill_opt` falls back to legacy `last_skillopt_at`; `ago` is `"never"` when unset |
+| `cooldownViolationSummary` | `cooldown_violations.jsonl` | `{count, rate, recent[≤5]}`, rate per recorded session; `null` with no violations |
+| `dataProblems` | read-phase `_read_json`/`_read_jsonl` | `[{file, issue}]`, one per corrupt file; `[]` when clean |
 | `hasRepoPath` / `realityStructureWarnings` | state.json `repo_path` / reality.md | maturity-ladder inputs; a boolean, never the path, so local paths stay out of the page |
 | `carryForwardTrend` | all history/*.md files | `[{date, carryForward, goalsCompleted}]`; carry-forward = `## Incomplete` bullet count |
 | `lastRealityScore` | state.json `last_reality_score` | completeness % written by compass core at close; comparable only because both algorithms are identical |
@@ -137,6 +141,18 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
   contradiction warnings). Grep the compass
   source for how a field is produced before wiring a plain `state.get(...)`; replicate the
   derivation if it isn't persisted.
+- **History files are parsed once**, oldest first, into `raw["history_parsed"]` by
+  `_read_namespace_files()`. Every consumer (top-5 `history`, carry-forward, `history_by_opened`,
+  goal outcomes, backlog match) reads that list; never glob `history/` again. Sections the parser
+  does not model land in `other_sections`, so add a branch when core grows one.
+- **Every git call goes through `_git(repo, *args, timeout)`**, which returns `(stdout, None)` or
+  `(None, reason)`. Callers record the reason in an `errors` map (`pulse.git`,
+  `complexity_signal`), so a failed probe never reads as "nothing to report".
+- **Read-phase JSON reads pass `problems`** (`_read_json(path, problems)` /
+  `_read_jsonl(path, problems)`): a corrupt file, or JSONL lines that are malformed or not objects
+  (dropped), add one `{file, issue}` entry to `dataProblems`, shown as a card chip and a State-tab
+  section. A missing file is not a problem. Reads outside `_read_namespace_files()` omit it, so
+  nothing is counted twice.
 - **Backlog docs are hypotheses, not specs.** Verify filenames/shapes against compass source
   before implementing (e.g. `dream_defer_count` is a `state.json` scalar, not a jsonl count).
 - **Shared cross-namespace files drift too.** `_community/feed.jsonl` dedups on
