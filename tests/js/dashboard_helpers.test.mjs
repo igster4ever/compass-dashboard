@@ -58,7 +58,7 @@ function extractConst(name) {
   return html.slice(start, i + 1);
 }
 
-const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'globalVisibleNames', 'visibleNS', 'renderCompare', 'deriveTasks', 'renderDecisionGuidance', 'renderDecisions', 'detailTabs', 'decisionsTabLabel', 'ladderLevel', 'renderStateSection_GoalStatuses', 'goalStatusHeadline', '_complexityProbeErrors', 'renderStateSection_DataProblems', 'renderStateSection_BacklogMatch', 'backlogMatchHeadline', '_cadenceLastRun', '_cooldownOverrides'];
+const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'globalVisibleNames', 'visibleNS', 'renderCompare', 'deriveTasks', 'renderDecisions', 'detailTabs', 'decisionsTabLabel', 'ladderLevel', 'renderStateSection_GoalStatuses', 'goalStatusHeadline', '_complexityProbeErrors', 'renderStateSection_DataProblems', 'renderStateSection_BacklogMatch', 'backlogMatchHeadline', '_cadenceLastRun', '_cooldownOverrides'];
 const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES', 'NS_PALETTE', 'COMPARE_AXIS_DEFS', 'GLOBAL_NS_KEY', 'ZONE_SHIP_DATE', 'LADDER', 'CADENCE_LAST_RUN_LABELS'];
 // A minimal in-memory localStorage — radarActiveAxes() reads it; no test here
 // relies on cross-call persistence, so a single shared instance is fine.
@@ -352,68 +352,25 @@ test('deriveTasks() stops attributing bullets to a backlog bucket once a new hea
   assert.ok(!tasks.some(t => t.text === 'unrelated bullet should not be a task'));
 });
 
-test('renderDecisionGuidance() renders a card per pair, signed deltas, no pill without evidence, escaped text', () => {
-  // Synthetic shapes from the 2026-10-23 P65 browser check (docs/backlog/p65-decision-guidance-ui-findings.md).
-  const html = helpers.renderDecisionGuidance({ decisionGuidance: [
-    { preferredDecisionText: 'Mirror core', avoidedDecisionText: 'Re-derive', qualityDelta: 0.17,
-      contextSummary: 'Surfacing a metric', createdAt: '2026-10-20T10:00:00Z' },
-    { preferredDecisionText: 'One commit', avoidedDecisionText: 'Four commits', qualityDelta: -0.12 },
-    { preferredDecisionText: 'Probe first', avoidedDecisionText: 'Trust docs', qualityDelta: null },
-    { preferredDecisionText: '<b>bold?</b>', avoidedDecisionText: '</script><script>x()</script>' },
-  ]});
-  assert.equal((html.match(/class="guidance-item"/g) || []).length, 4);
-  // P65 findings 3-6 (2026-10-27): heading with pair count, pp unit, amber pill for a negative delta, context first.
-  assert.ok(html.includes('Guidance (4)'));
-  assert.ok(html.includes('Δ+17pp</span>'));
-  assert.ok(html.includes('Δ-12pp</span>'));
-  assert.ok(!html.includes('%</span>'));
-  assert.equal((html.match(/class="guidance-delta( neg)?"/g) || []).length, 2, 'null/absent qualityDelta renders no pill');
-  assert.equal((html.match(/class="guidance-delta neg"/g) || []).length, 1, 'only the negative delta is amber');
-  assert.ok(html.includes('avoided option scored higher'));
-  const first = html.slice(html.indexOf('guidance-item'));
-  assert.ok(first.indexOf('Surfacing a metric') < first.indexOf('Mirror core'), 'context line renders before the pair');
-  assert.ok(html.includes('&lt;b&gt;bold?&lt;/b&gt;'));
-  assert.ok(!html.includes('<script>'));
-  assert.ok(html.includes('2026-10-20</span>'));
-  assert.equal(helpers.renderDecisionGuidance({ decisionGuidance: [] }), '');
-});
-
-test('detailTabs() shows the Decisions sub-tab for decisions or guidance, not for neither', () => {
-  // P65 finding 2 (2026-10-23): a guidance-only namespace had no Decisions tab, so its pairs were unreachable.
-  const g = [{ preferredDecisionText: 'p', avoidedDecisionText: 'a' }];
+test('detailTabs() shows the Decisions sub-tab only when there are decisions', () => {
   assert.ok(helpers.detailTabs({ decisions: [{ decision: 'd' }] }).includes('decisions'));
-  assert.ok(helpers.detailTabs({ decisions: [], decisionGuidance: g }).includes('decisions'));
-  assert.ok(!helpers.detailTabs({ decisions: [], decisionGuidance: [] }).includes('decisions'));
+  assert.ok(!helpers.detailTabs({ decisions: [] }).includes('decisions'));
   assert.ok(!helpers.detailTabs({}).includes('decisions'));
   assert.deepEqual(helpers.detailTabs({ externalSignals: ['s'] }),
     ['state', 'learnings', 'history', 'tasks', 'radar', 'signals']);
 });
 
-test('decisionsTabLabel() counts guidance pairs alongside decisions', () => {
+test('decisionsTabLabel() counts decisions', () => {
   // Tab labels use non-breaking spaces so a label never wraps inside its button.
-  const g = [{ preferredDecisionText: 'p', avoidedDecisionText: 'a' }];
   assert.equal(helpers.decisionsTabLabel({ decisions: [{}, {}] }), 'Decisions\u00a0(2)');
-  assert.equal(helpers.decisionsTabLabel({ decisions: [{}], decisionGuidance: g }), 'Decisions\u00a0(1\u00a0·\u00a01\u00a0guidance)');
-  assert.equal(helpers.decisionsTabLabel({ decisionGuidance: [...g, ...g] }), 'Decisions\u00a0(0\u00a0·\u00a02\u00a0guidance)');
+  assert.equal(helpers.decisionsTabLabel({}), 'Decisions\u00a0(0)');
 });
 
-test('renderDecisions() heads the decision list only when guidance sits above it', () => {
-  const g = [{ preferredDecisionText: 'p', avoidedDecisionText: 'a' }];
-  const both = helpers.renderDecisions({ decisions: [{ decision: 'd1' }], decisionGuidance: g });
-  assert.ok(both.includes('Decisions (1)</div>'));
-  assert.ok(both.indexOf('Guidance (1)') < both.indexOf('Decisions (1)</div>'));
+test('renderDecisions() lists decisions, or the empty state when there are none', () => {
   const plain = helpers.renderDecisions({ decisions: [{ decision: 'd1' }] });
-  assert.ok(!plain.includes('guidance-heading'));
-});
-
-test('renderDecisions() still renders guidance when there are no decisions', () => {
-  const g = [{ preferredDecisionText: 'Guidance only pair', avoidedDecisionText: 'a' }];
-  const html = helpers.renderDecisions({ decisions: [], decisionGuidance: g });
-  assert.ok(html.includes('Guidance only pair'));
-  assert.ok(html.includes('No decisions logged for this namespace yet.'));
-  assert.ok(html.indexOf('Guidance only pair') < html.indexOf('No decisions logged'));
-  const none = helpers.renderDecisions({ decisions: [] });
-  assert.ok(!none.includes('guidance-item'));
+  assert.ok(plain.includes('d1'));
+  assert.ok(!plain.includes('No decisions logged'));
+  assert.ok(helpers.renderDecisions({ decisions: [] }).includes('No decisions logged for this namespace yet.'));
 });
 
 // ── Maturity ladder (docs/backlog/maturity-ladder-scorecard-design-note.md) ──
@@ -435,7 +392,6 @@ function matureNs(over = {}) {
     ],
     goalTypeBySession: [1, 2, 3, 4, 5].map(i => ({ date: `2026-10-0${i}`, typed: true })),
     decisions: [{}],
-    contracts: [{}, {}, {}, {}, {}],
     outcomeRate: 0.5,
     staleBulletCount: 0,
     ...over,
@@ -470,7 +426,7 @@ test('ladderLevel(): level is the highest tier with every lower tier passing; co
 });
 
 test('ladderLevel(): next lists only the failing checks one tier up', () => {
-  const r = helpers.ladderLevel(matureNs({ decisions: [], contracts: [] }));
+  const r = helpers.ladderLevel(matureNs({ decisions: [] }));
   assert.equal(r.level, 2);
   assert.deepEqual(r.next.map(c => c.id), ['decision']);
 });

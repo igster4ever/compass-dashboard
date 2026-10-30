@@ -145,14 +145,12 @@ class TestFullPipelineRealLoadNamespace(unittest.TestCase):
             "conflictsByText", "intentHistory", "corpusHealth", "zoneDistribution",
             "confidenceCalibration", "retrievalStaleCount", "externalSignals",
             "explorationRatio", "lastRealityScore", "outcomeRate", "goalOutcomes",
-            "contracts", "contractCoverage", "criteriaHitRate", "decisionGuidance",
-            "goalTypeBySession", "carryForwardTrend", "qualityDist", "decayHistory",
+            "goalTypeBySession", "carryForwardTrend", "qualityDist",
             "codeReviewDeferCount", "researchDeferCount", "artefacts", "skillFeedback",
             "failureDimensionDistribution", "sessionsSinceSkillOpt", "skillOptDue",
             "qualityHistory", "skilloptHoldoutFrozen", "skilloptHoldoutMean",
             "skilloptRoundsCompleted", "skilloptRwi",
-            "skillOptFrictionGate", "assumptionAuditDue",
-            "assumptionAuditCandidates", "claudeReviewDue", "dreamDeferCount",
+            "skillOptFrictionGate", "claudeReviewDue", "dreamDeferCount",
             "complexityClusteringSignals", "mindmap",
         }
         missing = expected_keys - set(entry.keys())

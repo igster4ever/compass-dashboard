@@ -24,7 +24,7 @@ python3 scripts/compass-dashboard.py
 |------|-------|-------|
 | `CLAUDE.md` (this file) | What this is, upkeep, architecture, security | Every turn |
 | [`scripts/CLAUDE.md`](scripts/CLAUDE.md) | `template.html` traps, template substitution, tab system, data model, stateful view tabs | When Claude reads a file in `scripts/` |
-| [`docs/claude/views.md`](docs/claude/views.md) | Per-view rules (DAG, Mind Map, Radar, Compare, global filter, Live strip, Tasks, State, Learnings, Decision Guidance) | Only when followed from the pointer in `scripts/CLAUDE.md` |
+| [`docs/claude/views.md`](docs/claude/views.md) | Per-view rules (DAG, Mind Map, Radar, Compare, global filter, Live strip, Tasks, State, Learnings) | Only when followed from the pointer in `scripts/CLAUDE.md` |
 | [`tests/CLAUDE.md`](tests/CLAUDE.md) | Test file table and testing rules | When Claude reads a file in `tests/` |
 
 A nested file arrives only after the Read tool opens a file in its folder. A Bash-only

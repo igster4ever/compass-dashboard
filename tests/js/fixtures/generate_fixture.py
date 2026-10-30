@@ -4,7 +4,7 @@ Regenerates tests/js/fixtures/dashboard_fixture.json.
 
 Builds two synthetic namespaces using load_namespace()'s real field shapes (never
 real namespace content — everything here is placeholder text), then runs them
-through the actual _js_data()/_js_community() functions so the fixture always
+through the actual _js_data() function so the fixture always
 matches production's camelCase JS shape exactly, not a hand-guessed one.
 
 Run from the repo root: python3 tests/js/fixtures/generate_fixture.py
@@ -71,21 +71,6 @@ def make_ns(name, **overrides):
         "back_refs_by_text": {}, "conflicts_by_text": {}, "intent_history": [],
         "corpus_health": {"score": 80, "unvalidatedHypotheses": 1, "lowWeightCount": 1, "totalActive": 3, "supersededCount": 1},
         "zone_distribution": {"golden": 1, "warning": 1, "preference": 0, "unclassified": 1},
-        "goal_contracts": [
-            {"goal_hash": "abc123", "goal_text": "Ship the verification-contracts panel",
-             "criteria": [{"text": "coverage chip renders", "met": True}, {"text": "criteria list renders", "met": True}],
-             "evidence_type": "document", "stopping_condition": "n/a",
-             "created_at": "2026-08-01T00:00:00Z", "verified_at": "2026-08-02T00:00:00Z",
-             "criteria_hit_rate": 1.0, "status": "verified"},
-        ],
-        "contract_coverage": 1.0, "criteria_hit_rate": 1.0,
-        "decision_guidance": [
-            {"guidance_id": "g1", "context_summary": "Choosing a sync strategy for the community feed",
-             "preferred_decision_text": "Use event-driven append-to-feed.jsonl",
-             "avoided_decision_text": "Poll feed.jsonl on a fixed interval",
-             "evidence": {"preferred_quality": 0.86, "avoided_quality": 0.61},
-             "status": "active", "created_at": "2026-08-25T09:12:03Z"},
-        ],
         "retrieval_stale_count": 0, "external_signals": [],
         "exploration_ratio": {"ratio": 25.0, "sessionsWithTypes": 4, "explore": 1, "total": 4, "low": False},
         "last_reality_score": 50.0, "outcome_rate": 0.5,
@@ -97,7 +82,7 @@ def make_ns(name, **overrides):
         }}),
         "has_repo_path": True, "reality_structure_warnings": mod._check_reality_structure("## What exists and works\n"),
         "carry_forward_trend": [{"date": "2026-08-01", "carryForward": 1, "goalsCompleted": 1}],
-        "quality_dist": {"high": 2, "neutral": 1, "poor": 0}, "decay_history": [],
+        "quality_dist": {"high": 2, "neutral": 1, "poor": 0},
         "code_review_defer_count": 0, "research_defer_count": 0,
         "artefacts": [{"title": "Example diagram", "type": "svg", "tags": ["dashboard"], "description": "x",
                        "file": "artefacts/example.svg", "abs_file": None, "linked_pcode": None, "created_at": "2026-07-01T00:00:00Z"}],
@@ -123,7 +108,6 @@ def make_ns(name, **overrides):
         "quality_plateau": {"plateaued": False, "insufficient_sample": False, "sessions_checked": 3, "trend": "improving", "delta": 0.1},
         "cadence_pull_forward": {"review": False, "skill_opt": False},
         "skill_opt_friction_gate": {"open_feedback_count": 2, "threshold": 3, "sufficient_signal": False},
-        "assumption_audit_due": False, "assumption_audit_candidates": [],
         "claude_review_due": False, "dream_defer_count": 0,
         "complexity_clustering_signals": [],
         "confidence_calibration": {
@@ -151,7 +135,6 @@ def build():
             {"learning_id": "l3", "text": "Shared tooling insight", "tags": ["tooling"], "weight": 2,
              "date": "2026-07-20T00:00:00Z", "learning_type": "fact", "status": "active"},
         ], zone_distribution={"golden": 0, "warning": 0, "preference": 0, "unclassified": 1},
-           goal_contracts=[], contract_coverage=None, criteria_hit_rate=None, decision_guidance=[],
            confidence_calibration={"sufficient_sample": False, "resolved_count": 2, "min_required": 8,
                                     "buckets": {}, "miscalibrated": None}),
     ]
@@ -170,36 +153,10 @@ def build():
             "quality": None, "git": {"repo": "/tmp/example", "ahead": 0, "dirty_files": 1, "errors": {}},
         }
 
-    community = {
-        "enabled": True,
-        "feed": [
-            {"learning_id": "l1", "source_loop_id": "example-ns-one", "event_type": "community.learning_published",
-             "text": "Shared learning", "tags": ["tooling"], "published_at": "2026-07-05T00:00:00Z", "trust_level": "high"},
-        ],
-        "inbox": [],
-        "adoptions": [
-            {"community_id": "c1", "namespace": "example-ns-two", "adopted_at": "2026-07-06T00:00:00Z"},
-        ],
-        "subscriptions": [],
-        "trust_registry": [
-            {"peer_id": "example-ns-one", "trust_level": "high", "registered_at": "2026-07-01T00:00:00Z", "notes": ""},
-        ],
-    }
-
-    adoption_counts_by_community_id = {"c1": 1}
-    published_ids_by_ns = {"example-ns-one": {"l1"}}
-    for n in ns_list:
-        published_ids = published_ids_by_ns.get(n["namespace"], set())
-        for l in n["learnings"]:
-            lid = l.get("learning_id")
-            l["communityShared"] = bool(lid and lid in published_ids)
-            l["communityAdoptedByCount"] = adoption_counts_by_community_id.get(lid, 0) if lid else 0
-
     ns_js = json.loads(mod._js_data(ns_list))
-    community_js = json.loads(mod._js_community(community))
     blocking_js = mod._extract_blocking_edges(ns_list) if hasattr(mod, "_extract_blocking_edges") else []
 
-    return {"NS": ns_js, "COMMUNITY": community_js, "BLOCKING_EDGES": blocking_js}
+    return {"NS": ns_js, "BLOCKING_EDGES": blocking_js}
 
 
 if __name__ == "__main__":

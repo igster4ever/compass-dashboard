@@ -8,7 +8,7 @@ Run `python3 -m pytest tests/ -q` **and** `node --test tests/js/` before calling
 
 | File | What it covers |
 |------|----------------|
-| `test_data_loading.py` | Pure data-layer helpers (completeness, corpus health, goal stats, zones, contracts, calibration, failure dimensions…) plus a few tempdir `load_namespace()` cases |
+| `test_data_loading.py` | Pure data-layer helpers (completeness, corpus health, goal stats, zones, calibration, failure dimensions…) plus a few tempdir `load_namespace()` cases |
 | `test_generate.py` | `generate()` smoke tests — structural markers, `const NS = [` embedding, script-tag escaping, feature wiring |
 | `test_integration_pipeline.py` | End-to-end: on-disk synthetic namespace → `load_namespace()` → `_js_data()`/`generate()` |
 | `test_claude_md_budget.py` | Each rules file (root, `scripts/`, `tests/` CLAUDE.md, `docs/claude/views.md`) under 20KB; every pre-split section in exactly one file; root links each nested file; `scripts/CLAUDE.md` points to `views.md` |

@@ -5,8 +5,8 @@ Loads when Claude reads a file in `scripts/`. Root `CLAUDE.md` holds the upkeep 
 **Before you edit a view's code, read its section in [`docs/claude/views.md`](../docs/claude/views.md).**
 It covers `renderDAG()`/`dagInitPositions()`/`dagSimStep()`, `renderMindMap()`/`mmLayout()`/`mmDraw()`,
 `renderRadar()`, `renderCompare()`, the global filter (`globalVisibleNames()`/`visibleNS()`/
-`globalFilterRerender()`), `renderLiveStrip()`/`_build_pulse()`, `deriveTasks()`, `renderState()`,
-`renderLearnings()`/`applyLearningFilters()` and `renderDecisionGuidance()`.
+`globalFilterRerender()`), `renderLiveStrip()`/`_build_pulse()`, `deriveTasks()`, `renderState()`
+and `renderLearnings()`/`applyLearningFilters()`.
 
 ## `template.html` traps
 
@@ -46,7 +46,6 @@ function becomes undefined (`ReferenceError: switchView is not defined`). Run
 | Marker | Replaced with |
 |--------|---------------|
 | `[[NS_DATA]]` | JSON-serialised namespace array |
-| `[[COMMUNITY_DATA]]` | JSON-serialised community federation data |
 | `[[BLOCKING_EDGES]]` | JSON array of cross-namespace blocking edges (E24a) |
 | `[[CARDS]]` | namespace card HTML |
 | `[[GENERATED_AT]]` | generation timestamp |
@@ -58,14 +57,14 @@ function becomes undefined (`ReferenceError: switchView is not defined`). Run
 
 **Top-level view tabs** (`.view-tab`, `switchView(v)`) — full-page views. The `forEach` array in
 `switchView()` is the authoritative list (overview, priorities, scorecard, dag, heatmap,
-timeline, decisions, artefacts, mindmap, community, compare). Each view has `id="view-<name>"`
+timeline, decisions, artefacts, mindmap, compare). Each view has `id="view-<name>"`
 and `id="vtab-<name>"`. Adding one requires: a `<nav>` button, a `<div id="view-<name>">`, the
 name in `switchView()`'s `forEach`, an `if (v === '<name>') render<Name>();` branch, and a
 `render<Name>()` function.
 
 **Namespace detail sub-tabs** (`.tab-btn`, `switchTab(t)`) — panels within a selected namespace.
-`detailTabs(ns)` is the authoritative list (`decisions` when there are decisions *or* P65 guidance
-pairs, `signals` only when `externalSignals` is non-empty).
+`detailTabs(ns)` is the authoritative list (`decisions` only when there are decisions,
+`signals` only when `externalSignals` is non-empty).
 
 Long panels use collapsible `stateGroup(title, headline, bodyHtml)` drawers with a one-line
 data-derived headline in the `<summary>`; `stateGroup` renders nothing when its body is empty.
@@ -88,15 +87,13 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
 | `explorationRatio` | state.json `goal_completions` | `{ratio, sessionsWithTypes, explore, total, low}`; `null` below 2 typed sessions |
 | `goalTypeBySession` | state.json `goal_completions` | `[{date, exploit, explore, typed}]` chronological; untyped sessions count as all exploit, so read `typed` |
 | `goalStatusBreakdown` | state.json `goal_completions` + all history files | `{counts, total, sessions, not_completed[≤10]}`, counts sum to total (`other`); goal text and `## Incomplete` reason joined via the history file's `**Opened:**` = the completions key; `null` with no completions |
-| `cadenceLastRun` | state.json `last_*_at` | `{dream, code_review, research, skill_opt, assumption_audit, claude_review: {at, ago}}`; `skill_opt` falls back to legacy `last_skillopt_at`; `ago` is `"never"` when unset |
+| `cadenceLastRun` | state.json `last_*_at` | `{dream, code_review, research, skill_opt, claude_review: {at, ago}}`; `skill_opt` falls back to legacy `last_skillopt_at`; `ago` is `"never"` when unset |
 | `cooldownViolationSummary` | `cooldown_violations.jsonl` | `{count, rate, recent[≤5]}`, rate per recorded session; `null` with no violations |
 | `dataProblems` | read-phase `_read_json`/`_read_jsonl` | `[{file, issue}]`, one per corrupt file; `[]` when clean |
 | `hasRepoPath` / `realityStructureWarnings` | state.json `repo_path` / reality.md | maturity-ladder inputs; a boolean, never the path, so local paths stay out of the page |
 | `carryForwardTrend` | all history/*.md files | `[{date, carryForward, goalsCompleted}]`; carry-forward = `## Incomplete` bullet count |
 | `lastRealityScore` | state.json `last_reality_score` | completeness % written by compass core at close; comparable only because both algorithms are identical |
 | `zoneDistribution` | active `learnings[]` | P56 `{golden, warning, preference, unclassified}`; top-level, not under `corpusHealth` |
-| `contracts[]` / `contractCoverage` / `criteriaHitRate` | state.json `goal_contracts` | P55; coverage stats `null` below 5 contracts |
-| `decisionGuidance[]` | `decision_guidance.jsonl` | P65; `status == "retired"` filtered out |
 | `confidenceCalibration` | learnings.jsonl (**unfiltered**) | P59; `null` below 8 resolved hypotheses |
 | `failureDimensionDistribution` | `skill_feedback.jsonl` | P69; dashboard-only aggregation |
 
@@ -110,7 +107,7 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
 - **Active-learnings filter:** `not l.get("superseded_by") and l.get("status") not in
   ("archived", "superseded")`. Calibration-style stats that count *resolved* data points use the
   unfiltered list instead, matching compass core.
-- **Null means below threshold.** Gated stats (`outcomeRate`, `contractCoverage`,
+- **Null means below threshold.** Gated stats (`outcomeRate`,
   `confidenceCalibration`, `corpusHealth`) return `None`/`null` below their gate, and a pending
   per-item rate is `None`, not `0.0`. Render "not enough data yet", never zero.
 - **Counting distributions always sum to the total:** missing/unrecognised values go to
@@ -118,7 +115,7 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
 - **Mirrored compass-core logic:** `_COMPLETION_MARKERS`, `_BACKLOG_HEADERS`,
   `_NON_ACHIEVEMENT_HEADERS`, `_reality_completeness()` (section-aware P22), `_check_reality_structure()` (P17), `_iter_reality_bullets()`,
   `_stale_bullet_count()` (whole-day threshold), `_parse_section_bullets()`,
-  `_normalise_validation_entry()`, `_contract_coverage()`,
+  `_normalise_validation_entry()`,
   `_suggested_goal_count()` (trailing FIVE sessions, as core's trend),
   `_compute_confidence_calibration()`, and the cadence gates `_check_dream_due()`,
   `_check_claude_review_due()` (per-file budget over every rules file `_claude_md_files()` finds by core's convention scan, shared with the pulse), research/code-review/skill-opt due
@@ -154,9 +151,6 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
   nothing is counted twice.
 - **Backlog docs are hypotheses, not specs.** Verify filenames/shapes against compass source
   before implementing (e.g. `dream_defer_count` is a `state.json` scalar, not a jsonl count).
-- **Shared cross-namespace files drift too.** `_community/feed.jsonl` dedups on
-  `(learning_id, event_type)`; `load_community()` filters `community.learning_retracted` rows so
-  every consumer treats a feed row as "currently shared".
 - **Check whether data is already wired** (grep `_js_data()` and `template.html -a`) before
   scoping "data layer + UI" work — e.g. `quality_history[].components` already flowed through.
 

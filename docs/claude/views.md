@@ -81,12 +81,3 @@ so the row shows only the part after the dash, and nothing when the goal already
 **Learnings sub-tab** — type and zone filters compose through `applyLearningFilters(table,
 nsId)` over `data-ltype`/`data-zone`; never set `row.style.display` from a second independent
 filter. `filterLearningZone` (click-to-toggle) is exported; `applyLearningFilters` is not.
-
-**Decision Guidance** (P65) — rendered inside the Decisions sub-tab by
-`renderDecisionGuidance(ns)`, returns `''` when empty. It renders before the decisions empty state,
-so a guidance-only namespace still shows its pairs. `qualityDelta` is `null` unless both evidence
-qualities are numbers (`_guidance_quality_delta()`); core stores `evidence` unvalidated.
-The tab label counts pairs via `decisionsTabLabel(ns)`. A "Guidance (N)" heading sits above the cards,
-and a "Decisions (N)" heading above the list only when guidance is present. Each card leads with
-`contextSummary`. The delta shows in `pp` (a difference of 0–1 scores), and a negative delta gets the
-amber `.guidance-delta.neg` pill.

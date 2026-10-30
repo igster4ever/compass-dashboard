@@ -67,7 +67,6 @@ def _minimal_ns(overrides=None):
         "goal_type_by_session":     [],
         "carry_forward_trend":      [],
         "quality_dist":             {"high": 0, "neutral": 0, "poor": 0},
-        "decay_history":            [],
         "code_review_defer_count":  0,
         "research_defer_count":     0,
         "artefacts":                [],
@@ -305,7 +304,7 @@ class TestClaudeReviewChip(unittest.TestCase):
     """CLAUDE.md review chip — size-gate pull-forward mirrors compass core (2026-09-30)."""
 
     def _html(self, **over):
-        return _mod._card_html(_minimal_ns(over), 0, {})
+        return _mod._card_html(_minimal_ns(over), 0)
 
     def test_size_pulled_forward_chip_shows_bolt_and_size(self):
         html = self._html(claude_review_due=True, claude_review_status={
@@ -328,73 +327,13 @@ class TestDataProblemsChip(unittest.TestCase):
     def test_chip_names_count_and_issues(self):
         html = _mod._card_html(_minimal_ns({"data_problems": [
             {"file": "learnings.jsonl", "issue": "2 malformed lines dropped (first: line 4)"},
-            {"file": "state.json", "issue": "invalid JSON at line 1 <x>"}]}), 0, {})
+            {"file": "state.json", "issue": "invalid JSON at line 1 <x>"}]}), 0)
         self.assertIn("⚠ 2 corrupt files</span>", html)
         self.assertIn("learnings.jsonl: 2 malformed lines dropped (first: line 4); "
                       "state.json: invalid JSON at line 1 &lt;x&gt;", html)
 
     def test_no_problems_no_chip(self):
-        self.assertNotIn("corrupt file", _mod._card_html(_minimal_ns({}), 0, {}))
-
-
-class TestCommunityChips(unittest.TestCase):
-    """P40-D Phase 2 — community health chip rendering."""
-
-    _card_html = staticmethod(_mod._card_html)
-
-    def _ns(self, name="test-ns"):
-        return _minimal_ns({"namespace": name})
-
-    # ── _card_html() unit tests (no filesystem) ──────────────────────────────
-
-    def test_chip_present_when_namespace_has_published(self):
-        html = self._card_html(self._ns("compass"), 0, {"compass": 2})
-        self.assertIn("community-chip", html)
-        self.assertIn("2 shared", html)
-
-    def test_chip_absent_when_namespace_not_in_published(self):
-        html = self._card_html(self._ns("test-ns"), 0, {"other-ns": 3})
-        self.assertNotIn("community-chip", html)
-
-    def test_chip_absent_when_community_published_is_none(self):
-        html = self._card_html(self._ns("test-ns"), 0, None)
-        self.assertNotIn("community-chip", html)
-
-    def test_chip_count_reflects_published_value(self):
-        html = self._card_html(self._ns("my-ns"), 0, {"my-ns": 5})
-        self.assertIn("5 shared", html)
-
-    # ── generate() integration — patched load_community ──────────────────────
-
-    def test_chip_rendered_in_full_html_when_community_enabled(self):
-        from unittest.mock import patch
-        community = {
-            "enabled": True,
-            "feed": [{"source_loop_id": "test-ns", "text": "a learning"}],
-            "inbox": [], "adoptions": [], "subscriptions": [], "trust_registry": [],
-        }
-        with patch.object(_mod, "load_community", return_value=community):
-            html = render_html([_minimal_ns({"namespace": "test-ns"})])
-        self.assertIn("community-chip", html)
-        self.assertIn("1 shared", html)
-
-    def test_no_chip_in_html_when_community_disabled(self):
-        from unittest.mock import patch
-        community = {
-            "enabled": False,
-            "feed": [], "inbox": [], "adoptions": [], "subscriptions": [], "trust_registry": [],
-        }
-        with patch.object(_mod, "load_community", return_value=community):
-            html = render_html([_minimal_ns()])
-        self.assertNotIn("shared</span>", html)
-
-    def test_community_chip_css_present_in_template(self):
-        template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
-        self.assertIn(".community-chip", template)
-
-    def test_community_inbox_signal_in_template(self):
-        template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
-        self.assertIn("community learning", template)
+        self.assertNotIn("corrupt file", _mod._card_html(_minimal_ns({}), 0))
 
 
 class TestWatchingChip(unittest.TestCase):
@@ -496,90 +435,6 @@ class TestZoneAndRetrievalStale(unittest.TestCase):
         # _minimal_ns() has no zone_distribution key — must not crash the .get() default path.
         html = render_html([_minimal_ns()])
         self.assertIn("zoneDistribution", html)
-
-
-class TestVerificationContracts(unittest.TestCase):
-    """P55 — Verification Contracts."""
-
-    def _contract(self, goal_text="Ship the thing", criteria=None, verified_at=None):
-        return {
-            "goal_hash": "abc123",
-            "goal_text": goal_text,
-            "criteria": [{"text": c, "met": True} for c in (criteria or ["a", "b"])],
-            "evidence_type": "document",
-            "stopping_condition": "n/a",
-            "created_at": "2026-08-01T00:00:00Z",
-            "verified_at": verified_at,
-            "criteria_hit_rate": 1.0 if verified_at else None,
-            "status": "verified" if verified_at else "pending",
-        }
-
-    def test_contracts_embedded_in_ns_json(self):
-        ns = _minimal_ns({
-            "goal_contracts": [self._contract(verified_at="2026-08-02T00:00:00Z")],
-            "contract_coverage": 1.0,
-            "criteria_hit_rate": 1.0,
-        })
-        html = render_html([ns])
-        self.assertIn("Ship the thing", html)
-        self.assertIn("contractCoverage", html)
-        self.assertIn("criteriaHitRate", html)
-
-    def test_defaults_when_absent(self):
-        # _minimal_ns() has no goal_contracts/contract_coverage — must not crash .get() defaults.
-        html = render_html([_minimal_ns()])
-        self.assertIn('"contracts": []', html.replace("'", '"'))
-
-
-class TestDecisionGuidance(unittest.TestCase):
-    """P65 — Contrastive Decision-Guidance Mining."""
-
-    def test_decision_guidance_embedded_in_ns_json(self):
-        ns = _minimal_ns({
-            "decision_guidance": [{
-                "guidance_id": "g1",
-                "context_summary": "Sync strategy",
-                "preferred_decision_text": "Use event-driven append",
-                "avoided_decision_text": "Poll on a fixed interval",
-                "evidence": {"preferred_quality": 0.86, "avoided_quality": 0.61},
-                "status": "active",
-                "created_at": "2026-08-25T09:12:03Z",
-            }],
-        })
-        html = render_html([ns])
-        self.assertIn("Use event-driven append", html)
-        self.assertIn("decisionGuidance", html)
-
-    def test_quality_delta_only_for_numeric_evidence(self):
-        # core's log-decision-guidance stores `evidence` unvalidated; one bad row used to raise
-        # TypeError and kill the whole generation (P65 findings 2026-10-23, finding 1).
-        import json
-        cases = [
-            ({"preferred_quality": 0.86, "avoided_quality": 0.61}, 0.25),
-            ({"preferred_quality": None, "avoided_quality": 0.4}, None),
-            ({"preferred_quality": "0.9", "avoided_quality": 0.4}, None),
-            ({"preferred_quality": True, "avoided_quality": 0.4}, None),
-            ({"preferred_quality": 0.9}, None),
-            ("not a dict", None),
-            (None, None),
-        ]
-        ns = _minimal_ns({"decision_guidance": [
-            {"guidance_id": f"g{i}", "preferred_decision_text": "p", "avoided_decision_text": "a",
-             "evidence": ev, "status": "active"}
-            for i, (ev, _) in enumerate(cases)
-        ]})
-        rows = json.loads(_mod._js_data([ns]))[0]["decisionGuidance"]
-        for (ev, want), row in zip(cases, rows):
-            with self.subTest(evidence=ev):
-                if want is None:
-                    self.assertIsNone(row["qualityDelta"])
-                else:
-                    self.assertAlmostEqual(row["qualityDelta"], want)
-
-    def test_defaults_when_absent(self):
-        # _minimal_ns() has no decision_guidance key — must not crash the .get() default path.
-        html = render_html([_minimal_ns()])
-        self.assertIn('"decisionGuidance": []', html.replace("'", '"'))
 
 
 class TestMindMap(unittest.TestCase):
@@ -688,11 +543,7 @@ class TestWatchMode(unittest.TestCase):
         self.out = self.dir / "dash.html"
 
     def _generate(self, **kw):
-        from unittest.mock import patch
-        with patch.object(_mod, "load_community", return_value={"enabled": False, "feed": [], "inbox": [],
-                                                                 "adoptions": [], "subscriptions": [],
-                                                                 "trust_registry": []}):
-            return _mod.generate([_minimal_ns()], **kw)
+        return _mod.generate([_minimal_ns()], **kw)
 
     def test_watch_seconds_baked_as_null_by_default(self):
         self.assertIn("const WATCH_SECONDS = null;", self._generate())

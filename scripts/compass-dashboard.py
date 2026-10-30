@@ -370,8 +370,8 @@ def _normalize_confidence(value):
     label. Learnings normally carry confidence as one of these three strings — compass
     core's _CONFIDENCE_MULTIPLIER (learnings.py) and _compute_confidence_calibration only
     recognise them — but a handful of live entries instead have a raw float from some
-    other write path. Bucketed rather than dropped so every consumer (assumption-audit
-    candidates, mindmap tooltip) keeps working identically to an author-supplied string.
+    other write path. Bucketed rather than dropped so every consumer (mindmap
+    tooltip) keeps working identically to an author-supplied string.
     Thresholds are this dashboard's own heuristic (compass core has no float scale to
     mirror here, unlike other local-mirror helpers in this file).
     """
@@ -677,7 +677,6 @@ _CADENCE_LAST_RUN = (
     ("code_review",      "last_review_at"),
     ("research",         "last_research_at"),
     ("skill_opt",        "last_skill_opt_at", "last_skillopt_at"),
-    ("assumption_audit", "last_assumption_audit_at"),
     ("claude_review",    "last_claude_review_at"),
 )
 
@@ -952,86 +951,6 @@ def _goal_outcomes_breakdown(history_parsed, state, reality_md, limit=20):
             if len(breakdown) >= limit:
                 return breakdown
     return breakdown
-
-
-_CONTRACT_COVERAGE_MIN_CONTRACTS = 5  # mirrors compass/state.py's _compute_contract_coverage() gate
-
-
-def _contract_coverage(state, window=20):
-    """P55 — rolling contract-verification coverage + criteria hit rate.
-
-    Mirrors compass/state.py's _compute_contract_coverage() (read directly to confirm
-    the algorithm, not guessed): gated on at least _CONTRACT_COVERAGE_MIN_CONTRACTS total
-    logged contracts, else both stats are None. Otherwise walks goal_completions newest
-    first collecting completed_hashes up to `window`, intersects with goal_contracts'
-    keys to find the contracts relevant to that window, and reports what fraction of
-    those were verified plus the mean per-contract criteria-met fraction.
-    """
-    contracts = state.get("goal_contracts", {})
-    if len(contracts) < _CONTRACT_COVERAGE_MIN_CONTRACTS:
-        return {"contract_coverage": None, "criteria_hit_rate": None}
-
-    completions = state.get("goal_completions", {})
-    hashes = []
-    for _, entry in sorted(completions.items(), reverse=True):
-        if isinstance(entry, dict):
-            hashes.extend(entry.get("completed_hashes", []))
-        if len(hashes) >= window:
-            break
-    hashes = hashes[:window]
-
-    relevant = [h for h in hashes if h in contracts]
-    if not relevant:
-        return {"contract_coverage": None, "criteria_hit_rate": None}
-
-    verified = [h for h in relevant if contracts[h].get("verified_at")]
-    coverage = round(len(verified) / len(relevant), 3)
-
-    scores = [
-        len(contracts[h].get("verified_criteria", [])) / len(contracts[h]["criteria"])
-        for h in verified if contracts[h].get("criteria")
-    ]
-    hit_rate = round(sum(scores) / len(scores), 3) if scores else None
-    return {"contract_coverage": coverage, "criteria_hit_rate": hit_rate}
-
-
-def _parse_goal_contracts(state):
-    """P55 — flatten state.json's goal_contracts ({goal_hash: {...}}) into a JS-ready
-    array, newest-created first. Merges compass core's separate `criteria`/
-    `verified_criteria`/`unmet_criteria` arrays into a single ordered
-    `criteria: [{text, met}]` list — preserves the goal's authored criteria order for
-    rendering, rather than making the frontend interleave two lists to reconstruct it.
-    """
-    out = []
-    for goal_hash, c in state.get("goal_contracts", {}).items():
-        criteria = c.get("criteria", [])
-        verified_criteria = set(c.get("verified_criteria", []))
-        merged_criteria = [{"text": t, "met": t in verified_criteria} for t in criteria]
-
-        if not c.get("verified_at"):
-            status = "pending"
-        elif criteria and len(verified_criteria) == len(criteria):
-            status = "verified"
-        elif verified_criteria:
-            status = "partially_verified"
-        else:
-            status = "unmet"
-
-        out.append({
-            "goal_hash":          goal_hash,
-            "goal_text":          c.get("goal_text", ""),
-            "criteria":           merged_criteria,
-            "evidence_type":      c.get("evidence_type"),
-            "stopping_condition": c.get("stopping_condition"),
-            "created_at":         c.get("created_at"),
-            "verified_at":        c.get("verified_at"),
-            # None until the contract has actually been through verification — a pending
-            # contract hasn't been evaluated yet, so 0.0 would misleadingly read as "failed".
-            "criteria_hit_rate":  round(len(verified_criteria) / len(criteria), 3) if criteria and c.get("verified_at") else None,
-            "status":             status,
-        })
-    out.sort(key=lambda c: c.get("created_at") or "", reverse=True)
-    return out
 
 
 def _goal_stats(state):
@@ -1340,41 +1259,6 @@ def _check_claude_review_due(ns_dir, state, config, repo_path):
     }
 
 
-def _check_assumption_audit_due(state, config, learnings):
-    """Whether a Strategic Assumption Audit is due (P47), and if so, the unvalidated
-    high-weight hypotheses that qualify. Mirrors compass/_monolith.py's
-    _check_assumption_audit_due() + _get_assumption_audit_candidates().
-    """
-    assumption_audit_interval = config.get("assumption_audit_interval_sessions", 10)
-    due = state.get("sessions_since_assumption_audit", 0) >= assumption_audit_interval
-    candidates = []
-    if due:
-        now = _now_utc()
-        for l in learnings:
-            if l.get("learning_type") != "hypothesis":
-                continue
-            if l.get("validation_result"):
-                continue
-            if l.get("status") in ("superseded", "archived"):
-                continue
-            weight = l.get("weight", 1)
-            if weight < 2:
-                continue
-            dt = _parse_iso(l.get("date"))
-            if dt is None:
-                continue
-            age_days = (now - dt).days
-            if age_days <= 30:
-                continue
-            candidates.append({
-                "text": l.get("text", ""), "weight": weight,
-                "confidence": l.get("confidence", "medium"), "age_days": age_days,
-                "tags": l.get("tags", []),
-            })
-        candidates.sort(key=lambda c: (-c["weight"], -c["age_days"]))
-    return due, candidates
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Live strip: a baked `pulse` object per namespace
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1588,9 +1472,6 @@ def _read_namespace_files(ns_dir):
     # Intent drift timeline
     intent_history = _read_jsonl(ns_dir / "intent_history.jsonl", problems)
 
-    # Decay history — corpus maintenance events (newest first)
-    decay_history = list(reversed(_read_jsonl(ns_dir / "decay_history.jsonl", problems)))
-
     # Deferral escalation counts (used in Priorities scoring)
     code_review_defer_count = len(_read_jsonl(ns_dir / "code_review_deferrals.jsonl", problems))
     research_defer_count    = len(_read_jsonl(ns_dir / "research_deferrals.jsonl", problems))
@@ -1613,17 +1494,6 @@ def _read_namespace_files(ns_dir):
         else:
             _ac["abs_file"] = None
         artefacts.append(_ac)
-
-    # P65 — contrastive decision-guidance cards ("prefer A over B"). New per-namespace
-    # file, not present in any live namespace yet as of this writing (shipped late Aug
-    # 2026) — _read_jsonl already returns [] gracefully when the file is absent. Retired
-    # entries filtered at read time, mirroring compass core's own query-decision-guidance
-    # command and this file's existing _community/feed.jsonl retraction-filtering
-    # precedent (load_community(), above).
-    decision_guidance = [
-        g for g in _read_jsonl(ns_dir / "decision_guidance.jsonl", problems)
-        if g.get("status") != "retired"
-    ]
 
     # Cross-namespace learning links — raw records only; the text-keyed lookup
     # dicts consumers actually want are built in the assembly phase.
@@ -1649,13 +1519,11 @@ def _read_namespace_files(ns_dir):
         "session_count":           session_count,
         "session_dates":           session_dates,
         "intent_history":          intent_history,
-        "decay_history":           decay_history,
         "code_review_defer_count": code_review_defer_count,
         "research_defer_count":    research_defer_count,
         "external_signals":        external_signals,
         "skill_feedback":          skill_feedback,
         "artefacts":               artefacts,
-        "decision_guidance":       decision_guidance,
         "back_refs_raw":           back_refs_raw,
         "conflicts_raw":           conflicts_raw,
         "reality_changes":         reality_changes,
@@ -1735,11 +1603,6 @@ def _assemble_namespace_dict(ns_dir, raw):
     # NOT a *_deferrals.jsonl file like code_review_defer_count/research_defer_count above.
     dream_defer_count = state.get("dream_defer_count", 0)
 
-    # P47 — Strategic Assumption Audit due chip
-    assumption_audit_due, assumption_audit_candidates = _check_assumption_audit_due(
-        state, config, learnings
-    )
-
     intent_version     = state.get("intent_versions", 1)
     stale_bullet_count = _stale_bullet_count(reality, state)
     verification_durability = _verification_durability(reality, state)
@@ -1751,8 +1614,6 @@ def _assemble_namespace_dict(ns_dir, raw):
     last_reality_score   = state.get("last_reality_score")
     outcome_rate         = state.get("outcome_rate")
     goal_outcomes        = _goal_outcomes_breakdown(raw["history_parsed"], state, reality)
-    goal_contracts       = _parse_goal_contracts(state)
-    contract_stats       = _contract_coverage(state)
     goal_type_by_session = _goal_type_by_session(state)
     # Carry-forward trend + quality distribution: all history files (uncapped) — sorted chronologically
     carry_forward_trend = []
@@ -1785,7 +1646,6 @@ def _assemble_namespace_dict(ns_dir, raw):
                 all_incomplete_items.append(_item)
 
     intent_history          = raw["intent_history"]
-    decay_history           = raw["decay_history"]
     code_review_defer_count = raw["code_review_defer_count"]
     research_defer_count    = raw["research_defer_count"]
     external_signals        = raw["external_signals"]
@@ -1816,7 +1676,6 @@ def _assemble_namespace_dict(ns_dir, raw):
 
 
     artefacts          = raw["artefacts"]
-    decision_guidance  = raw["decision_guidance"]
 
     # Cross-namespace learning links — the raw records were already read in the
     # file-reading phase; only the text-keyed lookup dicts are built here.
@@ -1896,16 +1755,11 @@ def _assemble_namespace_dict(ns_dir, raw):
         "last_reality_score":        last_reality_score,
         "outcome_rate":              outcome_rate,
         "goal_outcomes":             goal_outcomes,
-        "goal_contracts":            goal_contracts,
-        "contract_coverage":         contract_stats["contract_coverage"],
-        "criteria_hit_rate":         contract_stats["criteria_hit_rate"],
-        "decision_guidance":         decision_guidance,
         "goal_type_by_session":      goal_type_by_session,
         "goal_status_breakdown":     _goal_status_breakdown(state, history_by_opened),
         "backlog_match_summary":     _backlog_match_summary(raw["history_parsed"], reality),
         "carry_forward_trend":       carry_forward_trend,
         "quality_dist":              quality_dist,
-        "decay_history":             decay_history,
         "code_review_defer_count":    code_review_defer_count,
         "research_defer_count":       research_defer_count,
         "artefacts":                  artefacts,
@@ -1920,8 +1774,6 @@ def _assemble_namespace_dict(ns_dir, raw):
         "skillopt_rounds_completed":  len(skillopt_rounds),
         "skillopt_rwi":               skillopt_rwi,
         "skill_opt_friction_gate":    skill_opt_friction_gate,
-        "assumption_audit_due":         assumption_audit_due,
-        "assumption_audit_candidates": assumption_audit_candidates,
         "claude_review_due":          claude_review_due,
         "claude_review_status":       claude_review_status,
         "verification_durability":    verification_durability,
@@ -1934,42 +1786,6 @@ def _assemble_namespace_dict(ns_dir, raw):
 def load_namespace(ns_dir):
     raw = _read_namespace_files(ns_dir)
     return _assemble_namespace_dict(ns_dir, raw)
-
-
-_COMMUNITY_LEARNING_RETRACTED = "community.learning_retracted"
-
-
-def load_community():
-    """Parse _community/*.jsonl files and return COMMUNITY data object (P40-Dashboard Phase 1).
-
-    P40 Phase 2 (compass core, 2026-07-29): feed.jsonl now dedupes on
-    (learning_id, event_type) instead of learning_id alone, so a
-    community.learning_retracted tombstone survives as its own row alongside the
-    original publish record (previously dropped as a "duplicate"). "feed" here is
-    filtered to published-only — every dashboard consumer treats a feed row as "this
-    is currently shared", and a retracted learning is no longer that.
-    """
-    community_dir = LOOP_DIR / "_community"
-    enabled = community_dir.is_dir() and any(community_dir.glob("*.jsonl"))
-    if not enabled:
-        return {
-            "enabled":      False,
-            "feed":         [],
-            "inbox":        [],
-            "adoptions":    [],
-            "subscriptions": [],
-            "trust_registry": [],
-        }
-    feed = _read_jsonl(community_dir / "feed.jsonl")
-    feed = [e for e in feed if e.get("event_type") != _COMMUNITY_LEARNING_RETRACTED]
-    return {
-        "enabled":        True,
-        "feed":           feed,
-        "inbox":          _read_jsonl(community_dir / "inbox.jsonl"),
-        "adoptions":      _read_jsonl(community_dir / "adoptions.jsonl"),
-        "subscriptions":  _read_jsonl(community_dir / "subscriptions.jsonl"),
-        "trust_registry": _read_jsonl(community_dir / "trust_registry.jsonl"),
-    }
 
 
 def discover_namespaces(filter_ns=None):
@@ -2005,7 +1821,7 @@ def discover_namespaces(filter_ns=None):
 # HTML card generation (Python side — static markup)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _card_html(n, i, community_published=None):
+def _card_html(n, i):
     status_cls   = "open" if n["open_session"] else "closed"
     status_label = "OPEN" if n["open_session"] else "CLOSED"
     time_label   = _time_ago(n["last_open"] if n["open_session"] else n["last_close"])
@@ -2049,8 +1865,6 @@ def _card_html(n, i, community_published=None):
             review_html = '<span class="cadence-chip review">🔍 review due</span>'
     else:
         review_html = ""
-    assumption_html = ('<span class="cadence-chip assumption">🧪 assumption audit due</span>'
-                        if n.get("assumption_audit_due") else "")
     if not n.get("claude_review_due"):
         claude_review_html = ""
     elif n.get("claude_review_status", {}).get("pulled_forward_by_size"):
@@ -2117,12 +1931,6 @@ def _card_html(n, i, community_published=None):
         else:
             watching_html = f'<span class="cadence-chip watching" style="color:var(--muted)" title="{_e(title)}">👁 watching</span>'
 
-    community_html = ""
-    if community_published:
-        published = community_published.get(n["namespace"], 0)
-        if published > 0:
-            community_html = f'<span class="community-chip">📡 {published} shared</span>'
-
     return f"""
     <div class="card" id="card-{i}" data-idx="{i}" onclick="selectCard({i})">
       <div class="card-top">
@@ -2143,12 +1951,10 @@ def _card_html(n, i, community_published=None):
         {dream_html}
         {research_html}
         {review_html}
-        {assumption_html}
         {claude_review_html}
         {dream_defer_html}
         {explore_html}
         {watching_html}
-        {community_html}
       </div>
       <div class="card-tags">{tags_html}</div>
     </div>"""
@@ -2429,8 +2235,8 @@ _MISSING = object()
 # not-always-populated field. Extracted 2026-09-25 (Tactical backlog,
 # code-review-2026-09-11) to collapse the ~85% of _js_data() fields that were
 # pure boilerplate rename lines into one data-driven table. The remaining
-# fields stay hand-written in _js_data() itself: `deferred`/`decisionGuidance`
-# are genuine reshapes (comprehensions), `lastClose`/`lastOpen`/`intentSummary`
+# fields stay hand-written in _js_data() itself: `deferred` is a
+# genuine reshape (a comprehension), `lastClose`/`lastOpen`/`intentSummary`
 # apply a transform (_time_ago()/slicing), `mindmap` is a function call, and
 # `researchStatus`/`codeReviewStatus` have a *dynamic* default that reads
 # another field of `n` at call time — none of those fit a static table.
@@ -2487,15 +2293,11 @@ _JS_DATA_RENAME_FIELDS = [
     ("lastRealityScore",           "last_reality_score",        _MISSING),
     ("outcomeRate",                "outcome_rate",               None),
     ("goalOutcomes",               "goal_outcomes",              []),
-    ("contracts",                  "goal_contracts",             []),
-    ("contractCoverage",           "contract_coverage",          None),
-    ("criteriaHitRate",            "criteria_hit_rate",          None),
     ("goalTypeBySession",          "goal_type_by_session",      _MISSING),
     ("goalStatusBreakdown",        "goal_status_breakdown",     None),
     ("backlogMatchSummary",        "backlog_match_summary",     None),
     ("carryForwardTrend",          "carry_forward_trend",       _MISSING),
     ("qualityDist",                "quality_dist",              _MISSING),
-    ("decayHistory",               "decay_history",             _MISSING),
     ("codeReviewDeferCount",       "code_review_defer_count",   _MISSING),
     ("researchDeferCount",         "research_defer_count",      _MISSING),
     ("artefacts",                  "artefacts",                 _MISSING),
@@ -2513,8 +2315,6 @@ _JS_DATA_RENAME_FIELDS = [
     ("skilloptRoundsCompleted",    "skillopt_rounds_completed", _MISSING),
     ("skilloptRwi",                "skillopt_rwi",              _MISSING),
     ("skillOptFrictionGate",       "skill_opt_friction_gate",    None),
-    ("assumptionAuditDue",         "assumption_audit_due",       False),
-    ("assumptionAuditCandidates",  "assumption_audit_candidates", []),
     ("claudeReviewDue",            "claude_review_due",          False),
     ("claudeReviewStatus",         "claude_review_status",       {
         "due": False, "pulled_forward_by_size": False,
@@ -2545,17 +2345,6 @@ def _apply_camel_case_renames(n, mapping):
     return out
 
 
-def _guidance_quality_delta(evidence):
-    """P65 preferred-minus-avoided quality, or None unless both are real numbers. core's
-    log-decision-guidance stores `evidence` unvalidated, so one bad row must not raise."""
-    if not isinstance(evidence, dict):
-        return None
-    pref, avoid = evidence.get("preferred_quality"), evidence.get("avoided_quality")
-    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (pref, avoid)):
-        return None
-    return pref - avoid
-
-
 def _js_data(namespaces):
     data = []
     for n in namespaces:
@@ -2577,18 +2366,6 @@ def _js_data(namespaces):
                                       "new_design_docs": 0, "complex_decisions": 0,
                                       "score": 0.0, "high": False},
             }),
-            "decisionGuidance":        [
-                {
-                    "guidanceId":            g.get("guidance_id"),
-                    "contextSummary":        g.get("context_summary"),
-                    "preferredDecisionText": g.get("preferred_decision_text"),
-                    "avoidedDecisionText":   g.get("avoided_decision_text"),
-                    "evidence":              g.get("evidence", {}),
-                    "qualityDelta":          _guidance_quality_delta(g.get("evidence")),
-                    "createdAt": g.get("created_at"),
-                }
-                for g in n.get("decision_guidance", [])
-            ],
             "mindmap":                 _mindmap_data(n),
         })
         data.append(entry)
@@ -2603,48 +2380,13 @@ def _js_data(namespaces):
 # HTML assembly
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _js_community(community):
-    raw = json.dumps(community, ensure_ascii=False, default=str)
-    return raw.replace("</script>", r"<\/script>").replace("<!--", r"<\!--")
-
-
 def generate(namespaces, watch_seconds=None):
     now         = _now_utc().strftime("%d %b %Y %H:%M UTC")
     n_open      = sum(1 for n in namespaces if n["open_session"])
     n_learnings = sum(len(n["learnings"]) for n in namespaces)
     n_sessions  = sum(n["session_count"] for n in namespaces)
 
-    community = load_community()
-    community_published: dict[str, int] = {}
-    if community["enabled"]:
-        for entry in community.get("feed", []):
-            ns_id = entry.get("source_loop_id", "")
-            if ns_id:
-                community_published[ns_id] = community_published.get(ns_id, 0) + 1
-
-    # P40-D Phase 5 — per-learning community provenance (outbound share + adoption fan-out).
-    # Distinct from back_refs_by_text/conflicts_by_text (P2.1 reconciliation) already rendered
-    # in the Learnings tab — this is the community federation (P40) path, keyed by learning_id
-    # against feed.jsonl/adoptions.jsonl, not by learning text against back_references.jsonl.
-    adoption_counts_by_community_id: dict[str, int] = {}
-    for adoption in community.get("adoptions", []):
-        cid = adoption.get("community_id")
-        if cid:
-            adoption_counts_by_community_id[cid] = adoption_counts_by_community_id.get(cid, 0) + 1
-    published_ids_by_ns: dict[str, set] = {}
-    for entry in community.get("feed", []):
-        ns_id = entry.get("source_loop_id", "")
-        lid = entry.get("learning_id")
-        if ns_id and lid:
-            published_ids_by_ns.setdefault(ns_id, set()).add(lid)
-    for n in namespaces:
-        published_ids = published_ids_by_ns.get(n["namespace"], set())
-        for l in n["learnings"]:
-            lid = l.get("learning_id")
-            l["communityShared"] = bool(lid and lid in published_ids)
-            l["communityAdoptedByCount"] = adoption_counts_by_community_id.get(lid, 0) if lid else 0
-
-    cards = "".join(_card_html(n, i, community_published) for i, n in enumerate(namespaces))
+    cards = "".join(_card_html(n, i) for i, n in enumerate(namespaces))
 
     html = (Path(__file__).parent / "template.html").read_text(encoding="utf-8")
     html = html.replace("[[GENERATED_AT]]",   now)
@@ -2654,7 +2396,6 @@ def generate(namespaces, watch_seconds=None):
     html = html.replace("[[N_SESSIONS]]",     str(n_sessions))
     html = html.replace("[[CARDS]]",          cards)
     html = html.replace("[[NS_DATA]]",           _js_data(namespaces))
-    html = html.replace("[[COMMUNITY_DATA]]",    _js_community(community))
     html = html.replace("[[BLOCKING_EDGES]]",    _js_blocking_edges(namespaces))
     html = html.replace("[[WATCH_SECONDS]]",     json.dumps(watch_seconds))
 

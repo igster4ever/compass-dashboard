@@ -29,8 +29,6 @@ _retrieval_stale_texts = _mod._retrieval_stale_texts
 _load_watch_signals    = _mod._load_watch_signals
 _normalize_confidence  = _mod._normalize_confidence
 _zone_distribution     = _mod._zone_distribution
-_contract_coverage     = _mod._contract_coverage
-_parse_goal_contracts  = _mod._parse_goal_contracts
 _compute_confidence_calibration = _mod._compute_confidence_calibration
 _failure_dimension_distribution = _mod._failure_dimension_distribution
 
@@ -851,54 +849,6 @@ class TestLoadWatchSignals(unittest.TestCase):
         self.assertEqual(result["total_signals"], 2)
 
 
-class TestLoadCommunity(unittest.TestCase):
-    """P40 Phase 2 (compass core, 2026-07-29) — feed.jsonl now dedupes on
-    (learning_id, event_type) so a retraction tombstone survives as its own row
-    alongside the original publish record. load_community() must filter those
-    tombstones out of "feed" — every dashboard consumer treats a feed row as
-    "currently shared"."""
-
-    def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.loop_dir = Path(self._tmpdir.name)
-        self._patcher = patch.object(_mod, "LOOP_DIR", self.loop_dir)
-        self._patcher.start()
-
-    def tearDown(self):
-        self._patcher.stop()
-        self._tmpdir.cleanup()
-
-    def _write_jsonl(self, filename, items):
-        d = self.loop_dir / "_community"
-        d.mkdir(parents=True, exist_ok=True)
-        with open(d / filename, "w", encoding="utf-8") as f:
-            for item in items:
-                f.write(json.dumps(item) + "\n")
-
-    def test_disabled_when_no_community_dir(self):
-        result = _mod.load_community()
-        self.assertFalse(result["enabled"])
-        self.assertEqual(result["feed"], [])
-
-    def test_retraction_tombstone_excluded_from_feed(self):
-        self._write_jsonl("feed.jsonl", [
-            {"learning_id": "l1", "source_loop_id": "ns-a", "event_type": "community.learning_published", "text": "a"},
-            {"learning_id": "l1", "source_loop_id": "ns-a", "event_type": "community.learning_retracted", "text": "a"},
-            {"learning_id": "l2", "source_loop_id": "ns-b", "event_type": "community.learning_published", "text": "b"},
-        ])
-        result = _mod.load_community()
-        self.assertTrue(result["enabled"])
-        self.assertEqual(len(result["feed"]), 2)
-        self.assertEqual({e["learning_id"] for e in result["feed"]}, {"l1", "l2"})
-
-    def test_legacy_entries_without_event_type_are_kept(self):
-        self._write_jsonl("feed.jsonl", [
-            {"learning_id": "l1", "source_loop_id": "ns-a", "text": "pre-P40-Phase-2 entry"},
-        ])
-        result = _mod.load_community()
-        self.assertEqual(len(result["feed"]), 1)
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # _normalize_confidence
 # ─────────────────────────────────────────────────────────────────────────────
@@ -957,133 +907,6 @@ class TestZoneDistribution(unittest.TestCase):
         ls = [{"zone": z} for z in ("golden", "warning", "preference")] + [{}] * 3
         d = _zone_distribution(ls)
         self.assertEqual(sum(d.values()), len(ls))
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# _contract_coverage / _parse_goal_contracts (P55)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _contract(goal_text, criteria, verified_criteria=None, verified_at=None, created_at="2026-08-01T00:00:00Z"):
-    return {
-        "goal_text": goal_text,
-        "criteria": criteria,
-        "verified_criteria": verified_criteria or [],
-        "unmet_criteria": [c for c in criteria if c not in (verified_criteria or [])],
-        "evidence_type": "document",
-        "stopping_condition": "n/a",
-        "created_at": created_at,
-        "verified_at": verified_at,
-    }
-
-
-class TestContractCoverage(unittest.TestCase):
-
-    def test_below_gate_returns_none(self):
-        state = {"goal_contracts": {f"h{i}": _contract(f"g{i}", ["a"]) for i in range(4)}}
-        self.assertEqual(
-            _contract_coverage(state),
-            {"contract_coverage": None, "criteria_hit_rate": None},
-        )
-
-    def test_at_gate_with_no_relevant_completions_returns_none(self):
-        state = {
-            "goal_contracts": {f"h{i}": _contract(f"g{i}", ["a"]) for i in range(5)},
-            "goal_completions": {},
-        }
-        self.assertEqual(
-            _contract_coverage(state),
-            {"contract_coverage": None, "criteria_hit_rate": None},
-        )
-
-    def test_full_round_trip_matches_expected_output(self):
-        # 5 contracts, all verified with all criteria met, all linked via goal_completions —
-        # mirrors the real `compass` namespace's live shape (7 contracts, coverage=1.0,
-        # criteria_hit_rate=1.0), reduced to the minimum sample size for a fast unit test.
-        contracts = {
-            f"h{i}": _contract(f"g{i}", ["a", "b"], verified_criteria=["a", "b"], verified_at="2026-08-02T00:00:00Z")
-            for i in range(5)
-        }
-        state = {
-            "goal_contracts": contracts,
-            "goal_completions": {
-                "2026-08-02": {"completed_hashes": list(contracts.keys())},
-            },
-        }
-        self.assertEqual(
-            _contract_coverage(state),
-            {"contract_coverage": 1.0, "criteria_hit_rate": 1.0},
-        )
-
-
-class TestParseGoalContracts(unittest.TestCase):
-
-    def test_empty_dict_returns_empty_list(self):
-        self.assertEqual(_parse_goal_contracts({"goal_contracts": {}}), [])
-
-    def test_unverified_contract_is_pending(self):
-        state = {"goal_contracts": {"h1": _contract("g1", ["a", "b"])}}
-        out = _parse_goal_contracts(state)
-        self.assertEqual(out[0]["status"], "pending")
-        self.assertIsNone(out[0]["criteria_hit_rate"])
-        self.assertEqual(out[0]["criteria"], [{"text": "a", "met": False}, {"text": "b", "met": False}])
-
-    def test_partially_verified_contract(self):
-        state = {"goal_contracts": {
-            "h1": _contract("g1", ["a", "b"], verified_criteria=["a"], verified_at="2026-08-02T00:00:00Z"),
-        }}
-        out = _parse_goal_contracts(state)
-        self.assertEqual(out[0]["status"], "partially_verified")
-        self.assertEqual(out[0]["criteria_hit_rate"], 0.5)
-        self.assertEqual(out[0]["criteria"], [{"text": "a", "met": True}, {"text": "b", "met": False}])
-
-    def test_fully_verified_contract(self):
-        state = {"goal_contracts": {
-            "h1": _contract("g1", ["a"], verified_criteria=["a"], verified_at="2026-08-02T00:00:00Z"),
-        }}
-        out = _parse_goal_contracts(state)
-        self.assertEqual(out[0]["status"], "verified")
-        self.assertEqual(out[0]["criteria_hit_rate"], 1.0)
-
-    def test_sorted_newest_created_first(self):
-        state = {"goal_contracts": {
-            "h1": _contract("g1", ["a"], created_at="2026-08-01T00:00:00Z"),
-            "h2": _contract("g2", ["a"], created_at="2026-08-05T00:00:00Z"),
-        }}
-        out = _parse_goal_contracts(state)
-        self.assertEqual([c["goal_text"] for c in out], ["g2", "g1"])
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# load_namespace() — decision_guidance (P65) retired-entry filtering
-# ─────────────────────────────────────────────────────────────────────────────
-
-class TestLoadNamespaceDecisionGuidance(unittest.TestCase):
-
-    def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.ns_dir = Path(self._tmpdir.name) / "myns"
-        self.ns_dir.mkdir(parents=True)
-
-    def tearDown(self):
-        self._tmpdir.cleanup()
-
-    def _write_jsonl(self, filename, items):
-        with open(self.ns_dir / filename, "w", encoding="utf-8") as f:
-            for item in items:
-                f.write(json.dumps(item) + "\n")
-
-    def test_no_file_returns_empty_list(self):
-        result = _mod.load_namespace(self.ns_dir)
-        self.assertEqual(result["decision_guidance"], [])
-
-    def test_retired_entries_filtered_out(self):
-        self._write_jsonl("decision_guidance.jsonl", [
-            {"guidance_id": "g1", "status": "active", "preferred_decision_text": "A"},
-            {"guidance_id": "g2", "status": "retired", "preferred_decision_text": "B"},
-        ])
-        result = _mod.load_namespace(self.ns_dir)
-        self.assertEqual(len(result["decision_guidance"]), 1)
-        self.assertEqual(result["decision_guidance"][0]["guidance_id"], "g1")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1601,7 +1424,7 @@ class TestCadenceLastRunAndCooldown(unittest.TestCase):
         self.assertEqual(lr["skill_opt"]["at"], ts)
         self.assertEqual(lr["research"], {"at": None, "ago": "never"})
         self.assertEqual(set(lr), {"dream", "code_review", "research", "skill_opt",
-                                   "assumption_audit", "claude_review"})
+                                   "claude_review"})
 
     def test_current_skillopt_key_wins_over_legacy(self):
         lr = _mod._cadence_last_run({"last_skill_opt_at": "2026-10-01T00:00:00Z",

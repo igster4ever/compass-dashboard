@@ -113,15 +113,9 @@
     .cadence-chip.research { background: rgba(56,189,248,.12); color: #38bdf8; }
     .cadence-chip.review   { background: rgba(52,211,153,.12); color: #34d399; }
     .cadence-chip.watching { background: rgba(240,171,252,.12); color: #f0abfc; }
-    .cadence-chip.assumption { background: rgba(251,146,60,.12); color: #fb923c; }
     .cadence-chip.claude     { background: rgba(244,114,182,.12); color: #f472b6; }
     .cadence-chip.dreamdefer { background: rgba(139,93,199,.15); color: #b48ef0; }
     .cadence-chip.dreamdefer.escalated { background: var(--red-bg); color: var(--red); font-weight: 600; }
-    .community-chip {
-      font-size: .62rem; padding: .15em .5em; border-radius: 999px;
-      background: rgba(99,102,241,.12); color: #818cf8; font-weight: 600;
-    }
-    .community-chip.inbox  { background: rgba(251,191,36,.12); color: var(--amber); }
     .version-badge {
       font-size: .6rem; font-weight: 600; background: var(--border);
       color: var(--muted); padding: .1em .45em; border-radius: 999px;
@@ -161,13 +155,6 @@
     .ch-low    { background: var(--red); }
     .ch-score  { font-weight: 700; color: var(--text); min-width: 2rem; }
     .ch-detail { color: var(--subtle); }
-    .decay-event {
-      padding: .45rem .6rem; border-left: 2px solid var(--border); margin-bottom: .4rem;
-    }
-    .decay-date   { color: var(--muted); font-size: .72rem; margin-right: .5rem; }
-    .decay-count  { color: var(--amber); font-size: .72rem; margin-right: .5rem; }
-    .decay-reason { color: var(--subtle); font-size: .7rem; }
-    .decay-texts  { margin: .25rem 0 0 .5rem; padding: 0; list-style: none; }
     .signals-list { display: flex; flex-direction: column; gap: .75rem; }
     .signal-entry {
       padding: .6rem .8rem; border: 1px solid var(--border); border-radius: 6px;
@@ -463,37 +450,8 @@
     .decision-date { font-size: .68rem; color: var(--subtle); white-space: nowrap; }
     .decision-alts { font-size: .72rem; color: var(--subtle); font-style: italic; margin-top: .25rem; }
 
-    /* ── Verification contracts (P55) ── */
-    .contract-list { list-style: none; padding: 0; display: flex; flex-direction: column; gap: .5rem; }
-    .contract-item { border: 1px solid var(--border); border-radius: 6px; padding: .6rem .75rem; background: var(--surface2); }
-    .contract-goal { font-size: .82rem; color: var(--text); margin-bottom: .3rem; line-height: 1.4; }
-    .contract-meta { display: flex; gap: .5rem; align-items: baseline; }
-    .contract-chip { font-size: .66rem; padding: .1em .5em; border-radius: 999px; font-weight: 600; margin-left: .4rem; }
-    .cc-coverage { background: var(--blue-bg); color: var(--blue); }
-    .cc-hitrate  { background: var(--green-bg); color: var(--green); }
-    .evidence-badge { font-size: .62rem; padding: .1em .45em; border-radius: 4px; background: var(--surface); border: 1px solid var(--border); color: var(--muted); }
-    .contract-criteria { list-style: none; padding: 0; margin: .3rem 0 0; font-size: .72rem; }
-    .crit-met::before   { content: "✓ "; color: var(--green); }
-    .crit-unmet::before { content: "✗ "; color: var(--red); }
-    .crit-unmet { color: var(--muted); }
-
-    /* ── Decision guidance (P65) ── */
-    .guidance-list { display: flex; flex-direction: column; gap: .6rem; margin-bottom: .75rem; }
-    .guidance-item { border: 1px solid var(--border); border-radius: 6px; padding: .6rem .75rem; background: var(--surface2); }
-    .guidance-row { display: flex; gap: .4rem; align-items: flex-start; font-size: .8rem; }
-    .guidance-preferred .guidance-icon { color: var(--green); }
-    .guidance-dispreferred .guidance-icon { color: var(--red); }
-    .guidance-dispreferred .guidance-text { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--red); }
-    .guidance-vs { font-size: .62rem; color: var(--subtle); text-transform: uppercase; margin: .2rem 0 .2rem 1.3rem; }
-    .guidance-meta { display: flex; gap: .5rem; align-items: baseline; margin-top: .3rem; }
-    .guidance-delta { font-size: .68rem; font-weight: 700; color: var(--blue); background: var(--blue-bg); padding: .1em .5em; border-radius: 999px; }
-    .guidance-delta.neg { color: var(--amber); background: var(--amber-bg); }
-    .guidance-heading {
-      font-size: .72rem; font-weight: 600; color: var(--muted);
-      text-transform: uppercase; letter-spacing: .07em; margin-bottom: .5rem;
-      border-bottom: 1px solid var(--border); padding-bottom: .35rem;
-    }
-    .guidance-context { font-size: .75rem; color: var(--text); line-height: 1.4; margin-bottom: .4rem; }
+    /* ── Calibration chips ── */
+    .calib-chip { font-size: .66rem; padding: .1em .5em; border-radius: 999px; font-weight: 600; margin-left: .4rem; }
 
     /* ── Zone distribution (P56) ── */
     .zone-dist { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .6rem; }
@@ -605,7 +563,6 @@
     .sec-decisions { background: var(--amber-bg); color: var(--amber); }
     .sec-history   { background: var(--surface2); color: var(--muted); }
     .snippet { color: var(--muted); line-height: 1.5; flex: 1; }
-    .search-provenance { flex-shrink: 0; font-size: .8rem; }
     mark { background: var(--amber-bg); color: var(--amber); border-radius: 2px; padding: 0 .1em; font-style: normal; }
     .search-more { font-size: .72rem; color: var(--subtle); font-style: italic; padding: .2rem 1rem; }
     .search-empty { padding: 2rem; text-align: center; color: var(--subtle); font-size: .85rem; }
@@ -693,29 +650,6 @@
     .dag-tip-concurrent { background: var(--green-bg); color: var(--green); }
     .dag-tip-detail { font-size: .72rem; color: var(--muted); line-height: 1.5; }
 
-    /* ── Community view (P40-D Phase 3) ── */
-    .community-wrap { padding: 1.2rem 1.5rem; max-width: 900px; }
-    .community-section { margin-bottom: 1.8rem; }
-    .community-section-title { font-size: .8rem; font-weight: 700; text-transform: uppercase;
-      letter-spacing: .06em; color: var(--text-muted); margin-bottom: .7rem; }
-    .community-health-bar { display: flex; gap: 1.2rem; flex-wrap: wrap; margin-bottom: .6rem; }
-    .community-stat { background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
-      padding: .5rem .9rem; display: flex; flex-direction: column; align-items: center; min-width: 80px; }
-    .community-stat-val { font-size: 1.4rem; font-weight: 700; color: var(--blue); }
-    .community-stat-lbl { font-size: .65rem; color: var(--text-muted); margin-top: .1rem; }
-    .community-stat.inbox .community-stat-val { color: var(--amber); }
-    .community-stat.adopted .community-stat-val { color: var(--green); }
-    .community-disabled { font-size: .85rem; color: var(--text-muted); font-style: italic; padding: 2rem; text-align: center; }
-    .trust-table { width: 100%; border-collapse: collapse; font-size: .78rem; }
-    .trust-table th { text-align: left; padding: .4rem .7rem; font-size: .68rem; font-weight: 700;
-      text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted);
-      border-bottom: 1px solid var(--border); }
-    .trust-table td { padding: .45rem .7rem; border-bottom: 1px solid var(--border); color: var(--text); vertical-align: top; }
-    .trust-table tr:last-child td { border-bottom: none; }
-    .trust-level-badge { font-size: .65rem; padding: .15em .5em; border-radius: 3px; font-weight: 600; }
-    .trust-level-high   { background: var(--green-bg); color: var(--green); }
-    .trust-level-medium { background: var(--amber-bg); color: var(--amber); }
-    .trust-level-low    { background: var(--surface); color: var(--text-muted); border: 1px solid var(--border); }
     .feed-list { display: flex; flex-direction: column; gap: .6rem; }
     .feed-entry { background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
       padding: .6rem .9rem; font-size: .78rem; }
@@ -976,7 +910,6 @@
     <button class="view-tab"        id="vtab-decisions"     onclick="switchView('decisions')">Decisions</button>
     <button class="view-tab"        id="vtab-artefacts"     onclick="switchView('artefacts')">Artefacts</button>
     <button class="view-tab"        id="vtab-mindmap"       onclick="switchView('mindmap')">Mind Map</button>
-    <button class="view-tab"        id="vtab-community"     onclick="switchView('community')">Community</button>
     <button class="view-tab"        id="vtab-compare"       onclick="switchView('compare')">Compare</button>
   </nav>
 
@@ -999,7 +932,6 @@
   <div id="view-decisions"    style="display:none"></div>
   <div id="view-artefacts"   style="display:none"></div>
   <div id="view-mindmap"     style="display:none"></div>
-  <div id="view-community"   style="display:none"></div>
   <div id="view-compare"     style="display:none"></div>
   <div id="heatmap-tooltip" class="heatmap-tooltip"></div>
 
@@ -1028,7 +960,6 @@
 <script>
 (function() {
 const NS = [[NS_DATA]];
-const COMMUNITY = [[COMMUNITY_DATA]];
 const BLOCKING_EDGES = [[BLOCKING_EDGES]];
 const WATCH_SECONDS = [[WATCH_SECONDS]]; // null unless generated with --watch
 const Search = { selected: -1, index: null, activeFilter: 'all', focusIdx: -1, flatResults: [] };
@@ -1108,25 +1039,20 @@ function selectCard(i, {force = false, scroll = true} = {}) {
 
 // ── Detail panel ──────────────────────────────────────────────────────────────
 
-// Sub-tab ids for a namespace. Decisions shows when there are decisions or P65 guidance
-// pairs (guidance renders inside that tab, so without it the pairs were unreachable).
+// Sub-tab ids for a namespace. Decisions shows only when there are decisions.
 function detailTabs(ns) {
   const hasSignals   = (ns.externalSignals || []).length > 0;
-  const hasDecisions = (ns.decisions || []).length > 0 || (ns.decisionGuidance || []).length > 0;
+  const hasDecisions = (ns.decisions || []).length > 0;
   const baseTabs     = hasDecisions
     ? ['state', 'learnings', 'decisions', 'history']
     : ['state', 'learnings', 'history'];
   return [...baseTabs, 'tasks', 'radar', ...(hasSignals ? ['signals'] : [])];
 }
 
-// "Decisions (N)", plus the P65 guidance-pair count when there are pairs (both render in the tab).
-// Non-breaking spaces, like the other tab labels, so the label never wraps inside its button.
+// "Decisions (N)". Non-breaking spaces, like the other tab labels, so the label never
+// wraps inside its button.
 function decisionsTabLabel(ns) {
-  const nDec = (ns.decisions || []).length;
-  const nGuide = (ns.decisionGuidance || []).length;
-  return nGuide
-    ? `Decisions\u00a0(${nDec}\u00a0·\u00a0${nGuide}\u00a0guidance)`
-    : `Decisions\u00a0(${nDec})`;
+  return `Decisions\u00a0(${(ns.decisions || []).length})`;
 }
 
 function renderDetail(ns) {
@@ -1535,32 +1461,6 @@ function renderStateSection_GoalOutcomes(ns) {
   </div>`;
 }
 
-function renderStateSection_GoalContracts(ns) {
-  const contracts = ns.contracts || [];
-  if (!contracts.length) return '';
-  const coverage = ns.contractCoverage;
-  const hitRate  = ns.criteriaHitRate;
-  const chips = coverage != null
-    ? `<span class="contract-chip cc-coverage">${Math.round(coverage * 100)}% coverage</span>` +
-      (hitRate != null ? `<span class="contract-chip cc-hitrate">${Math.round(hitRate * 100)}% criteria hit</span>` : '')
-    : `<span style="color:var(--muted);font-size:.68rem;font-weight:normal"> — not enough verified goals yet</span>`;
-  const rows = contracts.slice(0, 10).map(c => {
-    const criteriaHtml = (c.criteria || []).map(crit =>
-      `<li class="${crit.met ? 'crit-met' : 'crit-unmet'}">${esc(crit.text)}</li>`
-    ).join('');
-    const evidence = c.evidence_type ? `<span class="evidence-badge">${esc(c.evidence_type)}</span>` : '';
-    const date = c.created_at ? `<span class="decision-date">${esc(c.created_at.slice(0, 10))}</span>` : '';
-    return `<li class="contract-item">
-      <div class="contract-goal">${esc(c.goal_text)}</div>
-      <div class="contract-meta">${evidence}${date}</div>
-      <ul class="contract-criteria">${criteriaHtml}</ul>
-    </li>`;
-  }).join('');
-  return `<div class="md-section"><h3>Verification contracts (P55)${chips}</h3>
-    <ul class="contract-list">${rows}</ul>
-  </div>`;
-}
-
 function renderStateSection_WatchFeed(ns) {
   if (!ns.watches || ns.watches.length === 0) return '';
   const ws = ns.watchSignals || {signals: [], empty: true, bootstrapped: false};
@@ -1698,7 +1598,7 @@ function renderStateSection_DataProblems(ns) {
 
 const CADENCE_LAST_RUN_LABELS = [
   ['dream', 'dream'], ['code_review', 'code review'], ['research', 'research'],
-  ['skill_opt', 'SkillOpt'], ['assumption_audit', 'assumption audit'], ['claude_review', 'CLAUDE.md review'],
+  ['skill_opt', 'SkillOpt'], ['claude_review', 'CLAUDE.md review'],
 ];
 
 // When each cadence last actually ran; the due/on-schedule lines above come from session
@@ -1745,7 +1645,7 @@ function renderStateSection_ConfidenceCalibration(ns) {
   const chips = order.map(level => {
     const b = cc.buckets[level] || {};
     const rate = b.confirm_rate != null ? Math.round(b.confirm_rate * 100) + '%' : '—';
-    return `<span class="contract-chip" style="margin-right:.4rem">${level}: ${rate} <span style="color:var(--subtle)">(n=${b.n || 0})</span></span>`;
+    return `<span class="calib-chip" style="margin-right:.4rem">${level}: ${rate} <span style="color:var(--subtle)">(n=${b.n || 0})</span></span>`;
   }).join('');
   const icon = cc.miscalibrated ? '⚠' : '✓';
   const col  = cc.miscalibrated ? 'var(--amber)' : 'var(--muted)';
@@ -1854,11 +1754,10 @@ function renderState(ns) {
   const goalTrackingHeadlineParts = [];
   if (goalStatusHeadline(ns)) goalTrackingHeadlineParts.push(goalStatusHeadline(ns));
   if (ns.outcomeRate != null) goalTrackingHeadlineParts.push(`${Math.round(ns.outcomeRate * 100)}% outcome-linked`);
-  if (ns.contractCoverage != null) goalTrackingHeadlineParts.push(`${Math.round(ns.contractCoverage * 100)}% contract coverage`);
   if (backlogMatchHeadline(ns)) goalTrackingHeadlineParts.push(backlogMatchHeadline(ns));
   const goalTracking = stateGroup(
     'Goal tracking', goalTrackingHeadlineParts.join(', '),
-    renderStateSection_GoalStatuses(ns) + renderStateSection_GoalOutcomes(ns) + renderStateSection_GoalContracts(ns)
+    renderStateSection_GoalStatuses(ns) + renderStateSection_GoalOutcomes(ns)
       + renderStateSection_BacklogMatch(ns)
   );
 
@@ -1970,17 +1869,6 @@ function renderLearnings(ns) {
       const icon  = c.decision === 'link' ? '\u2194' : c.decision === 'merge' ? '\u21d2' : '\u2260';
       linkHtml += `<div class="link-ref">${icon} ${esc(c.decision)} \u2014 <code>${esc(other)}</code></div>`;
     }
-    // P40-D Phase 5 \u2014 community federation provenance (distinct mechanism from the
-    // backRef/conflicts reconciliation links above: keyed by learning_id against the
-    // community feed/adoptions, not by text against back_references.jsonl)
-    if (l.communityShared) {
-      const adoptedSuffix = l.communityAdoptedByCount > 0
-        ? ` \u00b7 adopted by ${l.communityAdoptedByCount}` : '';
-      linkHtml += `<div class="link-ref">\ud83d\udce1 shared${adoptedSuffix}</div>`;
-    }
-    if (l.adopted_from && l.adopted_from.source_loop_id) {
-      linkHtml += `<div class="link-ref">\u2b07 adopted from <code>${esc(l.adopted_from.source_loop_id)}</code></div>`;
-    }
     return `
       <tr data-idx="${lIdx}" data-ltype="${type}" data-stale="${l.retrievalStale ? 'true' : 'false'}" data-zone="${l.zone && zoneLabels[l.zone] ? l.zone : 'unclassified'}"${lidTitle}>
         <td><span class="weight-dot"><span class="wdot ${wCls}"></span><span class="wnum">${w}</span></span></td>
@@ -2006,8 +1894,6 @@ function renderLearnings(ns) {
       ${filterButtons.join('')}
     </div>` : '';
 
-  const decayHtml = renderDecayTimeline(ns);
-
   // Doom-scroll fix (2026-09-25): the table used to render flat and unbounded —
   // a namespace with dozens of learnings dominated the whole tab. Fold it into a
   // collapsible drawer (stateGroup(), already generic — this is its 2nd consumer
@@ -2028,7 +1914,7 @@ function renderLearnings(ns) {
   ].filter(Boolean).join(' · ');
   const learningsGroup = stateGroup('Learnings', learningsHeadline, tableHtml, {open: ns.learnings.length <= 12});
 
-  return zoneDistHtml + corpusHealthHtml + supersededNote + learningsGroup + decayHtml;
+  return zoneDistHtml + corpusHealthHtml + supersededNote + learningsGroup;
 }
 
 function applyLearningFilters(table, nsId) {
@@ -2071,62 +1957,11 @@ function filterLearningZone(tableId, nsId, zone) {
   });
 }
 
-function renderDecayTimeline(ns) {
-  const events = ns.decayHistory || [];
-  if (!events.length) return '';
-  const reasonLabel = r => r === 'dream_pass_weak' ? 'dream pass (weak)' : r === 'dream_pass_merge' ? 'dream pass (merged)' : esc(r);
-  const items = events.map(e => {
-    const date  = (e.timestamp || '').slice(0, 10);
-    const count = e.removed_count || (e.removed_texts || []).length;
-    const texts = (e.removed_texts || []).slice(0, 3);
-    const more  = (e.removed_texts || []).length - texts.length;
-    const preview = texts.map(t => `<li style="color:var(--muted);font-size:.7rem">${esc(t.length > 80 ? t.slice(0, 80) + '\u2026' : t)}</li>`).join('');
-    const moreNote = more > 0 ? `<li style="color:var(--subtle);font-size:.68rem">+${more} more</li>` : '';
-    return `<div class="decay-event">
-      <span class="decay-date">${date}</span>
-      <span class="decay-count">${count} removed</span>
-      <span class="decay-reason">${reasonLabel(e.reason || '')}</span>
-      <ul class="decay-texts">${preview}${moreNote}</ul>
-    </div>`;
-  }).join('');
-  return `<details class="decay-timeline" style="margin-top:1.25rem">
-    <summary style="font-size:.75rem;color:var(--muted);cursor:pointer;user-select:none">
-      Corpus maintenance &mdash; ${events.length} decay event${events.length !== 1 ? 's' : ''}
-    </summary>
-    <div style="margin-top:.5rem">${items}</div>
-  </details>`;
-}
-
 // ── Decisions ─────────────────────────────────────────────────────────────────
 
-function renderDecisionGuidance(ns) {
-  const guidance = ns.decisionGuidance || [];
-  if (!guidance.length) return '';
-  const items = guidance.map(g => {
-    // qualityDelta is a difference of 0-1 scores, so it reads in percentage points. A negative
-    // delta means the avoided option scored higher: amber, so it doesn't pass for a ✓ endorsement.
-    const neg = g.qualityDelta != null && g.qualityDelta < 0;
-    const deltaHtml = g.qualityDelta != null
-      ? `<span class="guidance-delta${neg ? ' neg' : ''}"${neg ? ' title="avoided option scored higher"' : ''}>Δ${g.qualityDelta > 0 ? '+' : ''}${Math.round(g.qualityDelta * 100)}pp</span>`
-      : '';
-    const date = g.createdAt ? `<span class="decision-date">${esc(g.createdAt.slice(0, 10))}</span>` : '';
-    const context = g.contextSummary
-      ? `<div class="guidance-context">${esc(g.contextSummary)}</div>` : '';
-    return `<div class="guidance-item">
-      ${context}
-      <div class="guidance-row guidance-preferred"><span class="guidance-icon">✓</span><span class="guidance-text">${esc(g.preferredDecisionText || '')}</span></div>
-      <div class="guidance-vs">vs</div>
-      <div class="guidance-row guidance-dispreferred"><span class="guidance-icon">✗</span><span class="guidance-text">${esc(g.avoidedDecisionText || '')}</span></div>
-      <div class="guidance-meta">${deltaHtml}${date}</div>
-    </div>`;
-  }).join('');
-  return `<div class="guidance-heading">Guidance (${guidance.length})</div><div class="guidance-list">${items}</div>`;
-}
-
 function renderDecisions(ns) {
-  const guidanceHtml = renderDecisionGuidance(ns);
   if (!ns.decisions || !ns.decisions.length) {
-    return guidanceHtml + '<div class="empty-state">No decisions logged for this namespace yet.<br>Use <code>compass log-decision</code> mid-session to capture them.</div>';
+    return '<div class="empty-state">No decisions logged for this namespace yet.<br>Use <code>compass log-decision</code> mid-session to capture them.</div>';
   }
   const items = [...ns.decisions].reverse().map((d, dIdx) => {
     const date = (d.timestamp || d.logged_at || '').slice(0, 10) || '—';
@@ -2144,8 +1979,7 @@ function renderDecisions(ns) {
         ${altHtml}
       </div>`;
   }).join('');
-  const listHeading = guidanceHtml ? `<div class="guidance-heading">Decisions (${ns.decisions.length})</div>` : '';
-  return guidanceHtml + listHeading + `<div class="decision-list">${items}</div>`;
+  return `<div class="decision-list">${items}</div>`;
 }
 
 // ── External signals ──────────────────────────────────────────────────────────
@@ -2303,7 +2137,7 @@ function toggleSession(i) {
 
 function switchView(v) {
   if (v !== 'dag' && _dag.raf) { cancelAnimationFrame(_dag.raf); _dag.raf = null; }
-  ['overview', 'priorities', 'scorecard', 'dag', 'heatmap', 'timeline', 'decisions', 'artefacts', 'mindmap', 'community', 'compare'].forEach(id => {
+  ['overview', 'priorities', 'scorecard', 'dag', 'heatmap', 'timeline', 'decisions', 'artefacts', 'mindmap', 'compare'].forEach(id => {
     document.getElementById('view-' + id).style.display = id === v ? '' : 'none';
     document.getElementById('vtab-' + id).classList.toggle('active', id === v);
   });
@@ -2317,7 +2151,6 @@ function switchView(v) {
   if (v === 'decisions')  renderDecisionsView();
   if (v === 'artefacts')  renderArtefactsView();
   if (v === 'mindmap')    renderMindMap();
-  if (v === 'community')  renderCommunityView();
   if (v === 'compare')    document.getElementById('view-compare').innerHTML = renderCompare();
 }
 
@@ -2600,12 +2433,6 @@ function computePriorities() {
       reasons.push({ icon: '🔍', text: `External research deferred ${ns.researchDeferCount}x — overdue` });
     }
 
-    const inboxCount = COMMUNITY.enabled ? (COMMUNITY.inbox || []).length : 0;
-    if (inboxCount > 0) {
-      score += 6;
-      reasons.push({ icon: '📡', text: `${inboxCount} community learning${inboxCount !== 1 ? 's' : ''} in inbox — review for adoption` });
-    }
-
     return { ns, idx, score, reasons };
   })
   .sort((a, b) => b.score - a.score)
@@ -2801,15 +2628,8 @@ function buildSearchIndex() {
       idx.push({nsIdx, section:'state', field:'context',
                 text: ns.codeContext, displayText: ns.codeContext.slice(0, 200), bonus: 2});
     (ns.learnings || []).forEach((l, i) => {
-      // P40-D Phase 5 — fold community provenance into the searchable text so
-      // "shared"/"adopted"/a source namespace name surfaces the learning
-      const provenanceTokens = [];
-      if (l.communityShared) provenanceTokens.push('shared', 'community');
-      if (l.adopted_from && l.adopted_from.source_loop_id) {
-        provenanceTokens.push('adopted', 'community', l.adopted_from.source_loop_id);
-      }
       idx.push({nsIdx, section:'learnings', subIdx: i,
-                text: [l.text || '', ...provenanceTokens].join(' '), displayText: l.text || '',
+                text: l.text || '', displayText: l.text || '',
                 bonus: Math.min((l.weight || 1) * 2, 8)})
     });
     [...(ns.decisions || [])].reverse().forEach((d, i) => {
@@ -2943,16 +2763,8 @@ function doSearch(query, filter) {
         Search.flatResults.push(item);
         const subI = item.subIdx !== undefined ? item.subIdx : -1;
         const fld  = item.field || '';
-        // P40-D Phase 5 — provenance badge for learnings shared to or adopted from community
-        let provenanceBadge = '';
-        if (sec === 'learnings' && subI >= 0) {
-          const l = (ns.learnings || [])[subI];
-          if (l && l.communityShared) provenanceBadge = '<span class="search-provenance" title="Shared to community">📡</span>';
-          else if (l && l.adopted_from && l.adopted_from.source_loop_id) provenanceBadge = '<span class="search-provenance" title="Adopted from ' + esc(l.adopted_from.source_loop_id) + '">⬇</span>';
-        }
         html += `<div class="search-result-item" onclick="handleResultClick(${item.nsIdx},'${sec}',${subI},'${fld}')">` +
                 `<span class="search-result-section sec-${SECT_CLS[sec]}">${SECT_LABEL[sec]}</span>` +
-                provenanceBadge +
                 makeSnippet(item.displayText || item.text, query) + '</div>';
       });
       if (items.length > 6)
@@ -3131,10 +2943,6 @@ function renderDecisionsView() {
     (ns.complexityClusteringSignals || []).map(s => ({ ...s, namespace: ns.namespace }))
   );
 
-  // P65 — discoverability breadcrumb pointing at the per-namespace Decisions tabs,
-  // where the actual guidance cards render (see renderDecisionGuidance()).
-  const guidanceCount = NS.reduce((sum, ns) => sum + (ns.decisionGuidance || []).length, 0);
-
   let sortKey = 'date';
   let sortDir = -1;
   let filterNs = '';
@@ -3173,7 +2981,6 @@ function renderDecisionsView() {
       <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem;flex-wrap:wrap">
         <h2 style="margin:0;font-size:1.1rem">All Decisions</h2>
         <span style="color:var(--muted);font-size:.8rem">${sorted.length} / ${allDecisions.length}</span>
-        ${guidanceCount > 0 ? `<span style="color:var(--muted);font-size:.75rem">· ${guidanceCount} guidance pair${guidanceCount !== 1 ? 's' : ''} mined</span>` : ''}
         <select id="dec-ns-filter" style="padding:.25rem .5rem;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:.8rem">
           <option value="">All namespaces</option>
           ${nsOptions.map(ns => `<option value="${esc(ns)}" ${filterNs === ns ? 'selected' : ''}>${esc(ns)}</option>`).join('')}
@@ -4061,8 +3868,6 @@ const LADDER = [
     } },
   { tier: 3, id: 'decision', label: 'At least 1 decision logged',
     test: ns => (ns.decisions || []).length ? true : 'no decisions logged' },
-  { tier: 4, id: 'contracts', label: 'At least 5 goal contracts',
-    test: ns => (ns.contracts || []).length >= 5 ? true : `${(ns.contracts || []).length} of 5 goal contracts` },
   { tier: 4, id: 'outcome', label: 'Outcome rate at least 30%',
     test: ns => ns.outcomeRate == null ? 'no goal-outcome links yet'
       : ns.outcomeRate >= 0.3 ? true : `outcome rate ${Math.round(ns.outcomeRate * 100)}%` },
@@ -4456,10 +4261,6 @@ function renderSwimlane() {
             <text x="${x}" y="${svgH - 2}" font-size="9" fill="var(--muted)" text-anchor="middle">${esc(lbl)}</text>`;
   }).join('');
 
-  // P40-D Phase 5 — community provenance markers (published-to / adopted-into this namespace)
-  const feed      = COMMUNITY.feed      || [];
-  const adoptions = COMMUNITY.adoptions || [];
-
   const rows = nsList.map((ns, i) => {
     const y = PAD + i * (ROW_H + ROW_GAP) + ROW_H / 2;
     const colour = palette[i % palette.length];
@@ -4475,35 +4276,16 @@ function renderSwimlane() {
     const baseline = ns.sessionDates.length > 1
       ? `<line x1="${x0}" y1="${y}" x2="${x1}" y2="${y}" stroke="${colour}" stroke-width="1.5" opacity=".25"/>`
       : '';
-    const publishMarks = feed
-      .filter(f => f.source_loop_id === ns.namespace && f.published_at)
-      .map(f => {
-        const x = xPos(f.published_at.slice(0, 10));
-        const my = y - ROW_H / 2 + 3;
-        return `<rect x="${x - 3}" y="${my - 3}" width="6" height="6" transform="rotate(45 ${x} ${my})" fill="#818cf8">
-                  <title>${esc(ns.namespace)} — shared: ${esc((f.text || '').slice(0, 80))}</title>
-                </rect>`;
-      }).join('');
-    const adoptMarks = adoptions
-      .filter(a => a.namespace === ns.namespace && a.adopted_at)
-      .map(a => {
-        const x = xPos(a.adopted_at.slice(0, 10));
-        const my = y + ROW_H / 2 - 3;
-        return `<rect x="${x - 3}" y="${my - 3}" width="6" height="6" transform="rotate(45 ${x} ${my})" fill="#34d399">
-                  <title>${esc(ns.namespace)} — adopted from ${esc(a.source_loop_id || '?')}</title>
-                </rect>`;
-      }).join('');
     const label = `<text x="${LABEL_W - 6}" y="${y + 4}" font-size="11" fill="var(--text)" text-anchor="end"
                      style="cursor:pointer" onclick="switchView('overview');selectCard(${NS.indexOf(ns)},{force:true})"
                    >${esc(ns.namespace)}</text>`;
-    return baseline + dots + publishMarks + adoptMarks + label;
+    return baseline + dots + label;
   }).join('');
 
   container.innerHTML = `
     <div style="padding:1rem">
       <div style="font-size:.8rem;color:var(--muted);margin-bottom:.75rem">
         Session dates across all namespaces · ${allDates.length} total · dot = one session
-        ${(feed.length || adoptions.length) ? ' · <span style="color:#818cf8">◆</span> shared to community · <span style="color:#34d399">◆</span> adopted from community' : ''}
       </div>
       <div style="overflow-x:auto">
         <svg width="${svgW}" height="${svgH}" style="display:block">
@@ -4836,185 +4618,6 @@ function renderGoalHeatmapPanel() {
   }, legendHtml);
 
   wireHeatmapTooltip(container, '.goal-cell');
-}
-
-// ── Community view (P40-D Phase 3) ───────────────────────────────────────────
-
-function renderCommunityView() {
-  const container = document.getElementById('view-community');
-
-  if (!COMMUNITY.enabled) {
-    container.innerHTML = '<div class="community-disabled">Community federation not enabled — no _community/*.jsonl files found.</div>';
-    return;
-  }
-
-  const feed    = COMMUNITY.feed    || [];
-  const inbox   = COMMUNITY.inbox   || [];
-  const adopted = COMMUNITY.adoptions || [];
-  const trust   = COMMUNITY.trust_registry || [];
-
-  // ── Health bar ────────────────────────────────────────────────────────────
-  const healthHtml = `
-    <div class="community-stat">
-      <span class="community-stat-val">${feed.length}</span>
-      <span class="community-stat-lbl">Published</span>
-    </div>
-    <div class="community-stat inbox">
-      <span class="community-stat-val">${inbox.length}</span>
-      <span class="community-stat-lbl">In inbox</span>
-    </div>
-    <div class="community-stat adopted">
-      <span class="community-stat-val">${adopted.length}</span>
-      <span class="community-stat-lbl">Adopted</span>
-    </div>
-    <div class="community-stat">
-      <span class="community-stat-val">${trust.length}</span>
-      <span class="community-stat-lbl">Trusted peers</span>
-    </div>`;
-
-  // ── Trust registry table ──────────────────────────────────────────────────
-  let trustHtml;
-  if (!trust.length) {
-    trustHtml = '<div style="font-size:.78rem;color:var(--text-muted);font-style:italic">No trusted peers registered.</div>';
-  } else {
-    const rows = trust.map(t => {
-      const lvl = esc(t.trust_level || 'low');
-      return `<tr>
-        <td>${esc(t.peer_id || t.source_loop_id || '—')}</td>
-        <td><span class="trust-level-badge trust-level-${lvl}">${lvl}</span></td>
-        <td>${esc(t.registered_at ? t.registered_at.slice(0, 10) : '—')}</td>
-        <td>${esc(t.notes || '')}</td>
-      </tr>`;
-    }).join('');
-    trustHtml = `<table class="trust-table">
-      <thead><tr><th>Peer</th><th>Trust</th><th>Since</th><th>Notes</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
-  }
-
-  // ── Feed entries ──────────────────────────────────────────────────────────
-  let feedHtml;
-  if (!feed.length) {
-    feedHtml = '<div style="font-size:.78rem;color:var(--text-muted);font-style:italic">No published learnings.</div>';
-  } else {
-    feedHtml = '<div class="feed-list">' + feed.slice().reverse().map(e => {
-      const tags = (e.tags || []).map(t => `<span class="feed-tag">${esc(t)}</span>`).join(' ');
-      const src  = esc(e.source_loop_id || '?');
-      const date = esc((e.published_at || '').slice(0, 10));
-      const lvl  = esc(e.trust_level || 'low');
-      return `<div class="feed-entry">
-        <div class="feed-entry-meta">
-          <span>📡 ${src}</span><span>${date}</span>
-          <span class="trust-level-badge trust-level-${lvl}">${lvl}</span>
-          ${tags}
-        </div>
-        <div class="feed-entry-text">${esc(e.text || '')}</div>
-      </div>`;
-    }).join('') + '</div>';
-  }
-
-  const sankeyHtml = renderCommunitySankey(adopted);
-
-  container.innerHTML = `<div class="community-wrap">
-    <div class="community-section">
-      <div class="community-section-title">Federation health</div>
-      <div class="community-health-bar">${healthHtml}</div>
-    </div>
-    <div class="community-section">
-      <div class="community-section-title">Learning flow (adoptions)</div>
-      ${sankeyHtml}
-    </div>
-    <div class="community-section">
-      <div class="community-section-title">Trust registry</div>
-      ${trustHtml}
-    </div>
-    <div class="community-section">
-      <div class="community-section-title">Published feed (${feed.length})</div>
-      ${feedHtml}
-    </div>
-  </div>`;
-}
-
-// P40-D Phase 4 — learning-flow Sankey: source_loop_id (publisher) -> namespace (adopter),
-// aggregated from COMMUNITY.adoptions. Hand-rolled two-column flow diagram (no D3 dependency
-// needed for a two-tier Sankey — stacking + straight bezier links is enough).
-function renderCommunitySankey(adopted) {
-  if (!adopted.length) {
-    return `<div style="font-size:.78rem;color:var(--text-muted);font-style:italic">No adoption activity yet — this fills in as namespaces adopt shared learnings via <code>adopt-learning</code>.</div>`;
-  }
-
-  const flows = new Map(); // "source target" -> count
-  adopted.forEach(a => {
-    const src = a.source_loop_id || '?';
-    const tgt = a.namespace || '?';
-    const key = src + ' ' + tgt;
-    flows.set(key, (flows.get(key) || 0) + 1);
-  });
-
-  const srcTotals = new Map(), tgtTotals = new Map();
-  flows.forEach((count, key) => {
-    const [s, t] = key.split(' ');
-    srcTotals.set(s, (srcTotals.get(s) || 0) + count);
-    tgtTotals.set(t, (tgtTotals.get(t) || 0) + count);
-  });
-
-  const srcList = Array.from(srcTotals.keys());
-  const tgtList = Array.from(tgtTotals.keys());
-  const totalFlow = Array.from(flows.values()).reduce((a, b) => a + b, 0);
-
-  const nodeW = 14, gap = 10;
-  const rows = Math.max(srcList.length, tgtList.length);
-  const H = Math.max(140, rows * 34);
-  const usableH = H - gap * (rows - 1);
-  const unitH = usableH / totalFlow;
-
-  const W = 720, leftX = 10, rightX = W - 10 - nodeW;
-
-  function layout(list, totals) {
-    let y = 0;
-    const pos = new Map();
-    list.forEach(name => {
-      const h = totals.get(name) * unitH;
-      pos.set(name, { y0: y, y1: y + h, h });
-      y += h + gap;
-    });
-    return pos;
-  }
-  const srcPos = layout(srcList, srcTotals);
-  const tgtPos = layout(tgtList, tgtTotals);
-  const srcCursor = new Map(srcList.map(s => [s, srcPos.get(s).y0]));
-  const tgtCursor = new Map(tgtList.map(t => [t, tgtPos.get(t).y0]));
-
-  const palette = ['var(--blue)', 'var(--green)', 'var(--amber)', 'var(--red)'];
-  const srcColor = new Map(srcList.map((s, i) => [s, palette[i % palette.length]]));
-
-  let linksSvg = '';
-  flows.forEach((count, key) => {
-    const [s, t] = key.split(' ');
-    const h = count * unitH;
-    const sy0 = srcCursor.get(s), sy1 = sy0 + h;
-    const ty0 = tgtCursor.get(t), ty1 = ty0 + h;
-    srcCursor.set(s, sy1);
-    tgtCursor.set(t, ty1);
-    const x0 = leftX + nodeW, x1 = rightX;
-    const xm = (x0 + x1) / 2;
-    const path = `M${x0},${sy0} C${xm},${sy0} ${xm},${ty0} ${x1},${ty0} L${x1},${ty1} C${xm},${ty1} ${xm},${sy1} ${x0},${sy1} Z`;
-    linksSvg += `<path d="${path}" fill="${srcColor.get(s)}" opacity="0.35"><title>${esc(s)} → ${esc(t)}: ${count}</title></path>`;
-  });
-
-  let nodesSvg = '';
-  srcList.forEach(s => {
-    const p = srcPos.get(s);
-    nodesSvg += `<rect x="${leftX}" y="${p.y0}" width="${nodeW}" height="${p.h}" fill="${srcColor.get(s)}"><title>${esc(s)}: ${srcTotals.get(s)} adopted from here</title></rect>`;
-    nodesSvg += `<text x="${leftX - 6}" y="${(p.y0 + p.y1) / 2}" text-anchor="end" dominant-baseline="middle" font-size="11" fill="var(--text)">${esc(s)}</text>`;
-  });
-  tgtList.forEach(t => {
-    const p = tgtPos.get(t);
-    nodesSvg += `<rect x="${rightX}" y="${p.y0}" width="${nodeW}" height="${p.h}" fill="var(--muted)"><title>${esc(t)}: ${tgtTotals.get(t)} adopted here</title></rect>`;
-    nodesSvg += `<text x="${rightX + nodeW + 6}" y="${(p.y0 + p.y1) / 2}" text-anchor="start" dominant-baseline="middle" font-size="11" fill="var(--text)">${esc(t)}</text>`;
-  });
-
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" style="overflow:visible">${linksSvg}${nodesSvg}</svg>`;
 }
 
 // ── Mind Map (E25b) ──────────────────────────────────────────────────────────

@@ -38,10 +38,9 @@ function extractScriptBody() {
 function buildScriptSource({ watchSeconds = null } = {}) {
   let src = extractScriptBody();
   src = src.replace('[[NS_DATA]]', JSON.stringify(fixture.NS));
-  src = src.replace('[[COMMUNITY_DATA]]', JSON.stringify(fixture.COMMUNITY));
   src = src.replace('[[BLOCKING_EDGES]]', JSON.stringify(fixture.BLOCKING_EDGES));
   src = src.replace('[[WATCH_SECONDS]]', JSON.stringify(watchSeconds));
-  for (const marker of ['[[NS_DATA]]', '[[COMMUNITY_DATA]]', '[[BLOCKING_EDGES]]', '[[WATCH_SECONDS]]']) {
+  for (const marker of ['[[NS_DATA]]', '[[BLOCKING_EDGES]]', '[[WATCH_SECONDS]]']) {
     if (src.includes(marker)) throw new Error(`unresolved ${marker} left in script — fixture keys out of sync?`);
   }
   return src;
@@ -151,7 +150,7 @@ test('template.html script IIFE parses and executes without throwing', () => {
 
 test('every render* function exposed via switchView() runs against the fixture without throwing', () => {
   const sandbox = runScriptInSandbox();
-  const views = ['overview', 'priorities', 'scorecard', 'dag', 'heatmap', 'timeline', 'decisions', 'artefacts', 'mindmap', 'community', 'compare'];
+  const views = ['overview', 'priorities', 'scorecard', 'dag', 'heatmap', 'timeline', 'decisions', 'artefacts', 'mindmap', 'compare'];
   for (const v of views) {
     assert.doesNotThrow(() => sandbox.window.switchView(v), `switchView('${v}') threw`);
   }
@@ -202,11 +201,6 @@ test('mind map controls (rotate, toggle bridges, node click) run without throwin
   assert.doesNotThrow(() => sandbox.window.mmResetView(), 'mmResetView() threw');
 });
 
-test('community view renders health bar, trust registry, and Sankey without throwing', () => {
-  const sandbox = runScriptInSandbox();
-  assert.doesNotThrow(() => sandbox.window.switchView('community'));
-});
-
 test('search (⌘K) open/query/close cycle runs without throwing', () => {
   const sandbox = runScriptInSandbox();
   assert.doesNotThrow(() => sandbox.window.openSearch(), 'openSearch() threw');
@@ -234,26 +228,18 @@ test('learnings tab (zone distribution, filterLearningZone) renders without thro
   );
 });
 
-test('decisions tab (decision guidance) renders without throwing', () => {
+test('decisions tab renders without throwing', () => {
   const sandbox = runScriptInSandbox();
   sandbox.window.selectCard(0);
   assert.doesNotThrow(() => sandbox.window.switchTab('decisions'), "switchTab('decisions') threw");
 });
 
-test('decisions tab renders without throwing for a namespace with no decision guidance', () => {
-  const sandbox = runScriptInSandbox();
-  // example-ns-two's fixture has decisionGuidance: [] — must render byte-identical to
-  // pre-P65 output (renderDecisionGuidance returns '' for an empty array).
-  sandbox.window.selectCard(1);
-  assert.doesNotThrow(() => sandbox.window.switchTab('decisions'), "switchTab('decisions') threw");
-});
-
-test('global decisions view renders the guidance breadcrumb without throwing', () => {
+test('global decisions view renders without throwing', () => {
   const sandbox = runScriptInSandbox();
   assert.doesNotThrow(() => sandbox.window.switchView('decisions'), "switchView('decisions') threw");
 });
 
-test('state tab (verification contracts) renders without throwing', () => {
+test('state tab renders without throwing', () => {
   const sandbox = runScriptInSandbox();
   sandbox.window.selectCard(0);
   assert.doesNotThrow(() => sandbox.window.switchTab('state'), "switchTab('state') threw");
