@@ -84,6 +84,12 @@ def make_ns(name, **overrides):
         "carry_forward_trend": [{"date": "2026-08-01", "carryForward": 1, "goalsCompleted": 1}],
         "quality_dist": {"high": 2, "neutral": 1, "poor": 0},
         "code_review_defer_count": 0, "research_defer_count": 0,
+        "code_review_summary": mod._code_review_summary([
+            {"date": "2026-07-01", "counts": {"critical": 0, "high": 1, "medium": 2, "low": 1}, "total": 4, "findings": []},
+            {"date": "2026-08-01", "counts": {"critical": 0, "high": 1, "medium": 1, "low": 0}, "total": 2,
+             "findings": [{"severity": "high", "title": "Example <b>finding</b>", "category": "Duplication"},
+                          {"severity": "medium", "title": "Another finding", "category": None}]},
+        ]),
         "artefacts": [{"title": "Example diagram", "type": "svg", "tags": ["dashboard"], "description": "x",
                        "file": "artefacts/example.svg", "abs_file": None, "linked_pcode": None, "created_at": "2026-07-01T00:00:00Z"}],
         "all_incomplete_items": ["y [blocked: waiting]"],

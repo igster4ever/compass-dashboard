@@ -127,7 +127,7 @@ class TestCoreParity(unittest.TestCase):
 
     def test_claude_review_due(self):
         for name, d, state, config, _ in self._each():
-            ours = dash._check_claude_review_due(d, state, config, state.get("repo_path", ""))
+            ours = dash._check_claude_review_due(dash._claude_md_files(d, state.get("repo_path", "")), state, config)
             theirs = core["orient"]._check_claude_review_due(
                 state, config, core["orient"]._resolve_claude_md_path(state, name))
             # Core reports cadence-due even with no CLAUDE.md; its skill step then resets
@@ -148,7 +148,7 @@ class TestCoreParity(unittest.TestCase):
 
     def test_code_review_due(self):
         for name, d, state, config, _ in self._each():
-            ours_due, ours_status = dash._check_code_review_due(d, state, config)
+            ours_due, ours_status = dash._check_code_review_due(_read_jsonl(d / "decisions.jsonl"), state, config)
             theirs = core["orient"]._check_review_due(
                 state, config, core["orient"]._get_review_complexity_signal(d, state, config))
             self.assertEqual(ours_due, theirs["due"])

@@ -76,7 +76,6 @@ IGNORED = {
         "learning_applications.jsonl": f"{_UNREAD_AUDIT} Rank 5 (P64)",
         "section_loads.jsonl": f"{_UNREAD_AUDIT} Rank 7 (loop root, not per namespace)",
         "skill_edit_rejections.jsonl": "SkillOpt-internal rejection log",
-        "code_reviews": f"{_UNREAD_AUDIT} Rank 7",
         "claude.md": _NOT_LOOP_FILE,
         "SKILL.md": _NOT_LOOP_FILE,
         "skill.md": _NOT_LOOP_FILE,

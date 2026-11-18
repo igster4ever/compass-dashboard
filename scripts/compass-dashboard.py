@@ -171,15 +171,44 @@ def _iter_reality_bullets(reality_md):
             yield text, excluded
 
 
+def _count_unbucketed_backlog_bullets(reality_md):
+    """Mirror of compass core's reality._count_unbucketed_backlog_bullets: bullets under
+    '## Backlog' that sit outside '### Tactical' / '### Strategic' (the only two buckets the
+    backlog readers see), so they are invisible to the dashboard too."""
+    count = 0
+    in_backlog = in_bucket = False
+    for line in reality_md.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            level = len(stripped) - len(stripped.lstrip("#"))
+            name = stripped.lstrip("#").strip().casefold()
+            if level <= 2:
+                in_backlog, in_bucket = (level == 2 and name == "backlog"), False
+            elif in_backlog and level == 3:
+                in_bucket = name in ("tactical", "strategic")
+            continue
+        if in_backlog and not in_bucket and stripped[:2] in ("- ", "* "):
+            count += 1
+    return count
+
+
 def _check_reality_structure(reality_md):
-    """P17 missing-section warnings, a mirror of compass core's reality._check_reality_structure:
-    any `#`-depth header counts, matched case-insensitively."""
+    """P17 structure warnings, a mirror of compass core's reality._check_reality_structure:
+    missing sections (any `#`-depth header counts, matched case-insensitively), then the
+    count of backlog bullets outside the Tactical/Strategic buckets."""
     headers_found = {line.strip().lstrip("#").strip().lower()
                      for line in reality_md.splitlines() if line.strip().startswith("##")}
-    return [f"Missing section: {label}"
-            for label, variant in (("## What exists and works", "what exists and works"),
-                                   ("## Backlog", "backlog"))
-            if variant not in headers_found]
+    warnings = [f"Missing section: {label}"
+                for label, variant in (("## What exists and works", "what exists and works"),
+                                       ("## Backlog", "backlog"))
+                if variant not in headers_found]
+    flat = _count_unbucketed_backlog_bullets(reality_md)
+    if flat:
+        warnings.append(
+            f"{flat} bullet(s) sit directly under '## Backlog', outside '### Tactical' / "
+            f"'### Strategic'. 'compass backlog' and the dashboard ignore them -- move them "
+            f"under one of those headings.")
+    return warnings
 
 
 def _reality_completeness(reality_md):
@@ -494,15 +523,47 @@ def _verification_durability(reality_md, state):
     }
 
 
-def _parse_goal_entry(entry):
-    """Normalise a goal_completions entry to (total_goals, hit_rate_pct)."""
-    if isinstance(entry, dict):
-        return entry.get("total_goals", 0), int(entry.get("hit_rate", 0))
-    if isinstance(entry, list) and entry:
-        n_done = sum(1 for s in entry if s == "completed")
-        total = len(entry)
-        return total, int(n_done / total * 100)
-    return 0, 0
+def _goal_session(ts, entry):
+    """One `goal_completions` entry in a single shape, whatever vintage wrote it: a legacy bare
+    status list, a dict with `statuses` (strings, or `{goal, status}` dicts), or a dict without.
+
+    ts, date, month   the key and its `YYYY-MM-DD` / `YYYY-MM` prefixes
+    shape             "dict" | "list" | "other"; empty is `not entry`
+    statuses, goals   parallel lists: the status string, and the goal text when the entry named it
+    planned, types    `planned_actions` / `types` lists, [] when absent (list entries have neither)
+    total, rate       goals counted and hit-rate % (int); 0, 0 for an unreadable entry
+    stored_rate       the dict's own `hit_rate` as a float (core keeps fractions), else None"""
+    ts = str(ts)
+    shape = "dict" if isinstance(entry, dict) else "list" if isinstance(entry, list) else "other"
+    raw = entry if shape == "list" else (entry.get("statuses") or []) if shape == "dict" else []
+    statuses, goals = [], []
+    for item in raw if isinstance(raw, list) else []:
+        if isinstance(item, dict):
+            statuses.append(item.get("status"))
+            goals.append(item.get("goal"))
+        else:
+            statuses.append(item)
+            goals.append(None)
+    planned = (entry.get("planned_actions") or []) if shape == "dict" else []
+    types = (entry.get("types") or []) if shape == "dict" else []
+    stored = entry.get("hit_rate") if shape == "dict" else None
+    stored_rate = float(stored) if isinstance(stored, (int, float)) and not isinstance(stored, bool) else None
+    if shape == "dict":
+        total, rate = entry.get("total_goals", 0), int(stored_rate or 0)
+    elif shape == "list" and statuses:
+        total, rate = len(statuses), int(statuses.count("completed") / len(statuses) * 100)
+    else:
+        total, rate = 0, 0
+    return {"ts": ts, "date": ts[:10], "month": ts[:7], "shape": shape, "empty": not entry,
+            "statuses": statuses, "goals": goals, "planned": planned, "types": types,
+            "total": total, "rate": rate, "stored_rate": stored_rate}
+
+
+def _goal_sessions(state):
+    """Every `goal_completions` entry as a `_goal_session` dict, oldest first. The one place
+    that knows the entry shapes; the readers below never look at a raw entry."""
+    return [_goal_session(ts, entry)
+            for ts, entry in sorted((state.get("goal_completions") or {}).items())]
 
 
 def _suggested_goal_count(state):
@@ -511,19 +572,8 @@ def _suggested_goal_count(state):
     `_compute_suggested_goal_count` (average rounded to one decimal, then the 80/60
     thresholds). Parity-tested in tests/test_core_parity.py."""
     default = {"count": 4, "basis": "no history \u2014 using default"}
-    completions = state.get("goal_completions", {})
-    if not completions:
-        return default
-    recent = sorted(completions.items(), key=lambda kv: kv[0], reverse=True)[:5]
-    rates = []
-    for _, entry in recent:
-        if not entry:
-            continue
-        raw = entry.get("hit_rate") if isinstance(entry, dict) else None
-        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
-            rates.append(float(raw))
-        else:
-            rates.append(float(_parse_goal_entry(entry)[1]))  # legacy list-shaped entries
+    recent = [x for x in _goal_sessions(state)[::-1][:5] if not x["empty"]]
+    rates = [x["stored_rate"] if x["stored_rate"] is not None else float(x["rate"]) for x in recent]
     if not rates:
         return default
     avg = round(sum(rates) / len(rates), 1)
@@ -755,7 +805,7 @@ def _git(repo, *args, timeout):
     return p.stdout, None
 
 
-def _review_complexity_signal(ns_dir, state, config):
+def _review_complexity_signal(decisions, state, config):
     """Measure code-change complexity since the last review, independent of elapsed
     session count. Mirrors compass/_monolith.py's _get_review_complexity_signal() — same
     four proxies (lines changed, new files, new design docs, clustered complex/chaotic
@@ -802,7 +852,7 @@ def _review_complexity_signal(ns_dir, state, config):
     new_design_docs = sum(1 for p in new_paths if p.startswith("docs/"))
 
     complex_decisions = 0
-    for dec in _read_jsonl(ns_dir / "decisions.jsonl"):
+    for dec in decisions:
         if dec.get("complexity_domain") not in ("complex", "chaotic"):
             continue
         if last_review_at and dec.get("date", "") < last_review_at:
@@ -829,7 +879,7 @@ def _review_complexity_signal(ns_dir, state, config):
     }
 
 
-def _check_code_review_due(ns_dir, state, config):
+def _check_code_review_due(decisions, state, config):
     """Whether a periodic code quality review is due. Mirrors compass/_monolith.py's
     _check_review_due(): base gate is sessions_since_review >= review_interval_sessions
     AND days-since-last-review >= review_interval_days (or never reviewed), pulled forward
@@ -851,7 +901,7 @@ def _check_code_review_due(ns_dir, state, config):
             "pulled_forward_by_complexity": False, "complexity_signal": empty_signal,
         }
 
-    complexity_signal = _review_complexity_signal(ns_dir, state, config)
+    complexity_signal = _review_complexity_signal(decisions, state, config)
 
     interval_sessions     = config.get("review_interval_sessions", 5)
     sessions_since_review = state.get("sessions_since_review", 0)
@@ -954,41 +1004,62 @@ def _goal_outcomes_breakdown(history_parsed, state, reality_md, limit=20):
 
 
 def _goal_stats(state):
-    completions = state.get("goal_completions", {})
-    if not completions:
+    sessions = _goal_sessions(state)[-5:]
+    if not sessions:
         return None, []
-
-    sessions = sorted(completions.items())[-5:]
-
-    dots = []
-    for _, entry in sessions:
-        total, rate = _parse_goal_entry(entry)
-        level = "high" if rate >= 80 else "mid" if rate >= 50 else "low"
-        dots.append({"level": level, "rate": rate})
-
-    _, latest = sessions[-1] if sessions else (None, {})
-    total, rate = _parse_goal_entry(latest)
-    return (rate if total else None), dots
+    dots = [{"level": "high" if x["rate"] >= 80 else "mid" if x["rate"] >= 50 else "low",
+             "rate": x["rate"]} for x in sessions]
+    latest = sessions[-1]
+    return (latest["rate"] if latest["total"] else None), dots
 
 
 _GOAL_STATUSES = ("completed", "partial", "skipped", "blocked", "abandoned")
 
 
+_WHY_DASH_RE = re.compile(r"\s[—–-]\s")
+_WHY_LEAD_RE = re.compile(r"^[\s—–:-]+")
+
+
+def _incomplete_why(goal, reason):
+    """The part of an `## Incomplete` bullet worth showing under its goal: the *why*.
+
+    The bullet usually restates the goal (often shortened), then explains after a dash. So:
+    nothing when the bullet is empty or sits wholly inside the goal; the text after the first
+    ` — `/` – `/` - ` when what precedes it is a prefix of the goal; the bullet whole when it is
+    worded differently (or when no goal text was recorded). None means nothing to show."""
+    reason = reason or ""
+    if not reason:
+        return None
+    goal_l = (goal or "").lower()
+    if goal and reason.lower() in goal_l:
+        return None
+    m = _WHY_DASH_RE.search(reason)
+    cut = m.start() if m else -1
+    head = (reason[:cut] if cut > 0 else reason).strip().lower()
+    if goal and head and goal_l.startswith(head):
+        return (_WHY_LEAD_RE.sub("", reason[cut:]) if cut > 0 else "") or None
+    return reason
+
+
 def _match_incomplete_reasons(missed, reasons):
     """Attach each history `## Incomplete` bullet to the goal it explains: first by a shared
     30-character prefix (the bullet usually restates the goal, then adds why), then, when the
-    leftovers pair up one to one, in order."""
+    leftovers pair up one to one, in order. Returns new `{**item, reason, why}` dicts (`reason`
+    the matched bullet or None, `why` from `_incomplete_why`); `missed` is left untouched."""
     pool = list(reasons)
-    for item in missed:
+    matched = [None] * len(missed)
+    for i, item in enumerate(missed):
         key = (item["goal"] or "").lower()[:30]
         hit = next((r for r in pool if key and r.lower().startswith(key)), None)
         if hit is not None:
-            item["reason"] = hit
+            matched[i] = hit
             pool.remove(hit)
-    unmatched = [m for m in missed if m["reason"] is None]
+    unmatched = [i for i, r in enumerate(matched) if r is None]
     if unmatched and len(unmatched) == len(pool):
-        for item, r in zip(unmatched, pool):
-            item["reason"] = r
+        for i, r in zip(unmatched, pool):
+            matched[i] = r
+    return [{**item, "reason": r, "why": _incomplete_why(item["goal"], r)}
+            for item, r in zip(missed, matched)]
 
 
 def _goal_status_breakdown(state, history_by_opened=None, recent=10):
@@ -1001,50 +1072,131 @@ def _goal_status_breakdown(state, history_by_opened=None, recent=10):
     to its parsed file. It supplies goal text when state has no planned_actions (status i is
     `## Planned` bullet i, used only when the counts agree) and each goal's reason from
     `## Incomplete`."""
-    completions = state.get("goal_completions") or {}
-    if not completions:
+    sessions = _goal_sessions(state)
+    if not sessions:
         return None
     history_by_opened = history_by_opened or {}
     counts = dict.fromkeys(_GOAL_STATUSES + ("other",), 0)
     not_completed = []
-    for ts, entry in sorted(completions.items()):
-        statuses = entry if isinstance(entry, list) else (entry.get("statuses") or []) if isinstance(entry, dict) else []
-        planned = (entry.get("planned_actions") or []) if isinstance(entry, dict) else []
-        hist = history_by_opened.get(ts) or {}
+    for sess in sessions:
+        statuses = sess["statuses"]
+        planned = sess["planned"]
+        hist = history_by_opened.get(sess["ts"]) or {}
         if not planned and len(hist.get("planned") or []) == len(statuses):
             planned = hist["planned"]
         missed = []
-        for i, s in enumerate(statuses):
-            status = s.get("status") if isinstance(s, dict) else s
-            goal = s.get("goal") if isinstance(s, dict) else (planned[i] if i < len(planned) else None)
+        for i, status in enumerate(statuses):
+            goal = sess["goals"][i]
+            if goal is None and i < len(planned):
+                goal = planned[i]
             key = status if status in _GOAL_STATUSES else "other"
             counts[key] += 1
             if key != "completed":
-                missed.append({"date": str(ts)[:10], "status": key, "goal": goal, "reason": None})
-        _match_incomplete_reasons(missed, hist.get("incomplete") or [])
-        not_completed += missed
-    return {"counts": counts, "total": sum(counts.values()), "sessions": len(completions),
+                missed.append({"date": sess["date"], "status": key, "goal": goal})
+        not_completed += _match_incomplete_reasons(missed, hist.get("incomplete") or [])
+    return {"counts": counts, "total": sum(counts.values()), "sessions": len(sessions),
             "not_completed": not_completed[::-1][:recent]}
 
 
+_CODE_REVIEW_SEVERITIES = ("critical", "high", "medium", "low")
+_SEV_ALT = "|".join(x.upper() for x in _CODE_REVIEW_SEVERITIES)
+_CODE_REVIEW_TAG_RE = re.compile(rf"^\[({_SEV_ALT})\]\s*(.*)$", re.I)
+_CODE_REVIEW_HEADING_SEV_RE = re.compile(rf"^\[({_SEV_ALT})\](?:\s|$)", re.I)
+_MD_BULLET_RE = re.compile(r"^\s*[-*]\s+(.*?)\s*$")
+_MD_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
+_REVIEW_TITLE_MAX = 200
+
+
+def _review_title(text, bold):
+    """A finding's title: the bold run when the bullet opened with `**`, else the text up to
+    the first spaced dash (the location usually follows it), capped."""
+    if bold:
+        end = text.find("**")
+        title = text[:end] if end >= 0 else text
+    else:
+        title = re.split(r"\s[—–]\s|\s--\s", text, maxsplit=1)[0]
+    return title.strip()[:_REVIEW_TITLE_MAX]
+
+
+def _parse_code_review(path):
+    """One `code_reviews/<date>.md` as {date, counts, total, findings[{severity, title,
+    category}]}. The format is a prompt convention, not a schema, and three shapes are live:
+      - **[HIGH] title** — location       (tagged bullet, under a `####` category heading)
+      - [HIGH] title — location           (tagged, not bold)
+      ### [HIGH]  /  - title ...          (a severity heading, untagged bullets under it)
+    Only those are read; prose and untagged bullets under any other heading are ignored, so
+    format drift shows as `total` 0 rather than an exception."""
+    counts = dict.fromkeys(_CODE_REVIEW_SEVERITIES, 0)
+    findings, category, heading_sev = [], None, None
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        heading = _MD_HEADING_RE.match(line)
+        if heading:
+            level, text = len(heading.group(1)), heading.group(2)
+            sev = _CODE_REVIEW_HEADING_SEV_RE.match(text)
+            heading_sev = sev.group(1).lower() if sev else None
+            category = text if (level == 4 and not sev) else None if level <= 4 else category
+            continue
+        bullet = _MD_BULLET_RE.match(line)
+        if not bullet:
+            continue
+        text = bullet.group(1)
+        bold = text.startswith("**")
+        body = text[2:] if bold else text
+        tag = _CODE_REVIEW_TAG_RE.match(body)
+        if tag:
+            severity, rest = tag.group(1).lower(), tag.group(2)
+        elif heading_sev:
+            severity, rest = heading_sev, body
+        else:
+            continue
+        counts[severity] += 1
+        findings.append({"severity": severity, "title": _review_title(rest, bold), "category": category})
+    return {"date": path.stem[:10], "counts": counts, "total": sum(counts.values()),
+            "findings": findings}
+
+
+def _read_code_reviews(directory, problems):
+    """Every parsed review in `directory`, oldest first; [] when it is absent. An unreadable
+    file is a `dataProblems` entry; a readable one with no tagged findings is kept (total 0)."""
+    if not directory.is_dir():
+        return []
+    reviews = []
+    for path in sorted(directory.glob("*.md")):
+        try:
+            reviews.append(_parse_code_review(path))
+        except OSError as e:
+            problems.append({"file": f"code_reviews/{path.name}", "issue": f"unreadable: {e}"})
+    return reviews
+
+
+def _code_review_summary(reviews):
+    """NS `codeReviews`: severity counts per review (the last 12) for a code-health trend, and
+    the latest review's findings (first 10) so a card can say what the last review found.
+    None with no reviews."""
+    if not reviews:
+        return None
+    latest = reviews[-1]
+    return {
+        "count":   len(reviews),
+        "reviews": [{"date": r["date"], **r["counts"], "total": r["total"]} for r in reviews[-12:]],
+        "latest":  {"date": latest["date"], "total": latest["total"],
+                    "findings": latest["findings"][:10]},
+    }
+
+
 def _goal_by_month(state):
-    completions = state.get("goal_completions", {})
     monthly = {}
-    for key, entry in completions.items():
-        if not entry:
+    for x in _goal_sessions(state):
+        if x["empty"] or len(x["month"]) != 7 or x["month"][4] != '-':
             continue
-        month = str(key)[:7]
-        if len(month) != 7 or month[4] != '-':
-            continue
-        _, rate = _parse_goal_entry(entry)
-        if month not in monthly:
-            monthly[month] = []
-        monthly[month].append(rate)
+        monthly.setdefault(x["month"], []).append(x["rate"])
     return {m: int(sum(rates) / len(rates)) for m, rates in monthly.items()}
 
 
-def _load_watch_signals(ns_dir, config, state):
+def _load_watch_signals(my_learnings, config, state):
     """P54: tag-overlap-scored decisions/learnings from watched namespaces since last_close.
+    `my_learnings` is this namespace's already-loaded learnings; only the *watched*
+    namespaces' files are read here (that cross-namespace I/O is the point of the feature).
     Mirrors compass's cmd_watch_signals (scripts/compass/_monolith.py) — the dashboard reads
     namespace directories directly rather than shelling out to compass.py, so the scoring
     logic (weighted tag overlap, bootstrap fallback, top-3/top-5 caps) is duplicated here
@@ -1056,7 +1208,6 @@ def _load_watch_signals(ns_dir, config, state):
 
     last_close = state.get("last_close") or ""
 
-    my_learnings = _read_jsonl(ns_dir / "learnings.jsonl")
     active = [l for l in my_learnings if l.get("status") not in ("archived", "superseded")]
     top = sorted(active, key=lambda l: -l.get("weight", 1))[:15]
     tag_freq = {}
@@ -1120,15 +1271,12 @@ def _load_watch_signals(ns_dir, config, state):
 
 def _compute_exploration_ratio(state):
     """Replicate compass _compute_exploration_ratio logic (stdlib-only, can't import)."""
-    completions = state.get("goal_completions", {})
-    if not completions:
-        return None
-    recent = sorted(completions.items(), key=lambda x: x[0], reverse=True)[:5]
-    typed  = [v for _, v in recent if v.get("types")]
+    recent  = _goal_sessions(state)[::-1][:5]
+    typed   = [x["types"] for x in recent if x["types"]]
     if len(typed) < 2:
         return None
-    explore = sum(t.count("explore") for t in (v["types"] for v in typed))
-    total   = sum(len(v["types"]) for v in typed)
+    explore = sum(t.count("explore") for t in typed)
+    total   = sum(len(t) for t in typed)
     ratio   = round(explore / total * 100, 1) if total else 0.0
     return {
         "ratio":             ratio,
@@ -1140,21 +1288,17 @@ def _compute_exploration_ratio(state):
 
 
 def _goal_type_by_session(state):
-    """Per-session E/X breakdown from goal_completions[*].types, chronological."""
-    completions = state.get("goal_completions", {})
+    """Per-session E/X breakdown from goal_completions[*].types, chronological. Legacy bare
+    status lists carry no goal counts or types, so they are left out."""
     result = []
-    for ts, entry in sorted(completions.items()):
-        if not isinstance(entry, dict):
+    for x in _goal_sessions(state):
+        if x["shape"] != "dict":
             continue
-        types   = entry.get("types")
-        date    = ts[:10]
-        if types:
-            exploit = types.count("exploit")
-            explore = types.count("explore")
-        else:
-            exploit = entry.get("total_goals", 0)
-            explore = 0
-        result.append({"date": date, "exploit": exploit, "explore": explore, "typed": bool(types)})
+        types = x["types"]
+        result.append({"date": x["date"],
+                       "exploit": types.count("exploit") if types else x["total"],
+                       "explore": types.count("explore") if types else 0,
+                       "typed": bool(types)})
     return result
 
 
@@ -1230,18 +1374,17 @@ def _claude_md_files(ns_dir, repo_path):
     return files
 
 
-def _check_claude_review_due(ns_dir, state, config, repo_path):
+def _check_claude_review_due(files, state, config):
     """CLAUDE.md hygiene review status. Mirrors compass/orient.py's
     _check_claude_review_due() + _resolve_claude_md_path(): the CLAUDE.md is
     `repo_path/CLAUDE.md`, else ~/.claude/skills/<namespace>/CLAUDE.md only when repo_path
-    is unset. The size budget applies per file, over every rules file `_claude_md_files`
-    finds; `claude_md_bytes` is the largest, `claude_md_files` each.
+    is unset. `files` is the `{path: bytes}` map `_claude_md_files()` built in the read phase.
+    The size budget applies per file, over every rules file in it; `claude_md_bytes` is the largest, `claude_md_files` each.
     Due on the session cadence (`claude_review_interval_sessions`, default 15), or pulled
     forward once the largest file exceeds `claude_md_size_budget_bytes` (default 20000) and at
     least `claude_review_size_min_sessions` (default 2) sessions have passed.
     Never due when no CLAUDE.md exists (the skill resets the counter and skips).
     """
-    files = _claude_md_files(ns_dir, repo_path)
     size = max(files.values()) if files else None
     sessions_since = state.get("sessions_since_claude_review", 0)
     cadence_due = sessions_since >= int(config.get("claude_review_interval_sessions", 15))
@@ -1476,6 +1619,8 @@ def _read_namespace_files(ns_dir):
     code_review_defer_count = len(_read_jsonl(ns_dir / "code_review_deferrals.jsonl", problems))
     research_defer_count    = len(_read_jsonl(ns_dir / "research_deferrals.jsonl", problems))
 
+    code_reviews = _read_code_reviews(ns_dir / "code_reviews", problems)
+
     # External research signals
     external_signals = list(reversed(_read_jsonl(ns_dir / "external_signals.jsonl", problems)))
 
@@ -1521,6 +1666,7 @@ def _read_namespace_files(ns_dir):
         "intent_history":          intent_history,
         "code_review_defer_count": code_review_defer_count,
         "research_defer_count":    research_defer_count,
+        "code_reviews":            code_reviews,
         "external_signals":        external_signals,
         "skill_feedback":          skill_feedback,
         "artefacts":               artefacts,
@@ -1536,10 +1682,9 @@ def _read_namespace_files(ns_dir):
 def _assemble_namespace_dict(ns_dir, raw):
     """Dict-assembly phase of load_namespace() — every derived/computed field,
     consuming the raw file contents `_read_namespace_files()` already loaded.
-    No new disk reads of its own (the handful of existing helpers called here —
-    `_load_watch_signals()`, `_check_code_review_due()`, `_goal_outcomes_breakdown()`,
-    etc. — already encapsulated their own I/O before this split and are out of its
-    scope; only load_namespace()'s own inline reads moved).
+    Own-namespace disk reads happen only in the read phase; the one remaining I/O here is
+    `_load_watch_signals()` reading *other* namespaces' files, and the git probes behind
+    `_check_code_review_due()` / `_build_pulse()`.
     """
     state         = raw["state"]
     intent        = raw["intent"]
@@ -1588,15 +1733,15 @@ def _assemble_namespace_dict(ns_dir, raw):
     research_due, research_status = _check_research_due(state, config, complexity_clustering_signals)
 
     watches       = config.get("watches", [])
-    watch_signals = _load_watch_signals(ns_dir, config, state)
+    watch_signals = _load_watch_signals(raw["learnings"], config, state)
 
     review_interval    = config.get("review_interval_sessions", 5)
     repo_path          = state.get("repo_path", "")
-    code_review_due, code_review_status = _check_code_review_due(ns_dir, state, config)
+    code_review_due, code_review_status = _check_code_review_due(decisions, state, config)
 
     # CLAUDE.md hygiene review due chip — gated the same way the skill itself gates
     # Step 2b.3b: repo_path configured AND a CLAUDE.md actually exists there.
-    claude_review_status = _check_claude_review_due(ns_dir, state, config, repo_path)
+    claude_review_status = _check_claude_review_due(raw["claude_md_files"], state, config)
     claude_review_due    = claude_review_status["due"]
 
     # dream_defer_count — a scalar in state.json (set by compass/dream.py's cmd_defer_dream),
@@ -1619,11 +1764,8 @@ def _assemble_namespace_dict(ns_dir, raw):
     carry_forward_trend = []
     quality_dist = {"high": 0, "neutral": 0, "poor": 0}
     # Build date-keyed lookup from goal_completions for hit_rate matching
-    completions_by_date = {}
-    for ts, entry in state.get("goal_completions", {}).items():
-        date = str(ts)[:10]
-        if isinstance(entry, dict):
-            completions_by_date[date] = entry.get("hit_rate")
+    completions_by_date = {x["date"]: x["stored_rate"] for x in _goal_sessions(state)
+                           if x["shape"] == "dict"}
     history_by_opened = {}
     for parsed in raw["history_parsed"]:
         date = parsed["filename"][:10]
@@ -1761,6 +1903,7 @@ def _assemble_namespace_dict(ns_dir, raw):
         "carry_forward_trend":       carry_forward_trend,
         "quality_dist":              quality_dist,
         "code_review_defer_count":    code_review_defer_count,
+        "code_review_summary":        _code_review_summary(raw["code_reviews"]),
         "research_defer_count":       research_defer_count,
         "artefacts":                  artefacts,
         "all_incomplete_items":       all_incomplete_items,
@@ -2299,6 +2442,7 @@ _JS_DATA_RENAME_FIELDS = [
     ("carryForwardTrend",          "carry_forward_trend",       _MISSING),
     ("qualityDist",                "quality_dist",              _MISSING),
     ("codeReviewDeferCount",       "code_review_defer_count",   _MISSING),
+    ("codeReviews",                "code_review_summary",       None),
     ("researchDeferCount",         "research_defer_count",      _MISSING),
     ("artefacts",                  "artefacts",                 _MISSING),
     ("skillFeedback",              "skill_feedback",            _MISSING),
@@ -2380,7 +2524,7 @@ def _js_data(namespaces):
 # HTML assembly
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate(namespaces, watch_seconds=None):
+def generate(namespaces, watch_seconds=None, rev_file=None):
     now         = _now_utc().strftime("%d %b %Y %H:%M UTC")
     n_open      = sum(1 for n in namespaces if n["open_session"])
     n_learnings = sum(len(n["learnings"]) for n in namespaces)
@@ -2398,6 +2542,9 @@ def generate(namespaces, watch_seconds=None):
     html = html.replace("[[NS_DATA]]",           _js_data(namespaces))
     html = html.replace("[[BLOCKING_EDGES]]",    _js_blocking_edges(namespaces))
     html = html.replace("[[WATCH_SECONDS]]",     json.dumps(watch_seconds))
+    # Only a --watch page polls the sidecar, so the rev and its file name are baked only then.
+    html = html.replace("[[PAGE_REV]]",          json.dumps(_content_rev(namespaces) if rev_file else None))
+    html = html.replace("[[REV_FILE]]",          json.dumps(rev_file))
 
     return html
 
@@ -2405,6 +2552,35 @@ def generate(namespaces, watch_seconds=None):
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Keys that change with the clock alone, not with the data. `_time_ago` labels and the Live
+# strip's tick origin would make every --watch pass look "changed", so the rev ignores them.
+_REV_VOLATILE_KEYS = ("lastClose", "lastOpen")
+_REV_VOLATILE_PULSE_KEYS = ("elapsed_seconds", "generated_at")
+
+
+def _content_rev(namespaces):
+    """Short hash of what the page shows, ignoring clock-only fields. Two --watch passes with
+    the same rev would render the same page, so the second write and reload are skipped."""
+    data = json.loads(_js_data(namespaces))
+    for entry in data:
+        for key in _REV_VOLATILE_KEYS:
+            entry.pop(key, None)
+        pulse = entry.get("pulse")
+        if isinstance(pulse, dict):
+            for key in _REV_VOLATILE_PULSE_KEYS:
+                pulse.pop(key, None)
+    blob = json.dumps([data, json.loads(_js_blocking_edges(namespaces))],
+                      sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode()).hexdigest()[:12]
+
+
+def _rev_path(out_path):
+    """Sidecar the page polls: `<page>.rev.js`, a one-line `window.__DASH_REV = "<rev>";`.
+    A script tag can load it from file://, where fetch() is blocked."""
+    out_path = Path(out_path)
+    return out_path.with_name(out_path.name + ".rev.js")
+
 
 def _write_atomic(path, text):
     """Write `text` to `path` via a temp file in the same directory and `os.replace`, so a
@@ -2418,34 +2594,49 @@ def _write_atomic(path, text):
         tmp.unlink(missing_ok=True)
 
 
-def _generate_once(filter_ns, out_path, watch_seconds):
-    """One discover -> generate -> atomic write pass: the summary dict, or an error dict."""
+def _generate_once(filter_ns, out_path, watch_seconds, prev_rev=None):
+    """One discover -> generate -> atomic write pass: the summary dict, or an error dict.
+
+    Under --watch (`watch_seconds` set) the pass hashes the content first: when it equals
+    `prev_rev` the page and sidecar are left untouched (`written` is False). Otherwise the page
+    is written, then the sidecar, so a polling page never sees a rev it cannot yet load."""
     namespaces = discover_namespaces(filter_ns=filter_ns)
     if not namespaces:
         msg = (f"Namespace '{filter_ns}' not found" if filter_ns
                else "No compass namespaces found in ~/.claude/loop/")
         return {"ok": False, "error": msg}
-    _write_atomic(out_path, generate(namespaces, watch_seconds=watch_seconds))
+    rev = _content_rev(namespaces) if watch_seconds else None
+    written = not (rev is not None and rev == prev_rev)
+    if written:
+        rev_file = _rev_path(out_path).name if watch_seconds else None
+        _write_atomic(out_path, generate(namespaces, watch_seconds=watch_seconds, rev_file=rev_file))
+        if rev is not None:
+            _write_atomic(_rev_path(out_path), f'window.__DASH_REV = {json.dumps(rev)};\n')
     return {
         "ok":        True,
         "path":      str(out_path),
         "namespaces": len(namespaces),
         "learnings": sum(len(n["learnings"]) for n in namespaces),
         "sessions":  sum(n["session_count"] for n in namespaces),
+        "rev":       rev,
+        "written":   written,
     }
 
 
-def _watch(filter_ns, out_path, seconds):
-    """Regenerate every `seconds` until interrupted. A failed pass leaves the last good file in
-    place and is reported on stderr; the page's own timer reloads it (Live strip step 4)."""
+def _watch(filter_ns, out_path, seconds, last_rev=None):
+    """Regenerate every `seconds` until interrupted, rewriting only when the content hash
+    changed. A failed pass leaves the last good file in place and is reported on stderr; the
+    page polls the sidecar and reloads when its rev differs (Live strip step 4)."""
     try:
         while True:
             time.sleep(seconds)
             try:
-                result = _generate_once(filter_ns, out_path, seconds)
+                result = _generate_once(filter_ns, out_path, seconds, last_rev)
             except Exception as e:  # keep watching: the next pass may succeed
                 result = {"ok": False, "error": f"{type(e).__name__}: {e}"}
-            if not result["ok"]:
+            if result["ok"]:
+                last_rev = result.get("rev", last_rev)
+            else:
                 print(json.dumps(result), file=sys.stderr, flush=True)
     except KeyboardInterrupt:
         pass
@@ -2478,7 +2669,7 @@ def main():
         result["watch_seconds"] = args.watch
     print(json.dumps(result), flush=True)
     if args.watch:
-        _watch(args.namespace, out_path, args.watch)
+        _watch(args.namespace, out_path, args.watch, result.get("rev"))
 
 
 if __name__ == "__main__":

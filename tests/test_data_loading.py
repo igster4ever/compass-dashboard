@@ -7,6 +7,7 @@ Run: python3 -m pytest tests/test_data_loading.py  (or python3 -m unittest)
 import hashlib
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -27,6 +28,7 @@ _suggested_goal_count  = _mod._suggested_goal_count
 _stale_bullet_count    = _mod._stale_bullet_count
 _retrieval_stale_texts = _mod._retrieval_stale_texts
 _load_watch_signals    = _mod._load_watch_signals
+_read_jsonl            = _mod._read_jsonl
 _normalize_confidence  = _mod._normalize_confidence
 _zone_distribution     = _mod._zone_distribution
 _compute_confidence_calibration = _mod._compute_confidence_calibration
@@ -748,13 +750,13 @@ class TestLoadWatchSignals(unittest.TestCase):
                 f.write(json.dumps(item) + "\n")
 
     def test_no_watches_returns_empty_without_touching_disk(self):
-        result = _load_watch_signals(self.loop_dir / "me", {}, {})
+        result = _load_watch_signals(_read_jsonl(self.loop_dir / "me" / "learnings.jsonl"), {}, {})
         self.assertEqual(result, {"bootstrapped": False, "signals": [], "total_signals": 0, "empty": True})
 
     def test_watched_namespace_directory_missing_is_skipped(self):
         me = self.loop_dir / "me"
         me.mkdir()
-        result = _load_watch_signals(me, {"watches": ["ghost"]}, {"last_close": ""})
+        result = _load_watch_signals(_read_jsonl(me / "learnings.jsonl"), {"watches": ["ghost"]}, {"last_close": ""})
         self.assertEqual(result["signals"], [])
         self.assertTrue(result["empty"])
 
@@ -764,7 +766,7 @@ class TestLoadWatchSignals(unittest.TestCase):
         self._write_jsonl("other", "learnings.jsonl", [
             {"text": "x", "tags": ["tooling"], "weight": 1, "date": "2026-07-02T00:00:00Z", "status": "active"},
         ])
-        result = _load_watch_signals(me, {"watches": ["other"]}, {"last_close": "2026-07-01T00:00:00Z"})
+        result = _load_watch_signals(_read_jsonl(me / "learnings.jsonl"), {"watches": ["other"]}, {"last_close": "2026-07-01T00:00:00Z"})
         self.assertTrue(result["bootstrapped"])
         self.assertEqual(result["total_signals"], 1)
         self.assertEqual(result["signals"][0]["learnings"][0]["overlap_score"], 1)
@@ -780,7 +782,7 @@ class TestLoadWatchSignals(unittest.TestCase):
             {"text": "low overlap",  "tags": ["debugging"], "date": "2026-07-02T00:00:00Z", "status": "active"},
             {"text": "high overlap", "tags": ["tooling"],   "date": "2026-07-03T00:00:00Z", "status": "active"},
         ])
-        result = _load_watch_signals(me, {"watches": ["other"]}, {"last_close": "2026-07-01T00:00:00Z"})
+        result = _load_watch_signals(_read_jsonl(me / "learnings.jsonl"), {"watches": ["other"]}, {"last_close": "2026-07-01T00:00:00Z"})
         self.assertFalse(result["bootstrapped"])
         learnings = result["signals"][0]["learnings"]
         self.assertEqual(learnings[0]["text"], "high overlap")  # sorted desc by overlap_score
@@ -794,7 +796,7 @@ class TestLoadWatchSignals(unittest.TestCase):
             {"text": "old", "tags": ["tooling"], "date": "2026-06-01T00:00:00Z", "status": "active"},
             {"text": "new", "tags": ["tooling"], "date": "2026-07-05T00:00:00Z", "status": "active"},
         ])
-        result = _load_watch_signals(me, {"watches": ["other"]}, {"last_close": "2026-07-01T00:00:00Z"})
+        result = _load_watch_signals(_read_jsonl(me / "learnings.jsonl"), {"watches": ["other"]}, {"last_close": "2026-07-01T00:00:00Z"})
         texts = [l["text"] for l in result["signals"][0]["learnings"]]
         self.assertEqual(texts, ["new"])
 
@@ -806,7 +808,7 @@ class TestLoadWatchSignals(unittest.TestCase):
             {"text": "superseded", "tags": ["tooling"], "date": "2026-07-05T00:00:00Z", "status": "superseded"},
             {"text": "active", "tags": ["tooling"], "date": "2026-07-05T00:00:00Z", "status": "active"},
         ])
-        result = _load_watch_signals(me, {"watches": ["other"]}, {"last_close": "2026-07-01T00:00:00Z"})
+        result = _load_watch_signals(_read_jsonl(me / "learnings.jsonl"), {"watches": ["other"]}, {"last_close": "2026-07-01T00:00:00Z"})
         texts = [l["text"] for l in result["signals"][0]["learnings"]]
         self.assertEqual(texts, ["active"])
 
@@ -819,7 +821,7 @@ class TestLoadWatchSignals(unittest.TestCase):
         self._write_jsonl("other", "learnings.jsonl", [
             {"text": f"l{i}", "tags": ["tooling"], "date": "2026-07-05T00:00:00Z", "status": "active"} for i in range(8)
         ])
-        result = _load_watch_signals(me, {"watches": ["other"]}, {"last_close": "2026-07-01T00:00:00Z"})
+        result = _load_watch_signals(_read_jsonl(me / "learnings.jsonl"), {"watches": ["other"]}, {"last_close": "2026-07-01T00:00:00Z"})
         self.assertEqual(len(result["signals"][0]["decisions"]), 3)
         self.assertEqual(len(result["signals"][0]["learnings"]), 5)
         self.assertEqual(result["total_signals"], 8)
@@ -830,7 +832,7 @@ class TestLoadWatchSignals(unittest.TestCase):
         self._write_jsonl("other", "learnings.jsonl", [
             {"text": "unrelated", "tags": ["unrelated-tag"], "date": "2026-07-05T00:00:00Z", "status": "active"},
         ])
-        result = _load_watch_signals(me, {"watches": ["other"]}, {"last_close": "2026-07-01T00:00:00Z"})
+        result = _load_watch_signals(_read_jsonl(me / "learnings.jsonl"), {"watches": ["other"]}, {"last_close": "2026-07-01T00:00:00Z"})
         self.assertEqual(result["signals"][0]["learnings"], [])
         self.assertEqual(result["total_signals"], 0)
         self.assertTrue(result["empty"])
@@ -844,7 +846,7 @@ class TestLoadWatchSignals(unittest.TestCase):
         self._write_jsonl("b", "learnings.jsonl", [
             {"text": "b1", "tags": ["tooling"], "date": "2026-07-05T00:00:00Z", "status": "active"},
         ])
-        result = _load_watch_signals(me, {"watches": ["a", "b"]}, {"last_close": "2026-07-01T00:00:00Z"})
+        result = _load_watch_signals(_read_jsonl(me / "learnings.jsonl"), {"watches": ["a", "b"]}, {"last_close": "2026-07-01T00:00:00Z"})
         self.assertEqual(len(result["signals"]), 2)
         self.assertEqual(result["total_signals"], 2)
 
@@ -1050,8 +1052,15 @@ class TestLadderDataFields(unittest.TestCase):
     core's reality._check_reality_structure), hasRepoPath, and a `typed` flag per session."""
 
     def test_reality_structure_complete(self):
-        md = "# Reality\n## What exists and works\n- a\n## Backlog\n- b\n"
+        md = "# Reality\n## What exists and works\n- a\n## Backlog\n### Tactical\n- b\n"
         self.assertEqual(_mod._check_reality_structure(md), [])
+
+    def test_reality_structure_flags_unbucketed_backlog_bullets(self):
+        md = ("## What exists and works\n- a\n## Backlog\n- loose\n* loose too\n"
+              "### Tactical\n- ok\n### Strategic\n- ok\n## Other\n- not backlog\n")
+        warnings = _mod._check_reality_structure(md)
+        self.assertEqual(len(warnings), 1)
+        self.assertTrue(warnings[0].startswith("2 bullet(s) sit directly under '## Backlog'"))
 
     def test_reality_structure_reports_each_missing_section(self):
         self.assertEqual(_mod._check_reality_structure("## What exists and works\n"),
@@ -1110,8 +1119,8 @@ class TestGoalStatusBreakdown(unittest.TestCase):
         }}
         b = _mod._goal_status_breakdown(state)
         self.assertEqual(b["not_completed"], [
-            {"date": "2026-10-02", "status": "blocked", "goal": "Blocked goal", "reason": None},
-            {"date": "2026-10-01", "status": "abandoned", "goal": "Old goal", "reason": None},
+            {"date": "2026-10-02", "status": "blocked", "goal": "Blocked goal", "reason": None, "why": None},
+            {"date": "2026-10-01", "status": "abandoned", "goal": "Old goal", "reason": None, "why": None},
         ])
 
     def test_legacy_shapes(self):
@@ -1121,7 +1130,7 @@ class TestGoalStatusBreakdown(unittest.TestCase):
         }}
         b = _mod._goal_status_breakdown(state)
         self.assertEqual(b["counts"]["abandoned"], 1)
-        self.assertEqual(b["not_completed"][0], {"date": "2026-06-02", "status": "skipped", "goal": "Dict goal", "reason": None})
+        self.assertEqual(b["not_completed"][0], {"date": "2026-06-02", "status": "skipped", "goal": "Dict goal", "reason": None, "why": None})
         self.assertEqual(b["not_completed"][1]["goal"], None)
 
     def test_history_supplies_goal_text_and_reason(self):
@@ -1135,7 +1144,8 @@ class TestGoalStatusBreakdown(unittest.TestCase):
         b = _mod._goal_status_breakdown(state, history)
         self.assertEqual(b["not_completed"], [{
             "date": "2026-05-13", "status": "abandoned", "goal": "Bulk-delete article management UI",
-            "reason": "Bulk-delete article management UI — deferred by agreement"}])
+            "reason": "Bulk-delete article management UI — deferred by agreement",
+            "why": "deferred by agreement"}])
 
     def test_reason_falls_back_to_order_when_counts_match(self):
         state = {"goal_completions": {"2026-05-13T07:10:51Z": {"statuses": ["blocked", "completed", "skipped"]}}}
@@ -1143,6 +1153,24 @@ class TestGoalStatusBreakdown(unittest.TestCase):
                                             "incomplete": ["first reworded — waiting on API", "third reworded"]}}
         b = _mod._goal_status_breakdown(state, history)
         self.assertEqual([g["reason"] for g in b["not_completed"]], ["third reworded", "first reworded — waiting on API"])
+
+    def test_order_fallback_attaches_why_to_the_right_goal(self):
+        state = {"goal_completions": {"2026-05-13T07:10:51Z": {"statuses": ["blocked", "completed", "skipped"]}}}
+        history = {"2026-05-13T07:10:51Z": {"planned": ["A goal", "B goal", "C goal"],
+                                            "incomplete": ["first reworded — waiting on API", "third reworded"]}}
+        b = _mod._goal_status_breakdown(state, history)
+        # Reworded bullets do not restate the goal, so each is shown whole.
+        self.assertEqual([g["why"] for g in b["not_completed"]],
+                         ["third reworded", "first reworded — waiting on API"])
+
+    def test_matching_does_not_mutate_its_input(self):
+        missed = [{"date": "2026-10-01", "status": "abandoned", "goal": "Ship the thing"}]
+        out = _mod._match_incomplete_reasons(missed, ["Ship the thing — blocked"])
+        self.assertEqual(missed, [{"date": "2026-10-01", "status": "abandoned", "goal": "Ship the thing"}])
+        self.assertEqual(out[0]["reason"], "Ship the thing — blocked")
+        self.assertEqual(out[0]["why"], "blocked")
+        self.assertIsNot(out[0], missed[0])
+
 
     def test_history_planned_ignored_when_lengths_differ(self):
         state = {"goal_completions": {"2026-05-13T07:10:51Z": {"statuses": ["completed", "abandoned"]}}}
@@ -1157,6 +1185,242 @@ class TestGoalStatusBreakdown(unittest.TestCase):
         b = _mod._goal_status_breakdown(state)
         self.assertEqual(len(b["not_completed"]), 10)
         self.assertEqual(b["counts"]["abandoned"], 15)
+
+
+class TestIncompleteWhy(unittest.TestCase):
+    """`_incomplete_why`: the Incomplete bullet minus the goal it restates. Ported from the
+    JS that used to do this in renderStateSection_GoalStatuses()."""
+
+    why = staticmethod(lambda goal, reason: _mod._incomplete_why(goal, reason))
+
+    def test_nothing_to_show(self):
+        self.assertIsNone(self.why("Goal", None))
+        self.assertIsNone(self.why("Goal", ""))
+        self.assertIsNone(self.why(None, None))
+
+    def test_restated_goal_then_em_dash_reason(self):
+        self.assertEqual(self.why("Ship <b>it</b>", "Ship <b>it</b> — waiting on <API>"), "waiting on <API>")
+
+    def test_en_dash_and_spaced_hyphen_separators(self):
+        self.assertEqual(self.why("Ship it", "Ship it – waiting"), "waiting")
+        self.assertEqual(self.why("Ship it", "Ship it - waiting"), "waiting")
+
+    def test_unspaced_hyphen_is_not_a_separator(self):
+        self.assertEqual(self.why("Bulk-delete UI", "Bulk-delete UI"), None)
+        self.assertEqual(self.why("Bulk goal", "Bulk-delete UI"), "Bulk-delete UI")
+
+    def test_leading_colon_and_dashes_are_stripped_from_the_why(self):
+        self.assertEqual(self.why("Ship it", "Ship it — : waiting"), "waiting")
+
+    def test_shortened_restatement_before_the_dash_counts_as_the_goal(self):
+        self.assertEqual(self.why("Bulk-delete UI — panel for deleting articles",
+                                  "Bulk-delete UI — deferred by agreement"), "deferred by agreement")
+
+    def test_exact_or_contained_restatement_has_no_why(self):
+        self.assertIsNone(self.why("Exact goal", "Exact goal"))
+        self.assertIsNone(self.why("Session H — Freshness strip", "Freshness strip"))
+
+    def test_restatement_with_nothing_after_it_has_no_why(self):
+        self.assertIsNone(self.why("Ship it today", "Ship it"))
+
+    def test_reworded_bullet_is_shown_whole(self):
+        self.assertEqual(self.why("Other goal", "Reworded entirely"), "Reworded entirely")
+
+    def test_no_goal_text_shows_the_bullet_whole(self):
+        self.assertEqual(self.why(None, "Ship it — waiting"), "Ship it — waiting")
+
+    def test_case_insensitive_head_match(self):
+        self.assertEqual(self.why("SHIP IT now", "ship it — later"), "later")
+
+
+class TestGoalSessions(unittest.TestCase):
+    """`_goal_sessions` is the one place that knows the goal_completions entry shapes."""
+
+    LEGACY = ["completed", "blocked", "completed", "skipped"]
+    STRUCT = {"hit_rate": 66.7, "total_goals": 3, "statuses": ["completed", "completed", "partial"],
+              "planned_actions": ["a", "b", "c"], "types": ["exploit", "exploit", "explore"]}
+    GOALDICTS = {"hit_rate": 50, "total_goals": 2,
+                 "statuses": [{"goal": "G1", "status": "completed"}, {"goal": "G2", "status": "skipped"}]}
+
+    def _state(self):
+        return {"goal_completions": {
+            "2026-09-01T10:00:00Z": self.LEGACY,
+            "2026-10-01T10:00:00Z": self.STRUCT,
+            "2026-10-02T10:00:00Z": self.GOALDICTS,
+        }}
+
+    def test_empty_and_missing(self):
+        self.assertEqual(_mod._goal_sessions({}), [])
+        self.assertEqual(_mod._goal_sessions({"goal_completions": None}), [])
+
+    def test_oldest_first_regardless_of_insertion_order(self):
+        state = {"goal_completions": dict(reversed(list(self._state()["goal_completions"].items())))}
+        self.assertEqual([x["date"] for x in _mod._goal_sessions(state)],
+                         ["2026-09-01", "2026-10-01", "2026-10-02"])
+
+    def test_legacy_list_shape(self):
+        x = _mod._goal_sessions(self._state())[0]
+        self.assertEqual((x["shape"], x["total"], x["rate"]), ("list", 4, 50))
+        self.assertEqual(x["statuses"], self.LEGACY)
+        self.assertEqual((x["planned"], x["types"], x["stored_rate"], x["goals"]),
+                         ([], [], None, [None] * 4))
+        self.assertEqual(x["month"], "2026-09")
+
+    def test_struct_shape_keeps_the_fractional_stored_rate(self):
+        x = _mod._goal_sessions(self._state())[1]
+        self.assertEqual((x["shape"], x["total"], x["rate"], x["stored_rate"]), ("dict", 3, 66, 66.7))
+        self.assertEqual(x["types"], ["exploit", "exploit", "explore"])
+        self.assertEqual(x["planned"], ["a", "b", "c"])
+
+    def test_goal_status_dicts_split_into_parallel_lists(self):
+        x = _mod._goal_sessions(self._state())[2]
+        self.assertEqual(x["statuses"], ["completed", "skipped"])
+        self.assertEqual(x["goals"], ["G1", "G2"])
+
+    def test_unreadable_entries_are_zero_not_errors(self):
+        state = {"goal_completions": {"2026-10-01T00:00:00Z": None, "2026-10-02T00:00:00Z": [],
+                                      "2026-10-03T00:00:00Z": "junk", "2026-10-04T00:00:00Z": {}}}
+        rows = _mod._goal_sessions(state)
+        self.assertEqual([(x["shape"], x["empty"], x["total"], x["rate"]) for x in rows],
+                         [("other", True, 0, 0), ("list", True, 0, 0),
+                          ("other", False, 0, 0), ("dict", True, 0, 0)])
+
+    def test_non_numeric_hit_rate_does_not_crash(self):
+        x = _mod._goal_sessions({"goal_completions": {"2026-10-01": {"hit_rate": None, "total_goals": 2}}})[0]
+        self.assertEqual((x["rate"], x["stored_rate"]), (0, None))
+        self.assertIsNone(_mod._goal_sessions({"goal_completions": {"k": {"hit_rate": True}}})[0]["stored_rate"])
+
+    def test_exploration_ratio_survives_a_legacy_list_entry(self):
+        # Regression: v.get("types") raised AttributeError on a bare status list.
+        state = self._state()
+        state["goal_completions"]["2026-10-03T10:00:00Z"] = {
+            "statuses": ["completed"], "types": ["explore"]}
+        r = _mod._compute_exploration_ratio(state)
+        self.assertEqual((r["sessionsWithTypes"], r["explore"], r["total"]), (2, 2, 4))
+
+    def test_every_reader_handles_all_three_shapes_together(self):
+        state = self._state()
+        rate, dots = _mod._goal_stats(state)
+        self.assertEqual(rate, 50)
+        self.assertEqual([d["rate"] for d in dots], [50, 66, 50])
+        self.assertEqual(_mod._goal_by_month(state), {"2026-09": 50, "2026-10": 58})
+        self.assertEqual(_mod._suggested_goal_count(state)["count"], 3)  # (50+66.7+50)/3 = 55.6
+        self.assertEqual(_mod._goal_type_by_session(state), [
+            {"date": "2026-10-01", "exploit": 2, "explore": 1, "typed": True},
+            {"date": "2026-10-02", "exploit": 2, "explore": 0, "typed": False}])
+        b = _mod._goal_status_breakdown(state)
+        self.assertEqual((b["total"], b["sessions"]), (9, 3))
+        self.assertEqual(b["counts"]["completed"], 5)
+        self.assertEqual([g["goal"] for g in b["not_completed"]], ["G2", "c", None, None])
+
+
+class TestCodeReviews(unittest.TestCase):
+    """`code_reviews/*.md`: severity counts per review. The format is a prompt convention, so
+    each live shape is pinned here and a live-data guard fails when a new one appears."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+
+    def _review(self, name, text):
+        path = self.dir / name
+        path.write_text(text, encoding="utf-8")
+        return _mod._parse_code_review(path)
+
+    def test_tagged_bold_bullets_under_category_headings(self):
+        r = self._review("2026-10-30.md", (
+            "## Code Quality Review — x — 2026-10-30\n### Top Issues (ranked)\n"
+            "#### Duplication\n- **[MEDIUM] Seven readers repeat it** — `a.py:1`\n  Why it matters: x\n"
+            "#### Boundaries & Concerns\n- **[HIGH] Split across Python and JS** — `b.py:2`\n"
+            "- **[CRITICAL] Data loss** — `c.py:3`\n---\n### High-leverage skills\n- **`_thing`**: reuse\n"))
+        self.assertEqual(r["date"], "2026-10-30")
+        self.assertEqual(r["counts"], {"critical": 1, "high": 1, "medium": 1, "low": 0})
+        self.assertEqual(r["total"], 3)
+        self.assertEqual([(f["severity"], f["title"], f["category"]) for f in r["findings"]], [
+            ("medium", "Seven readers repeat it", "Duplication"),
+            ("high", "Split across Python and JS", "Boundaries & Concerns"),
+            ("critical", "Data loss", "Boundaries & Concerns")])
+
+    def test_plain_tagged_bullets_split_the_title_at_the_dash(self):
+        r = self._review("2026-10-12.md", (
+            "## Review\n- [HIGH] Egress list checked once — scripts/jev_resolve.py (main)\n"
+            "- [MEDIUM] Bearer key forwarded on redirects\nHarvestable: EgressPolicy\n"))
+        self.assertEqual(r["counts"]["high"], 1)
+        self.assertEqual([f["title"] for f in r["findings"]],
+                         ["Egress list checked once", "Bearer key forwarded on redirects"])
+        self.assertEqual({f["category"] for f in r["findings"]}, {None})
+
+    def test_severity_headings_with_untagged_bullets(self):
+        r = self._review("2026-10-17.md", (
+            "## Review\nNo [CRITICAL] findings.\n### [HIGH]\n- **Rollback is not atomic** — `x.py:1`\n"
+            "- **No failure test** — `y.py:2`\n### [MEDIUM]\n- Duplication: key lists repeat across files\n"
+            "### Harvestable\n- atomic-namespace-transaction\n"))
+        self.assertEqual(r["counts"], {"critical": 0, "high": 2, "medium": 1, "low": 0})
+        self.assertEqual(r["findings"][0]["title"], "Rollback is not atomic")
+        self.assertEqual(r["findings"][2]["title"], "Duplication: key lists repeat across files")
+
+    def test_severity_does_not_leak_past_its_heading(self):
+        r = self._review("d.md", "### [HIGH]\n- one\n### Notes\n- not a finding\n#### Cat\n- also not\n")
+        self.assertEqual(r["total"], 1)
+
+    def test_format_drift_is_zero_not_an_exception(self):
+        for text in ("", "Looks fine.\n", "1. [HIGH] numbered list\n", "- no tag here\n"):
+            self.assertEqual(self._review("2026-01-01.md", text)["total"], 0, text)
+
+    def test_title_is_capped(self):
+        r = self._review("d.md", "- **[LOW] " + "x" * 500 + "** — loc\n")
+        self.assertEqual(len(r["findings"][0]["title"]), 200)
+
+    def test_read_code_reviews_orders_by_name_and_tolerates_a_missing_dir(self):
+        problems = []
+        self.assertEqual(_mod._read_code_reviews(self.dir / "nope", problems), [])
+        (self.dir / "2026-09-01.md").write_text("- **[LOW] b**\n")
+        (self.dir / "2026-08-01.md").write_text("- **[HIGH] a**\n")
+        (self.dir / "notes.txt").write_text("- **[HIGH] ignored**\n")
+        reviews = _mod._read_code_reviews(self.dir, problems)
+        self.assertEqual([r["date"] for r in reviews], ["2026-08-01", "2026-09-01"])
+        self.assertEqual(problems, [])
+
+    def test_unreadable_file_is_a_data_problem_not_a_crash(self):
+        bad = self.dir / "2026-07-01.md"
+        bad.write_bytes(b"x")
+        bad.chmod(0)
+        self.addCleanup(bad.chmod, 0o600)
+        if os.access(bad, os.R_OK):
+            self.skipTest("running with permissions that ignore chmod 0")
+        problems = []
+        self.assertEqual(_mod._read_code_reviews(self.dir, problems), [])
+        self.assertEqual(len(problems), 1)
+        self.assertEqual(problems[0]["file"], "code_reviews/2026-07-01.md")
+
+    def test_summary(self):
+        self.assertIsNone(_mod._code_review_summary([]))
+        reviews = [{"date": f"2026-0{m}-01", "counts": {"critical": 0, "high": m, "medium": 0, "low": 0},
+                    "total": m, "findings": [{"severity": "high", "title": str(i), "category": None}
+                                             for i in range(m)]} for m in range(1, 10)]
+        reviews += [dict(reviews[0], date=f"2027-0{m}-01") for m in range(1, 6)]
+        summary = _mod._code_review_summary(reviews)
+        self.assertEqual(summary["count"], 14)
+        self.assertEqual(len(summary["reviews"]), 12)
+        self.assertEqual(summary["reviews"][-1]["date"], "2027-05-01")
+        self.assertEqual(summary["reviews"][0], {"date": reviews[2]["date"], "critical": 0, "high": 3,
+                                                 "medium": 0, "low": 0, "total": 3})
+        latest = _mod._code_review_summary([reviews[8]])["latest"]
+        self.assertEqual((latest["total"], len(latest["findings"])), (9, 9))
+        self.assertEqual(len(_mod._code_review_summary(
+            [dict(reviews[8], total=15, findings=reviews[8]["findings"] * 2)])["latest"]["findings"]), 10)
+
+    def test_every_live_review_parses_at_least_one_finding(self):
+        """Live-data guard: a review file that parses to nothing means the format drifted
+        (or the review was clean). Update the parser, not the test."""
+        loop = _mod.LOOP_DIR
+        files = sorted(loop.glob("*/code_reviews/*.md")) if loop.exists() else []
+        if not files:
+            self.skipTest("no live code_reviews")
+        empty = [str(f.relative_to(loop)) for f in files if _mod._parse_code_review(f)["total"] == 0
+                 and f.read_text(encoding="utf-8", errors="replace").strip()]
+        self.assertEqual(empty, [], "review files with no parsable findings")
 
 
 class TestCheckDreamDue(unittest.TestCase):
@@ -1202,13 +1466,13 @@ class TestCheckClaudeReviewDue(unittest.TestCase):
 
     def test_cadence_gate(self):
         self._write(100)
-        r = _mod._check_claude_review_due(self.ns_dir, {"sessions_since_claude_review": 15}, {}, str(self.repo))
+        r = _mod._check_claude_review_due(_mod._claude_md_files(self.ns_dir, str(self.repo)), {"sessions_since_claude_review": 15}, {})
         self.assertTrue(r["due"])
         self.assertFalse(r["pulled_forward_by_size"])
 
     def test_size_gate_pulls_forward(self):
         self._write(20_001)
-        r = _mod._check_claude_review_due(self.ns_dir, {"sessions_since_claude_review": 2}, {}, str(self.repo))
+        r = _mod._check_claude_review_due(_mod._claude_md_files(self.ns_dir, str(self.repo)), {"sessions_since_claude_review": 2}, {})
         self.assertTrue(r["due"])
         self.assertTrue(r["pulled_forward_by_size"])
         self.assertEqual(r["claude_md_bytes"], 20_001)
@@ -1218,7 +1482,7 @@ class TestCheckClaudeReviewDue(unittest.TestCase):
         nested = self.repo / "scripts"
         nested.mkdir()
         (nested / "CLAUDE.md").write_text("x" * 20_001)
-        r = _mod._check_claude_review_due(self.ns_dir, {"sessions_since_claude_review": 2}, {}, str(self.repo))
+        r = _mod._check_claude_review_due(_mod._claude_md_files(self.ns_dir, str(self.repo)), {"sessions_since_claude_review": 2}, {})
         self.assertTrue(r["pulled_forward_by_size"])
         self.assertEqual(r["claude_md_bytes"], 20_001)
         self.assertEqual(r["claude_md_files"], {"CLAUDE.md": 4_000, "scripts/CLAUDE.md": 20_001})
@@ -1231,24 +1495,24 @@ class TestCheckClaudeReviewDue(unittest.TestCase):
                           (".git/CLAUDE.md", 50_000), ("a/b/CLAUDE.md", 50_000)):
             (self.repo / rel).parent.mkdir(parents=True, exist_ok=True)
             (self.repo / rel).write_text("x" * size)
-        r = _mod._check_claude_review_due(self.ns_dir, {"sessions_since_claude_review": 2}, {}, str(self.repo))
+        r = _mod._check_claude_review_due(_mod._claude_md_files(self.ns_dir, str(self.repo)), {"sessions_since_claude_review": 2}, {})
         self.assertTrue(r["pulled_forward_by_size"])
         self.assertEqual(r["claude_md_files"],
                          {"CLAUDE.md": 4_000, "docs/claude/views.md": 20_001, "tests/CLAUDE.md": 300})
 
     def test_size_gate_waits_for_min_sessions(self):
         self._write(50_000)
-        r = _mod._check_claude_review_due(self.ns_dir, {"sessions_since_claude_review": 1}, {}, str(self.repo))
+        r = _mod._check_claude_review_due(_mod._claude_md_files(self.ns_dir, str(self.repo)), {"sessions_since_claude_review": 1}, {})
         self.assertFalse(r["due"])
 
     def test_size_budget_from_config(self):
         self._write(15_000)
         cfg = {"claude_md_size_budget_bytes": 10_000, "claude_review_size_min_sessions": 1}
-        r = _mod._check_claude_review_due(self.ns_dir, {"sessions_since_claude_review": 1}, cfg, str(self.repo))
+        r = _mod._check_claude_review_due(_mod._claude_md_files(self.ns_dir, str(self.repo)), {"sessions_since_claude_review": 1}, cfg)
         self.assertTrue(r["pulled_forward_by_size"])
 
     def test_no_claude_md_never_due(self):
-        r = _mod._check_claude_review_due(self.ns_dir, {"sessions_since_claude_review": 99}, {}, str(self.repo))
+        r = _mod._check_claude_review_due(_mod._claude_md_files(self.ns_dir, str(self.repo)), {"sessions_since_claude_review": 99}, {})
         self.assertFalse(r["due"])
 
     def test_repo_path_set_does_not_fall_back_to_skill_dir(self):
@@ -1257,9 +1521,9 @@ class TestCheckClaudeReviewDue(unittest.TestCase):
             skill_dir = self.repo / ".claude" / "skills" / "ns"
             skill_dir.mkdir(parents=True)
             (skill_dir / "CLAUDE.md").write_text("x")
-            r = _mod._check_claude_review_due(self.ns_dir, {"sessions_since_claude_review": 99}, {}, str(self.repo / "elsewhere"))
+            r = _mod._check_claude_review_due(_mod._claude_md_files(self.ns_dir, str(self.repo / "elsewhere")), {"sessions_since_claude_review": 99}, {})
             self.assertFalse(r["due"])
-            r = _mod._check_claude_review_due(self.ns_dir, {"sessions_since_claude_review": 99}, {}, "")
+            r = _mod._check_claude_review_due(_mod._claude_md_files(self.ns_dir, ""), {"sessions_since_claude_review": 99}, {})
             self.assertTrue(r["due"])
 
 
@@ -1547,12 +1811,12 @@ class TestReviewComplexitySignalErrors(unittest.TestCase):
         self.dir = Path(tmp.name)
 
     def test_no_repo_path_has_empty_errors(self):
-        sig = _mod._review_complexity_signal(self.dir, {}, {})
+        sig = _mod._review_complexity_signal([], {}, {})
         self.assertEqual(sig["errors"], {})
         self.assertFalse(sig["high"])
 
     def test_not_a_repo_names_both_probes(self):
-        sig = _mod._review_complexity_signal(self.dir, {"repo_path": str(self.dir)}, {})
+        sig = _mod._review_complexity_signal([], {"repo_path": str(self.dir)}, {})
         self.assertEqual(set(sig["errors"]), {"lines_changed", "new_files"})
         self.assertEqual(sig["score"], 0.0)
 
@@ -1563,7 +1827,7 @@ class TestReviewComplexitySignalErrors(unittest.TestCase):
         (self.dir / "f.txt").write_text("x\n")
         subprocess.run([*git, "add", "f.txt"], check=True)
         subprocess.run([*git, "commit", "-qm", "init"], check=True)
-        sig = _mod._review_complexity_signal(self.dir, {"repo_path": str(self.dir)}, {})
+        sig = _mod._review_complexity_signal([], {"repo_path": str(self.dir)}, {})
         self.assertEqual(sig["errors"], {})
 
 

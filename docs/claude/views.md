@@ -60,7 +60,7 @@ says `snapshot as of HH:MM (N min ago)` and turns amber from 10 min, so it never
 no files (inputs come from `_read_namespace_files()`); its only I/O is `_pulse_git()`.
 `pulse.git.errors` is dashboard-only; parity compares core's keys only. Spec:
 `docs/superpowers/specs/2026-10-12-live-strip-design.md` (all 4 steps shipped). `generate_fixture.py` injects a synthetic `pulse` per namespace.
-`--watch [s]` writes atomically; page state lives in `location.hash` (namespace by name).
+`--watch [s]` writes atomically and only when the content hash changed (`watchTick()` polls the `.rev.js` sidecar); page state lives in `location.hash` (namespace by name).
 `restoreUiHash()` must run last in the IIFE: it renders the detail panel (TDZ otherwise).
 
 **Tasks sub-tab** (`deriveTasks(ns)`, pure JS over `ns.reality`) — reads `## What is next`,

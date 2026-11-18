@@ -50,6 +50,7 @@ function becomes undefined (`ReferenceError: switchView is not defined`). Run
 | `[[CARDS]]` | namespace card HTML |
 | `[[GENERATED_AT]]` | generation timestamp |
 | `[[N_NS]]`, `[[N_OPEN]]`, `[[N_LEARNINGS]]`, `[[N_SESSIONS]]` | header stats |
+| `[[WATCH_SECONDS]]`, `[[PAGE_REV]]`, `[[REV_FILE]]` | `--watch` only (else `null`): interval, content hash baked at generation, sidecar file name |
 
 ---
 
@@ -86,7 +87,7 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
 | `goalByMonth` | state.json `goal_completions` | `{YYYY-MM: avg_rate}` via `_goal_by_month()` |
 | `explorationRatio` | state.json `goal_completions` | `{ratio, sessionsWithTypes, explore, total, low}`; `null` below 2 typed sessions |
 | `goalTypeBySession` | state.json `goal_completions` | `[{date, exploit, explore, typed}]` chronological; untyped sessions count as all exploit, so read `typed` |
-| `goalStatusBreakdown` | state.json `goal_completions` + all history files | `{counts, total, sessions, not_completed[≤10]}`, counts sum to total (`other`); goal text and `## Incomplete` reason joined via the history file's `**Opened:**` = the completions key; `null` with no completions |
+| `goalStatusBreakdown` | state.json `goal_completions` + all history files | `{counts, total, sessions, not_completed[≤10]}`, counts sum to total (`other`); goal text and `## Incomplete` reason joined via the history file's `**Opened:**` = the completions key; each `not_completed` item is `{date, status, goal, reason, why}`, `why` = the reason minus the restated goal (`_incomplete_why`, Python only; JS just escapes it, `null` = show nothing); `null` with no completions |
 | `cadenceLastRun` | state.json `last_*_at` | `{dream, code_review, research, skill_opt, claude_review: {at, ago}}`; `skill_opt` falls back to legacy `last_skillopt_at`; `ago` is `"never"` when unset |
 | `cooldownViolationSummary` | `cooldown_violations.jsonl` | `{count, rate, recent[≤5]}`, rate per recorded session; `null` with no violations |
 | `dataProblems` | read-phase `_read_json`/`_read_jsonl` | `[{file, issue}]`, one per corrupt file; `[]` when clean |
@@ -96,17 +97,24 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
 | `zoneDistribution` | active `learnings[]` | P56 `{golden, warning, preference, unclassified}`; top-level, not under `corpusHealth` |
 | `confidenceCalibration` | learnings.jsonl (**unfiltered**) | P59; `null` below 8 resolved hypotheses |
 | `failureDimensionDistribution` | `skill_feedback.jsonl` | P69; dashboard-only aggregation |
+| `codeReviews` | `code_reviews/*.md` | `{count, reviews[≤12: {date, critical, high, medium, low, total}], latest: {date, total, findings[≤10: {severity, title, category}]}}`; `null` with none. Parsed by `_parse_code_review` in the read phase (`raw["code_reviews"]`); the format is a prompt convention with three live shapes, so `TestCodeReviews` pins each and a live-data guard fails on a file that parses to nothing |
 
 `history` is capped at 5 for rendering. `sessionDates` is the full set.
 
 **Rules:**
-- **`goal_completions` values are structs** `{hit_rate, total_goals, statuses, ...}` — read
-  `entry["hit_rate"]`, don't iterate as a list.
+- **Read `goal_completions` only through `_goal_sessions(state)`.** Entries come in three vintages
+  (bare status list, `{statuses: [str]}`, `{statuses: [{goal, status}]}`); it returns one normalised
+  dict per session, oldest first (`shape`, `statuses`, `goals`, `planned`, `types`, `total`, `rate`,
+  `stored_rate`). Never call `.get()` on a raw entry: a legacy list has no `.get`.
 - **Learning fields (P31+):** `learning_id` (may be absent on old entries), `tags` (canonical via
   taxonomy.json), `superseded_by`/`superseded_by_id`, `zone`, `status`.
 - **Active-learnings filter:** `not l.get("superseded_by") and l.get("status") not in
   ("archived", "superseded")`. Calibration-style stats that count *resolved* data points use the
   unfiltered list instead, matching compass core.
+- **`cycleHistory` / `qualityHistory` are core's last-10 windows**, while `sessionCount` counts every
+  history file. Any chart on them must say so with `windowLabel(shown, ns.sessionCount)` ("last N of M
+  sessions"). Only 205 of 334 history files carry a duration and the quality score is core's, so the
+  full series cannot be rebuilt from files.
 - **Null means below threshold.** Gated stats (`outcomeRate`,
   `confidenceCalibration`, `corpusHealth`) return `None`/`null` below their gate, and a pending
   per-item rate is `None`, not `0.0`. Render "not enough data yet", never zero.
@@ -141,6 +149,15 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
   `_read_namespace_files()`. Every consumer (top-5 `history`, carry-forward, `history_by_opened`,
   goal outcomes, backlog match) reads that list; never glob `history/` again. Sections the parser
   does not model land in `other_sections`, so add a branch when core grows one.
+- **`_assemble_namespace_dict` reads nothing of its own namespace.** Learnings, decisions and the
+  `_claude_md_files()` map come from `raw`; `_load_watch_signals(learnings, ...)`,
+  `_check_code_review_due(decisions, ...)` and `_check_claude_review_due(files, ...)` take them as
+  arguments. Remaining I/O: watched *other* namespaces, and the git probes.
+- **`--watch` rewrites only on a content change.** `_content_rev()` hashes `_js_data()` minus the
+  clock-only keys (`_REV_VOLATILE_KEYS`, pulse `elapsed_seconds`/`generated_at`); add any new
+  time-derived NS field there or every pass will look changed. Unchanged rev: no page or sidecar
+  write. The page polls `<page>.rev.js` (`window.__DASH_REV`, a script tag because `fetch` cannot
+  read `file://`) and reloads only when it differs from the baked `PAGE_REV`.
 - **Every git call goes through `_git(repo, *args, timeout)`**, which returns `(stdout, None)` or
   `(None, reason)`. Callers record the reason in an `errors` map (`pulse.git`,
   `complexity_signal`), so a failed probe never reads as "nothing to report".

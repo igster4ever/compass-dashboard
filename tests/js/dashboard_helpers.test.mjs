@@ -58,8 +58,8 @@ function extractConst(name) {
   return html.slice(start, i + 1);
 }
 
-const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'globalVisibleNames', 'visibleNS', 'renderCompare', 'deriveTasks', 'renderDecisions', 'detailTabs', 'decisionsTabLabel', 'ladderLevel', 'renderStateSection_GoalStatuses', 'goalStatusHeadline', '_complexityProbeErrors', 'renderStateSection_DataProblems', 'renderStateSection_BacklogMatch', 'backlogMatchHeadline', '_cadenceLastRun', '_cooldownOverrides'];
-const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES', 'NS_PALETTE', 'COMPARE_AXIS_DEFS', 'GLOBAL_NS_KEY', 'ZONE_SHIP_DATE', 'LADDER', 'CADENCE_LAST_RUN_LABELS'];
+const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'globalVisibleNames', 'visibleNS', 'renderCompare', 'deriveTasks', 'renderDecisions', 'detailTabs', 'decisionsTabLabel', 'ladderLevel', 'renderStateSection_GoalStatuses', 'goalStatusHeadline', '_complexityProbeErrors', 'renderStateSection_DataProblems', 'renderStateSection_BacklogMatch', 'backlogMatchHeadline', '_cadenceLastRun', '_cooldownOverrides', 'windowLabel', 'renderStateSection_CycleSparkline', 'codeReviewHeadline', 'renderStateSection_CodeReviews'];
+const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES', 'NS_PALETTE', 'COMPARE_AXIS_DEFS', 'GLOBAL_NS_KEY', 'ZONE_SHIP_DATE', 'LADDER', 'CADENCE_LAST_RUN_LABELS', 'CODE_REVIEW_SEVERITIES'];
 // A minimal in-memory localStorage — radarActiveAxes() reads it; no test here
 // relies on cross-call persistence, so a single shared instance is fine.
 const localStorageShim = `
@@ -485,9 +485,9 @@ const gsb = {
   counts: { completed: 8, partial: 0, skipped: 1, blocked: 0, abandoned: 1, other: 0 },
   total: 10, sessions: 3,
   not_completed: [
-    { date: '2026-10-02', status: 'abandoned', goal: 'Ship <b>it</b>', reason: 'Ship <b>it</b> — waiting on <API>' },
-    { date: '2026-10-01', status: 'skipped', goal: null, reason: null },
-    { date: '2026-09-30', status: 'blocked', goal: 'Other goal', reason: 'Reworded entirely' },
+    { date: '2026-10-02', status: 'abandoned', goal: 'Ship <b>it</b>', reason: 'Ship <b>it</b> — waiting on <API>', why: 'waiting on <API>' },
+    { date: '2026-10-01', status: 'skipped', goal: null, reason: null, why: null },
+    { date: '2026-09-30', status: 'blocked', goal: 'Other goal', reason: 'Reworded entirely', why: 'Reworded entirely' },
   ],
 };
 
@@ -504,17 +504,16 @@ test('renderStateSection_GoalStatuses(): shows each non-zero status and the rece
   assert.doesNotMatch(html, /0 blocked/);
   assert.match(html, /Ship &lt;b&gt;it&lt;\/b&gt;/);
   assert.match(html, /goal text not recorded/);
-  // The restated goal is stripped from the reason; a reworded reason is shown whole.
+  // The why is computed in Python (_incomplete_why, tested in test_data_loading.py); JS only
+  // escapes and renders it, and renders nothing when it is null.
   assert.match(html, /<div class="gs-why">waiting on &lt;API&gt;<\/div>/);
   assert.match(html, /<div class="gs-why">Reworded entirely<\/div>/);
-  // A shortened restatement before the dash still counts as the goal.
-  const short = helpers.renderStateSection_GoalStatuses({ goalStatusBreakdown: { ...gsb, not_completed: [
-    { date: '2026-09-29', status: 'abandoned', goal: 'Bulk-delete UI — panel for deleting articles', reason: 'Bulk-delete UI — deferred by agreement' },
-    { date: '2026-09-28', status: 'abandoned', goal: 'Exact goal', reason: 'Exact goal' },
-    { date: '2026-09-27', status: 'skipped', goal: 'Session H — Freshness strip', reason: 'Freshness strip' },
+  assert.equal((html.match(/gs-why/g) || []).length, 2, 'no why block for the goal with no reason');
+  // JS no longer derives the why from `reason`: a missing `why` shows nothing even with a reason.
+  const noWhy = helpers.renderStateSection_GoalStatuses({ goalStatusBreakdown: { ...gsb, not_completed: [
+    { date: '2026-09-29', status: 'abandoned', goal: 'Bulk-delete UI', reason: 'Bulk-delete UI — deferred' },
   ] } });
-  assert.match(short, /<div class="gs-why">deferred by agreement<\/div>/);
-  assert.equal((short.match(/gs-why/g) || []).length, 1);
+  assert.doesNotMatch(noWhy, /gs-why/);
 });
 
 test('goalStatusHeadline(): counts goals that did not complete', () => {
@@ -577,4 +576,68 @@ test('_cooldownOverrides(): count, rate and escaped reasons; empty without viola
   assert.match(html, /4 cooldown overrides \(10% of sessions\)/);
   assert.match(html, /2026-09-14<\/span> retro &lt;now&gt;/);
   assert.match(helpers._cooldownOverrides({ cooldownViolationSummary: { count: 1, rate: null, recent: [] } }), /1 cooldown override<\/summary>/);
+});
+
+// ── Capped series are labelled (data-model audit Rank 4) ──
+
+test('windowLabel(): names the window only when the series is shorter than the session count', () => {
+  assert.equal(helpers.windowLabel(10, 83), 'last 10 of 83 sessions');
+  assert.equal(helpers.windowLabel(6, 6), '');
+  assert.equal(helpers.windowLabel(5, 3), '', 'never claims a window larger than the whole');
+  assert.equal(helpers.windowLabel(1, undefined), '', 'unknown total says nothing');
+});
+
+test('renderStateSection_CycleSparkline(): says "last N of M sessions" when core kept only a window', () => {
+  const cycle = Array.from({ length: 10 }, (_, i) => ({ opened_at: `2026-10-${10 + i}T08:00:00Z`, minutes: 20 + i }));
+  const capped = helpers.renderStateSection_CycleSparkline({ cycleHistory: cycle, lastCycleMinutes: 29, sessionCount: 83 });
+  assert.match(capped, /last 10 of 83 sessions/);
+  assert.doesNotMatch(capped, /sessions tracked/);
+  const whole = helpers.renderStateSection_CycleSparkline({ cycleHistory: cycle.slice(0, 3), lastCycleMinutes: 22, sessionCount: 3 });
+  assert.match(whole, /3 sessions tracked/);
+  assert.doesNotMatch(whole, /last 3 of/);
+});
+
+// ── Code reviews (data-model audit Rank 7) ──
+
+const codeReviews = {
+  count: 3,
+  reviews: [
+    { date: '2026-07-01', critical: 0, high: 1, medium: 2, low: 1, total: 4 },
+    { date: '2026-08-01', critical: 1, high: 0, medium: 0, low: 0, total: 1 },
+    { date: '2026-09-01', critical: 0, high: 2, medium: 1, low: 0, total: 3 },
+  ],
+  latest: { date: '2026-09-01', total: 5, findings: [
+    { severity: 'high', title: 'Split <b>across</b> layers', category: 'Boundaries & Concerns' },
+    { severity: 'medium', title: 'No category here', category: null },
+  ] },
+};
+
+test('codeReviewHeadline(): review count and the latest severity counts, empty without reviews', () => {
+  assert.equal(helpers.codeReviewHeadline({ codeReviews }), '3 reviews, latest 2 HIGH, 1 MEDIUM');
+  assert.equal(helpers.codeReviewHeadline({ codeReviews: { count: 1, reviews: [
+    { date: 'd', critical: 0, high: 0, medium: 0, low: 0, total: 0 }] } }), '1 review, latest no findings parsed');
+  assert.equal(helpers.codeReviewHeadline({}), '');
+  assert.equal(helpers.codeReviewHeadline({ codeReviews: null }), '');
+});
+
+test('renderStateSection_CodeReviews(): one stacked column per review, latest findings escaped', () => {
+  const html = helpers.renderStateSection_CodeReviews({ codeReviews });
+  assert.equal((html.match(/class="cr-col"/g) || []).length, 3);
+  assert.match(html, /title="2026-07-01: 0 critical, 1 high, 2 medium, 1 low"/);
+  assert.match(html, /Split &lt;b&gt;across&lt;\/b&gt; layers/);
+  assert.doesNotMatch(html, /<b>across/);
+  assert.match(html, /Boundaries &amp; Concerns/);
+  assert.match(html, /Latest review — 2026-09-01/);
+  assert.match(html, /… and 3 more/, 'the total exceeds the findings carried, so it says so');
+  assert.doesNotMatch(html, /last \d+ of/, 'no window label when every review is shown');
+});
+
+test('renderStateSection_CodeReviews(): labels a capped window; says so when the latest parsed nothing', () => {
+  const capped = helpers.renderStateSection_CodeReviews({ codeReviews: { ...codeReviews, count: 20 } });
+  assert.match(capped, /last 3 of 20/);
+  const none = helpers.renderStateSection_CodeReviews({ codeReviews: {
+    count: 1, reviews: [{ date: '2026-09-01', critical: 0, high: 0, medium: 0, low: 0, total: 0 }],
+    latest: { date: '2026-09-01', total: 0, findings: [] } } });
+  assert.match(none, /Latest review parsed no findings/);
+  assert.equal(helpers.renderStateSection_CodeReviews({}), '');
 });

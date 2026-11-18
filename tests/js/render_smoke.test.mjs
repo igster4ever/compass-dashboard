@@ -35,12 +35,14 @@ function extractScriptBody() {
   return html.slice(start, end);
 }
 
-function buildScriptSource({ watchSeconds = null } = {}) {
+function buildScriptSource({ watchSeconds = null, pageRev = null, revFile = null } = {}) {
   let src = extractScriptBody();
   src = src.replace('[[NS_DATA]]', JSON.stringify(fixture.NS));
   src = src.replace('[[BLOCKING_EDGES]]', JSON.stringify(fixture.BLOCKING_EDGES));
   src = src.replace('[[WATCH_SECONDS]]', JSON.stringify(watchSeconds));
-  for (const marker of ['[[NS_DATA]]', '[[BLOCKING_EDGES]]', '[[WATCH_SECONDS]]']) {
+  src = src.replace('[[PAGE_REV]]', JSON.stringify(pageRev));
+  src = src.replace('[[REV_FILE]]', JSON.stringify(revFile));
+  for (const marker of ['[[NS_DATA]]', '[[BLOCKING_EDGES]]', '[[WATCH_SECONDS]]', '[[PAGE_REV]]', '[[REV_FILE]]']) {
     if (src.includes(marker)) throw new Error(`unresolved ${marker} left in script — fixture keys out of sync?`);
   }
   return src;
@@ -111,11 +113,12 @@ function makeDocumentStub() {
     removeEventListener() {},
     body: new FakeElement('body'),
     documentElement: new FakeElement('html'),
+    head: new FakeElement('head'),
   };
 }
 
-function runScriptInSandbox({ watchSeconds = null, globals = {} } = {}) {
-  const src = buildScriptSource({ watchSeconds });
+function runScriptInSandbox({ watchSeconds = null, pageRev = null, revFile = null, globals = {} } = {}) {
+  const src = buildScriptSource({ watchSeconds, pageRev, revFile });
   const sandbox = {};
   sandbox.window = sandbox; // `window.foo = ...` and bare `foo` resolve to the same object
   sandbox.document = makeDocumentStub();
@@ -249,6 +252,23 @@ test('heatmap quality panel (component breakdown) renders without throwing', () 
   const sandbox = runScriptInSandbox();
   sandbox.window.switchView('heatmap');
   assert.doesNotThrow(() => sandbox.window.switchHeatmap('quality'), "switchHeatmap('quality') threw");
+});
+
+test('heatmap quality panel labels a capped window, and says nothing when the series is whole', () => {
+  const panelHtml = (sessionCount) => {
+    const saved = fixture.NS.map(n => n.sessionCount);
+    fixture.NS.forEach(n => { n.sessionCount = sessionCount; });
+    try {
+      const sandbox = runScriptInSandbox();
+      sandbox.window.switchView('heatmap');
+      sandbox.window.switchHeatmap('quality');
+      return sandbox.document.getElementById('hpanel-quality').innerHTML;
+    } finally {
+      fixture.NS.forEach((n, i) => { n.sessionCount = saved[i]; });
+    }
+  };
+  assert.match(panelHtml(30), /last 3 of 30 sessions/);
+  assert.doesNotMatch(panelHtml(3), /last 3 of/);
 });
 
 test('radarToggleAxis() starting from defaults adds a new axis to the persisted set', () => {
@@ -414,12 +434,49 @@ test('without --watch the page registers no reload timer and says nothing about 
   assert.doesNotMatch(sandbox.document.getElementById('live-strip').innerHTML, /refreshes every/);
 });
 
-test('with --watch the page reloads once an interval old, saving scroll, unless search is open', () => {
+function watchSandbox({ pageRev = 'rev-a' } = {}) {
   const nav = fakeNav();
-  const sandbox = runScriptInSandbox({ watchSeconds: 1e-9, globals: nav.globals });
-  assert.match(sandbox.document.getElementById('live-strip').innerHTML, /refreshes every 1e-9 s/);
+  const sandbox = runScriptInSandbox({
+    watchSeconds: 1e-9, pageRev, revFile: 'dash.html.rev.js', globals: nav.globals,
+  });
   const watch = nav.intervals.find(i => i.ms === 5000);
   assert.ok(watch, 'watch timer registered');
+  const scripts = () => sandbox.document.head._children;
+  // Simulate the browser finishing the sidecar load: it sets window.__DASH_REV, then onload fires.
+  const loadRev = (rev) => {
+    const el = scripts().at(-1);
+    sandbox.window.__DASH_REV = rev;
+    el.onload();
+  };
+  // One watch interval has elapsed: the 1e-9 s interval needs the clock to have moved on.
+  const tick = () => { const t = Date.now(); while (Date.now() === t) { /* wait out the ms */ } watch.cb(); };
+  return { nav, sandbox, watch: { cb: tick }, scripts, loadRev };
+}
+
+test('with --watch the page says it refreshes and polls the rev sidecar, not the page', () => {
+  const { nav, sandbox, watch, scripts } = watchSandbox();
+  assert.match(sandbox.document.getElementById('live-strip').innerHTML, /refreshes every 1e-9 s/);
+  watch.cb();
+  assert.equal(scripts().length, 1);
+  assert.match(scripts()[0].src, /^dash\.html\.rev\.js\?t=\d+$/);
+  assert.equal(nav.reloads, 0, 'polling alone never reloads');
+  watch.cb();
+  assert.equal(scripts().length, 1, 'no second request while the first is in flight');
+});
+
+test('with --watch an unchanged rev never reloads and the next interval polls again', () => {
+  const { nav, watch, scripts, loadRev } = watchSandbox({ pageRev: 'rev-a' });
+  watch.cb();
+  loadRev('rev-a');
+  watch.cb();
+  assert.equal(nav.reloads, 0);
+  assert.equal(scripts().length, 2, 'polled again once the first request finished');
+});
+
+test('with --watch a changed rev reloads, saving scroll, unless search is open', () => {
+  const { nav, sandbox, watch, loadRev } = watchSandbox({ pageRev: 'rev-a' });
+  watch.cb();
+  loadRev('rev-b');
 
   sandbox.document.getElementById('search-modal').style.display = '';
   watch.cb();
@@ -429,6 +486,15 @@ test('with --watch the page reloads once an interval old, saving scroll, unless 
   sandbox.window.selectCard(0);
   sandbox.scrollY = 300;
   watch.cb();
-  assert.equal(nav.reloads, 1);
+  assert.equal(nav.reloads, 1, 'the pending change is applied on the next tick');
   assert.equal(nav.location.hash, `#ns=${encodeURIComponent(fixture.NS[0].namespace)}&y=300`);
+});
+
+test('a failed sidecar load (missing file) is not a change and polling resumes', () => {
+  const { nav, watch, scripts } = watchSandbox();
+  watch.cb();
+  scripts().at(-1).onerror();
+  watch.cb();
+  assert.equal(nav.reloads, 0);
+  assert.equal(scripts().length, 2);
 });

@@ -807,6 +807,10 @@
     .gs-status { font-weight: 600; margin-right: .3rem; }
     .gs-date   { color: var(--subtle); font-size: .68rem; margin-right: .3rem; }
     .gs-why    { color: var(--muted); font-size: .7rem; margin: .1rem 0 0 5.6rem; }
+    .cr-trend  { display: flex; align-items: flex-end; gap: 6px; margin: .4rem 0 .2rem; }
+    .cr-col    { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+    .cr-stack  { width: 14px; display: flex; flex-direction: column-reverse; border-radius: 2px; overflow: hidden; }
+    .cr-date   { font-size: .6rem; color: var(--muted); }
 
     /* ── Radar chart ── */
     .radar-wrap { padding: .25rem 0; }
@@ -962,6 +966,8 @@
 const NS = [[NS_DATA]];
 const BLOCKING_EDGES = [[BLOCKING_EDGES]];
 const WATCH_SECONDS = [[WATCH_SECONDS]]; // null unless generated with --watch
+const PAGE_REV = [[PAGE_REV]];           // content hash baked at generation (--watch only)
+const REV_FILE = [[REV_FILE]];           // sidecar the page polls for the current rev (--watch only)
 const Search = { selected: -1, index: null, activeFilter: 'all', focusIdx: -1, flatResults: [] };
 // Page state mirrored into location.hash (see restoreUiHash)
 const _ui = { view: 'overview', tab: 'state' };
@@ -1392,14 +1398,8 @@ function renderStateSection_GoalStatuses(ns) {
     const goal = g.goal
       ? esc(g.goal.length > 110 ? g.goal.slice(0, 110) + '…' : g.goal)
       : '<span style="color:var(--subtle);font-style:italic">goal text not recorded</span>';
-    // The history `## Incomplete` bullet usually restates the goal (often shortened), then says
-    // why after a dash: show only the why when the restated head is a prefix of the goal.
-    const r = g.reason || '';
-    const cut = r.search(/\s[—–-]\s/);
-    const head = (cut > 0 ? r.slice(0, cut) : r).trim().toLowerCase();
-    const why = g.goal && g.goal.toLowerCase().includes(r.toLowerCase()) ? ''
-      : g.goal && head && g.goal.toLowerCase().startsWith(head)
-        ? (cut > 0 ? r.slice(cut).replace(/^[\s—–:-]+/, '') : '') : r;
+    // `why` is computed in Python (_incomplete_why): the Incomplete bullet minus the restated goal.
+    const why = g.why || '';
     return `<li><span class="gs-date">${esc(g.date)}</span> <span class="gs-status" style="color:${COLOURS[g.status] || 'var(--subtle)'}">${esc(g.status)}</span> ${goal}${why ? `<div class="gs-why">${esc(why)}</div>` : ''}</li>`;
   }).join('');
   return `<div class="md-section"><h3>Goal statuses<span style="color:var(--muted);font-size:.72rem;font-weight:normal"> — ${b.total} goals over ${b.sessions} sessions</span></h3>
@@ -1483,6 +1483,12 @@ function renderStateSection_WatchFeed(ns) {
   return `<div class="md-section"><h3>📡 Watching (${ws.total_signals})</h3>${bootNote}${groups}</div>`;
 }
 
+// Compass core keeps only the last 10 cycle and quality entries per namespace, while the header
+// counts every session. Say so rather than let a 10-point chart pass as the whole history.
+function windowLabel(shown, total) {
+  return total > shown ? `last ${shown} of ${total} sessions` : '';
+}
+
 function renderStateSection_CycleSparkline(ns) {
   if (!ns.cycleHistory || ns.cycleHistory.length === 0) return '';
   const maxMins = Math.max(...ns.cycleHistory.map(s => s.minutes), 1);
@@ -1506,7 +1512,7 @@ function renderStateSection_CycleSparkline(ns) {
   const sparkHeight = hasCmds ? '50px' : '36px';
   return `<div class="md-section"><h3>Session cycle time</h3>
     <div style="display:flex;align-items:flex-end;gap:3px;height:${sparkHeight};margin:.4rem 0 .3rem">${bars}</div>
-    <div style="font-size:.72rem;color:var(--muted)">Last: <strong style="color:var(--text)">${esc(lastLabel)}</strong> \u00b7 ${ns.cycleHistory.length} session${ns.cycleHistory.length !== 1 ? 's' : ''} tracked${cmdLabel}${hasCmds ? ' \u00b7 cmd count shown below bars' : ''}</div>
+    <div style="font-size:.72rem;color:var(--muted)">Last: <strong style="color:var(--text)">${esc(lastLabel)}</strong> \u00b7 ${esc(windowLabel(ns.cycleHistory.length, ns.sessionCount) || `${ns.cycleHistory.length} session${ns.cycleHistory.length !== 1 ? 's' : ''} tracked`)}${cmdLabel}${hasCmds ? ' \u00b7 cmd count shown below bars' : ''}</div>
   </div>`;
 }
 
@@ -1719,6 +1725,44 @@ function stateGroup(title, headline, bodyHtml, opts) {
   </details>`;
 }
 
+// `code_reviews/*.md` severity counts per review (Python parses them; format drift shows as 0).
+const CODE_REVIEW_SEVERITIES = [
+  ['critical', 'var(--red)'], ['high', 'var(--amber)'], ['medium', 'var(--blue)'], ['low', 'var(--subtle)'],
+];
+
+function codeReviewHeadline(ns) {
+  const c = ns.codeReviews;
+  if (!c || !c.reviews || !c.reviews.length) return '';
+  const last = c.reviews[c.reviews.length - 1];
+  const parts = CODE_REVIEW_SEVERITIES.filter(([k]) => last[k] > 0).map(([k]) => `${last[k]} ${k.toUpperCase()}`);
+  return `${c.count} review${c.count !== 1 ? 's' : ''}, latest ${parts.length ? parts.join(', ') : 'no findings parsed'}`;
+}
+
+function renderStateSection_CodeReviews(ns) {
+  const c = ns.codeReviews;
+  if (!c || !c.reviews || !c.reviews.length) return '';
+  const max = Math.max(...c.reviews.map(r => r.total), 1);
+  const cols = c.reviews.map(r => {
+    const segs = CODE_REVIEW_SEVERITIES.filter(([k]) => r[k] > 0).map(([k, col]) =>
+      `<div class="cr-seg" style="height:${Math.max(2, Math.round(r[k] / max * 48))}px;background:${col}"></div>`).join('');
+    const tip = CODE_REVIEW_SEVERITIES.map(([k]) => `${r[k]} ${k}`).join(', ');
+    return `<div class="cr-col" title="${esc(`${r.date}: ${tip}`)}"><div class="cr-stack">${segs}</div><span class="cr-date">${esc(String(r.date).slice(5))}</span></div>`;
+  }).join('');
+  const legend = CODE_REVIEW_SEVERITIES.map(([k, col]) =>
+    `<span class="gs-key"><span class="gs-dot" style="background:${col}"></span>${k}</span>`).join('');
+  const shown = c.reviews.length < c.count ? ` — last ${c.reviews.length} of ${c.count}` : '';
+  const colour = Object.fromEntries(CODE_REVIEW_SEVERITIES);
+  const items = ((c.latest && c.latest.findings) || []).map(f =>
+    `<li><span class="gs-status" style="color:${colour[f.severity] || 'var(--subtle)'}">${esc(String(f.severity).toUpperCase())}</span>${f.category ? `<span class="gs-date">${esc(f.category)}</span>` : ''} ${esc(f.title)}</li>`).join('');
+  const more = c.latest && c.latest.total > ((c.latest.findings || []).length)
+    ? `<li class="gs-date">… and ${c.latest.total - c.latest.findings.length} more</li>` : '';
+  return `<div class="md-section"><h3>Code reviews<span style="color:var(--muted);font-size:.72rem;font-weight:normal">${esc(shown)}</span></h3>
+    <div class="cr-trend">${cols}</div>
+    <div class="gs-legend">${legend}</div>
+    ${c.latest && c.latest.total ? `<div class="gs-sub">Latest review — ${esc(c.latest.date)}</div><ul class="gs-list">${items}${more}</ul>` : '<div class="gs-sub">Latest review parsed no findings</div>'}
+  </div>`;
+}
+
 function renderState(ns) {
   const snapshot = [
     renderStateSection_Intent(ns),
@@ -1784,10 +1828,12 @@ function renderState(ns) {
     renderStateSection_IntentHistory(ns)
   );
 
+  const codeReviews = stateGroup('Code reviews', codeReviewHeadline(ns), renderStateSection_CodeReviews(ns));
+
   const healthStripHtml = healthStrip ? `<div class="state-health-strip">${healthStrip}</div>` : '';
   return `<div class="state-snapshot">${snapshot}</div>` +
     healthStripHtml +
-    reality + decisionsBacklog + goalTracking + crossNamespace + feedback + intentHistory;
+    reality + decisionsBacklog + goalTracking + codeReviews + crossNamespace + feedback + intentHistory;
 }
 
 function renderZoneDistribution(ns, tableId, nsId) {
@@ -2909,17 +2955,33 @@ function restoreUiHash() {
   saveUiHash(); // rewrites without `y` (and without an unknown namespace)
 }
 
-// Reload once the page is a full interval old, unless the viewer is mid-search or typing.
-function watchTick(nowMs) {
-  if (!WATCH_SECONDS) return false;
-  if (nowMs == null) nowMs = Date.now();
-  if ((nowMs - PAGE_LOADED_AT) / 1000 < WATCH_SECONDS) return false;
+// --watch: every WATCH_SECONDS load the sidecar (`window.__DASH_REV = "..."`, via a script tag
+// because fetch() cannot read file://) and reload only when its rev differs from the baked
+// PAGE_REV. Never reload mid-search or mid-typing; a pending change retries on the next tick.
+let _revPolledAt = PAGE_LOADED_AT;
+let _revPolling = false;
+function watchReloadIfIdle() {
   if (document.getElementById('search-modal')?.style.display !== 'none') return false;
   const tag = (document.activeElement && document.activeElement.tagName) || '';
   if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return false;
   saveUiHash({ withScroll: true });
   window.location.reload();
   return true;
+}
+function watchTick(nowMs) {
+  if (!WATCH_SECONDS || !REV_FILE) return false;
+  if (nowMs == null) nowMs = Date.now();
+  if (window.__DASH_REV && window.__DASH_REV !== PAGE_REV) return watchReloadIfIdle();
+  if (_revPolling || (nowMs - _revPolledAt) / 1000 < WATCH_SECONDS) return false;
+  _revPolledAt = nowMs;
+  _revPolling = true;
+  const el = document.createElement('script');
+  const done = () => { _revPolling = false; if (el.remove) el.remove(); };
+  el.onload = done;
+  el.onerror = done;
+  el.src = `${REV_FILE}?t=${nowMs}`;
+  document.head.appendChild(el);
+  return false;
 }
 
 initAttentionQueue();
@@ -4360,6 +4422,7 @@ function _renderQualityScoreSparklines() {
       </svg>
       <div style="width:2.8rem;font-size:.78rem;color:var(--text);text-align:right">${Math.round(latest * 100)}%</div>
       <div style="font-size:.72rem;color:${trendCol};width:1rem">${trendIcon}</div>
+      ${windowLabel(hist.length, ns.sessionCount) ? `<div style="font-size:.66rem;color:var(--muted);white-space:nowrap">${esc(windowLabel(hist.length, ns.sessionCount))}</div>` : ''}
       ${weakest ? `<div style="font-size:.68rem;color:var(--muted)">↓ ${esc(weakest.replace(/_/g, ' '))}</div>` : ''}
       ${plateauBadge}
       ${breakdownHtml}

@@ -10,6 +10,7 @@ Checks:
 No filesystem access — uses an in-memory minimal namespace fixture.
 """
 import importlib.util
+import json
 import unittest
 from pathlib import Path
 
@@ -160,9 +161,20 @@ class TestRenderHtml(unittest.TestCase):
     def test_placeholder_markers_all_replaced(self):
         for placeholder in ("[[GENERATED_AT]]", "[[N_NS]]", "[[N_OPEN]]",
                             "[[N_LEARNINGS]]", "[[N_SESSIONS]]", "[[CARDS]]",
-                            "[[NS_DATA]]", "[[BLOCKING_EDGES]]", "[[WATCH_SECONDS]]"):
+                            "[[NS_DATA]]", "[[BLOCKING_EDGES]]", "[[WATCH_SECONDS]]", "[[PAGE_REV]]", "[[REV_FILE]]"):
             self.assertNotIn(placeholder, self.html,
                              msg=f"Unreplaced placeholder found: {placeholder}")
+
+
+class TestCodeReviewField(unittest.TestCase):
+
+    def test_js_data_carries_the_summary_as_code_reviews(self):
+        summary = {"count": 1, "reviews": [], "latest": None}
+        data = json.loads(_mod._js_data([dict(_minimal_ns(), code_review_summary=summary)]))
+        self.assertEqual(data[0]["codeReviews"], summary)
+
+    def test_absent_summary_is_null(self):
+        self.assertIsNone(json.loads(_mod._js_data([_minimal_ns()]))[0]["codeReviews"])
 
 
 class TestArtefacts(unittest.TestCase):
@@ -217,7 +229,7 @@ class TestTemplateFile(unittest.TestCase):
         content = self._template.read_text(encoding="utf-8")
         for marker in ("[[GENERATED_AT]]", "[[N_NS]]", "[[N_OPEN]]",
                        "[[N_LEARNINGS]]", "[[N_SESSIONS]]", "[[CARDS]]",
-                       "[[NS_DATA]]", "[[BLOCKING_EDGES]]", "[[WATCH_SECONDS]]"):
+                       "[[NS_DATA]]", "[[BLOCKING_EDGES]]", "[[WATCH_SECONDS]]", "[[PAGE_REV]]", "[[REV_FILE]]"):
             self.assertIn(marker, content, msg=f"Missing placeholder in template.html: {marker}")
 
 
@@ -580,7 +592,100 @@ class TestWatchMode(unittest.TestCase):
             _mod._watch(None, self.out, 7)
         self.assertEqual(sleeps, [7, 7, 7])
         self.assertEqual(gen.call_count, 2)
-        gen.assert_called_with(None, self.out, 7)
+        gen.assert_called_with(None, self.out, 7, None)
+
+    # ── Hash-based --watch ────────────────────────────────────────────────────
+
+    def _once(self, ns, prev_rev=None, watch=5):
+        from unittest.mock import patch
+        with patch.object(_mod, "discover_namespaces", return_value=[ns]):
+            return _mod._generate_once(None, self.out, watch, prev_rev)
+
+    def test_rev_ignores_clock_only_fields(self):
+        from datetime import timedelta
+        now = _mod._now_utc()
+        a = dict(_minimal_ns(), last_close=now - timedelta(minutes=5), last_open=now - timedelta(minutes=9))
+        b = dict(_minimal_ns(), last_close=now - timedelta(days=3), last_open=now - timedelta(days=4))
+        self.assertNotEqual(json.loads(_mod._js_data([a]))[0]["lastClose"],
+                            json.loads(_mod._js_data([b]))[0]["lastClose"])
+        base = _mod._content_rev([a])
+        self.assertEqual(base, _mod._content_rev([b]))
+        self.assertEqual(len(base), 12)
+
+    def test_rev_changes_with_content(self):
+        a = _minimal_ns()
+        b = dict(_minimal_ns(), intent_summary="a different intent")
+        self.assertNotEqual(_mod._content_rev([a]), _mod._content_rev([b]))
+
+    def test_rev_ignores_pulse_clock_fields(self):
+        import copy
+        from unittest.mock import patch
+        a = _minimal_ns()
+        real = _mod._js_data
+
+        def with_pulse(secs):
+            def fake(namespaces):
+                data = json.loads(real(namespaces))
+                data[0]["pulse"] = {"elapsed_seconds": secs, "generated_at": f"t{secs}", "phase": "work"}
+                return json.dumps(data)
+            return fake
+
+        with patch.object(_mod, "_js_data", with_pulse(1)):
+            r1 = _mod._content_rev([copy.deepcopy(a)])
+        with patch.object(_mod, "_js_data", with_pulse(999)):
+            r2 = _mod._content_rev([copy.deepcopy(a)])
+        self.assertEqual(r1, r2)
+
+    def test_first_watch_pass_writes_page_and_sidecar(self):
+        r = self._once(_minimal_ns())
+        self.assertTrue(r["written"])
+        rev_path = _mod._rev_path(self.out)
+        self.assertEqual(rev_path.name, "dash.html.rev.js")
+        self.assertEqual(rev_path.read_text(), f'window.__DASH_REV = "{r["rev"]}";\n')
+        html = self.out.read_text()
+        self.assertIn(f'const PAGE_REV = "{r["rev"]}";', html)
+        self.assertIn('const REV_FILE = "dash.html.rev.js";', html)
+
+    def test_unchanged_rev_leaves_page_and_sidecar_untouched(self):
+        first = self._once(_minimal_ns())
+        self.out.write_text("MARK")
+        _mod._rev_path(self.out).write_text("MARK")
+        again = self._once(_minimal_ns(), prev_rev=first["rev"])
+        self.assertFalse(again["written"])
+        self.assertEqual(again["rev"], first["rev"])
+        self.assertEqual(self.out.read_text(), "MARK")
+        self.assertEqual(_mod._rev_path(self.out).read_text(), "MARK")
+
+    def test_changed_rev_rewrites_both(self):
+        first = self._once(_minimal_ns())
+        changed = self._once(dict(_minimal_ns(), intent_summary="new"), prev_rev=first["rev"])
+        self.assertTrue(changed["written"])
+        self.assertNotEqual(changed["rev"], first["rev"])
+        self.assertIn(changed["rev"], _mod._rev_path(self.out).read_text())
+
+    def test_without_watch_no_sidecar_and_rev_not_baked(self):
+        r = self._once(_minimal_ns(), watch=None)
+        self.assertTrue(r["written"])
+        self.assertIsNone(r["rev"])
+        self.assertFalse(_mod._rev_path(self.out).exists())
+        html = self.out.read_text()
+        self.assertIn("const PAGE_REV = null;", html)
+        self.assertIn("const REV_FILE = null;", html)
+
+    def test_watch_carries_the_previous_rev_forward(self):
+        from unittest.mock import patch
+        results = iter([{"ok": True, "rev": "r1"}, {"ok": True, "rev": "r2"}])
+        sleeps = []
+
+        def fake_sleep(s):
+            sleeps.append(s)
+            if len(sleeps) > 2:
+                raise KeyboardInterrupt
+
+        with patch.object(_mod.time, "sleep", side_effect=fake_sleep), \
+             patch.object(_mod, "_generate_once", side_effect=lambda *a: next(results)) as gen:
+            _mod._watch(None, self.out, 3, "r0")
+        self.assertEqual([c.args[3] for c in gen.call_args_list], ["r0", "r1"])
 
     def test_watch_survives_a_failed_pass(self):
         import io
