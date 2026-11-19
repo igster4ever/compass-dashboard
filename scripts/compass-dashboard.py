@@ -10,6 +10,7 @@ Usage:
 import copy
 import hashlib
 import json
+import math
 import os
 import sys
 import time
@@ -1287,6 +1288,130 @@ def _compute_exploration_ratio(state):
     }
 
 
+# ── Maturity ladder ──────────────────────────────────────────────────────────
+# Levels L1-L4, each a list of named checks over the assembled namespace dict
+# (docs/backlog/maturity-ladder-scorecard-design-note.md). A check returns True to pass or a
+# reason string to fail: no data is a fail with its own reason. A check is N/A only when its
+# `applies` is false. Level = highest tier with every check up to it passing; completeness =
+# passed / applicable over all tiers, so partial progress still shows.
+
+_ZONE_SHIP_DATE = "2026-07-05"
+
+
+def _round_half_up(x):
+    return int(math.floor(x + 0.5))
+
+
+def _ladder_zone(n):
+    ls = [l for l in n.get("learnings") or [] if str(l.get("date") or "")[:10] >= _ZONE_SHIP_DATE]
+    if not ls:
+        return f"no learnings since {_ZONE_SHIP_DATE}"
+    z = sum(1 for l in ls if l.get("zone"))
+    return True if z * 2 >= len(ls) else f"{z} of {len(ls)} zoned"
+
+
+def _ladder_tagged(n):
+    ls = n.get("learnings") or []
+    if not ls:
+        return "no active learnings"
+    untagged = sum(1 for l in ls if not l.get("tags"))
+    return f"{untagged} of {len(ls)} untagged" if untagged else True
+
+
+def _ladder_goal_types(n):
+    last = (n.get("goal_type_by_session") or [])[-5:]
+    if not last:
+        return "no goal records"
+    typed = sum(1 for s in last if s.get("typed"))
+    return True if typed >= 3 else f"{typed} of the last {len(last)} session{'' if len(last) == 1 else 's'} typed"
+
+
+def _ladder_outcome(n):
+    rate = n.get("outcome_rate")
+    if rate is None:
+        return "no goal-outcome links yet"
+    return True if rate >= 0.3 else f"outcome rate {_round_half_up(rate * 100)}%"
+
+
+def _ladder_stale(n):
+    stale = n.get("stale_bullet_count")
+    if stale is None:
+        return "stale bullets not computed"
+    return True if stale == 0 else f"{stale} stale reality bullets"
+
+
+def _ladder_reality_sections(n):
+    if not (n.get("reality") or "").strip():
+        return "reality.md is empty"
+    warnings = n.get("reality_structure_warnings") or []
+    return "; ".join(warnings) if warnings else True
+
+
+def _ladder_sessions(n):
+    count = n.get("session_count") or 0
+    return True if count >= 3 else f"{count} of 3 sessions"
+
+
+_LADDER_TIERS = {1: "Registered", 2: "Wired", 3: "Instrumented", 4: "Calibrated"}
+
+# (tier, id, label, applies-or-None, test)
+_LADDER = [
+    (1, "intent", "intent.md written", None,
+     lambda n: True if (n.get("intent") or "").strip() else "intent.md is empty"),
+    (1, "reality", "reality.md written", None,
+     lambda n: True if (n.get("reality") or "").strip() else "reality.md is empty"),
+    (1, "closed", "At least 1 closed session", None,
+     lambda n: True if (n.get("session_count") or 0) >= 1 else "no closed sessions"),
+    (2, "repo_path", "repo_path set", None,
+     lambda n: True if n.get("has_repo_path") else "no repo_path in state.json"),
+    (2, "claude_md", "CLAUDE.md exists", None,
+     lambda n: True if ((n.get("claude_review_status") or {}).get("claude_md_files") or {}).get("CLAUDE.md") is not None
+     else "no CLAUDE.md"),
+    (2, "code_context", "code_context.md written", None,
+     lambda n: True if (n.get("code_context") or "").strip() else "no code_context.md"),
+    (2, "reality_sections", "reality.md has the standard sections", None, _ladder_reality_sections),
+    (2, "sessions", "At least 3 sessions", lambda n: n.get("namespace") != "global", _ladder_sessions),
+    (3, "tagged", "Every active learning tagged", None, _ladder_tagged),
+    (3, "zone", f"At least half of learnings since {_ZONE_SHIP_DATE} zoned", None, _ladder_zone),
+    (3, "goal_typing", "Goal types in 3 of the last 5 sessions", None, _ladder_goal_types),
+    (3, "decision", "At least 1 decision logged", None,
+     lambda n: True if n.get("decisions") else "no decisions logged"),
+    (4, "outcome", "Outcome rate at least 30%", None, _ladder_outcome),
+    (4, "stale", "No stale reality bullets", None, _ladder_stale),
+]
+
+
+def _maturity_ladder(n):
+    """NS `maturityLadder`: {level, passed, applicable, completeness, checks[{tier, id, label,
+    status pass|fail|na, reason}], next[failing checks one tier above level], chipClass, title}.
+    The card chip and the Scorecard both render this; neither recomputes it."""
+    checks = []
+    for tier, cid, label, applies, test in _LADDER:
+        if applies and not applies(n):
+            checks.append({"tier": tier, "id": cid, "label": label, "status": "na", "reason": ""})
+            continue
+        r = test(n)
+        checks.append({"tier": tier, "id": cid, "label": label,
+                       "status": "pass" if r is True else "fail", "reason": "" if r is True else str(r)})
+    level = 0
+    for tier in sorted({c["tier"] for c in checks}):
+        if any(c["tier"] == tier and c["status"] == "fail" for c in checks):
+            break
+        level = tier
+    applicable = sum(1 for c in checks if c["status"] != "na")
+    passed = sum(1 for c in checks if c["status"] == "pass")
+    nxt = [c for c in checks if c["tier"] == level + 1 and c["status"] == "fail"]
+    title = f"Maturity ladder: {passed} of {applicable} checks pass"
+    if nxt:
+        title += f". Next step to L{level + 1}: {'; '.join(c['label'] for c in nxt)}"
+    return {
+        "level": level, "passed": passed, "applicable": applicable, "checks": checks, "next": nxt,
+        "completeness": _round_half_up(passed / applicable * 100) if applicable else 0,
+        "chipClass": "high" if level >= 3 else "mid" if level == 2 else "low",
+        "title": title,
+    }
+
+
 def _goal_type_by_session(state):
     """Per-session E/X breakdown from goal_completions[*].types, chronological. Legacy bare
     status lists carry no goal counts or types, so they are left out."""
@@ -1844,7 +1969,7 @@ def _assemble_namespace_dict(ns_dir, raw):
             intent_summary = line
             break
 
-    return {
+    ns = {
         "namespace":            ns_dir.name,
         "open_session":         open_session,
         "last_close":           last_close,
@@ -1924,6 +2049,8 @@ def _assemble_namespace_dict(ns_dir, raw):
         "complexity_clustering_signals": complexity_clustering_signals,
         "pulse":                      _build_pulse(ns_dir.name, raw),
     }
+    ns["maturity_ladder"] = _maturity_ladder(ns)
+    return ns
 
 
 def load_namespace(ns_dir):
@@ -2040,6 +2167,10 @@ def _card_html(n, i):
                 delta_html = f' <span style="font-size:.7rem;color:var(--{delta_col})">{delta_sign}{delta:.0f}</span>'
         completeness_html = f'<span class="rate-pill {rc_cls}" title="Reality completeness">{rcs:.0f}% done{delta_html}</span>'
 
+    lad = n.get("maturity_ladder")
+    ladder_html = (f'<span class="rate-pill ladder-chip {lad["chipClass"]}" title="{_e(lad["title"])}">'
+                   f'L{lad["level"]} · {lad["completeness"]}%</span>') if lad else ""
+
     outcome_html = ""
     orate = n.get("outcome_rate")
     if orate is not None:
@@ -2083,7 +2214,7 @@ def _card_html(n, i):
       <div class="card-time">{_e(time_label)}</div>
       <div class="card-intent">{_e(summary)}</div>
       <div class="card-stats">
-        <span class="rate-pill ladder-chip" data-ladder-idx="{i}"></span>
+        {ladder_html}
         <span>{n["session_count"]} sessions</span>
         <span>{len(n["learnings"])} learnings</span>
         {data_html}
@@ -2468,6 +2599,7 @@ _JS_DATA_RENAME_FIELDS = [
     ("verificationDurability",     "verification_durability",    None),
     ("complexityClusteringSignals", "complexity_clustering_signals", []),
     ("pulse",                      "pulse",                      None),
+    ("maturityLadder",             "maturity_ladder",            None),
 ]
 
 
@@ -2524,7 +2656,40 @@ def _js_data(namespaces):
 # HTML assembly
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate(namespaces, watch_seconds=None, rev_file=None):
+_SECTION_LOADS_FILE = "section_loads.jsonl"  # loop root, written by core's `prompt --section`
+_SECTION_LOADS_SHOWN = 15
+
+
+def _read_section_loads(loop_dir=None):
+    """Global prompt-section fire rates from `<loop>/section_loads.jsonl` as {total, firstAt,
+    lastAt, distinct, sections[<=15: {file, section, count, lastAt}]}, most-loaded first;
+    None when the file is absent or holds no usable rows. Not per namespace, so it is baked
+    as its own `SECTION_LOADS` constant. Only `prompt --section` loads are logged: inline
+    sub-skill steps never appear, so a section missing here is unmeasured, not unused."""
+    path = (loop_dir or LOOP_DIR) / _SECTION_LOADS_FILE
+    if not path.is_file():
+        return None
+    rows = [r for r in _read_jsonl(path) if r.get("file") and r.get("section") and r.get("at")]
+    if not rows:
+        return None
+    counts, last = {}, {}
+    for r in rows:
+        key = (str(r["file"]), str(r["section"]))
+        counts[key] = counts.get(key, 0) + 1
+        last[key] = max(last.get(key, ""), str(r["at"]))
+    ranked = sorted(counts, key=lambda k: (-counts[k], k))
+    stamps = [str(r["at"]) for r in rows]
+    return {
+        "total":    len(rows),
+        "firstAt":  min(stamps)[:10],
+        "lastAt":   max(stamps)[:10],
+        "distinct": len(counts),
+        "sections": [{"file": f, "section": sec, "count": counts[(f, sec)],
+                      "lastAt": last[(f, sec)][:10]} for f, sec in ranked[:_SECTION_LOADS_SHOWN]],
+    }
+
+
+def generate(namespaces, watch_seconds=None, rev_file=None, section_loads=None):
     now         = _now_utc().strftime("%d %b %Y %H:%M UTC")
     n_open      = sum(1 for n in namespaces if n["open_session"])
     n_learnings = sum(len(n["learnings"]) for n in namespaces)
@@ -2541,9 +2706,10 @@ def generate(namespaces, watch_seconds=None, rev_file=None):
     html = html.replace("[[CARDS]]",          cards)
     html = html.replace("[[NS_DATA]]",           _js_data(namespaces))
     html = html.replace("[[BLOCKING_EDGES]]",    _js_blocking_edges(namespaces))
+    html = html.replace("[[SECTION_LOADS]]",     json.dumps(section_loads))
     html = html.replace("[[WATCH_SECONDS]]",     json.dumps(watch_seconds))
     # Only a --watch page polls the sidecar, so the rev and its file name are baked only then.
-    html = html.replace("[[PAGE_REV]]",          json.dumps(_content_rev(namespaces) if rev_file else None))
+    html = html.replace("[[PAGE_REV]]",          json.dumps(_content_rev(namespaces, section_loads) if rev_file else None))
     html = html.replace("[[REV_FILE]]",          json.dumps(rev_file))
 
     return html
@@ -2559,7 +2725,7 @@ _REV_VOLATILE_KEYS = ("lastClose", "lastOpen")
 _REV_VOLATILE_PULSE_KEYS = ("elapsed_seconds", "generated_at")
 
 
-def _content_rev(namespaces):
+def _content_rev(namespaces, section_loads=None):
     """Short hash of what the page shows, ignoring clock-only fields. Two --watch passes with
     the same rev would render the same page, so the second write and reload are skipped."""
     data = json.loads(_js_data(namespaces))
@@ -2570,7 +2736,7 @@ def _content_rev(namespaces):
         if isinstance(pulse, dict):
             for key in _REV_VOLATILE_PULSE_KEYS:
                 pulse.pop(key, None)
-    blob = json.dumps([data, json.loads(_js_blocking_edges(namespaces))],
+    blob = json.dumps([data, json.loads(_js_blocking_edges(namespaces)), section_loads],
                       sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(blob.encode()).hexdigest()[:12]
 
@@ -2605,11 +2771,13 @@ def _generate_once(filter_ns, out_path, watch_seconds, prev_rev=None):
         msg = (f"Namespace '{filter_ns}' not found" if filter_ns
                else "No compass namespaces found in ~/.claude/loop/")
         return {"ok": False, "error": msg}
-    rev = _content_rev(namespaces) if watch_seconds else None
+    section_loads = _read_section_loads()
+    rev = _content_rev(namespaces, section_loads) if watch_seconds else None
     written = not (rev is not None and rev == prev_rev)
     if written:
         rev_file = _rev_path(out_path).name if watch_seconds else None
-        _write_atomic(out_path, generate(namespaces, watch_seconds=watch_seconds, rev_file=rev_file))
+        _write_atomic(out_path, generate(namespaces, watch_seconds=watch_seconds, rev_file=rev_file,
+                                         section_loads=section_loads))
         if rev is not None:
             _write_atomic(_rev_path(out_path), f'window.__DASH_REV = {json.dumps(rev)};\n')
     return {

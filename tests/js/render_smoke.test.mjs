@@ -39,10 +39,11 @@ function buildScriptSource({ watchSeconds = null, pageRev = null, revFile = null
   let src = extractScriptBody();
   src = src.replace('[[NS_DATA]]', JSON.stringify(fixture.NS));
   src = src.replace('[[BLOCKING_EDGES]]', JSON.stringify(fixture.BLOCKING_EDGES));
+  src = src.replace('[[SECTION_LOADS]]', JSON.stringify(fixture.SECTION_LOADS ?? null));
   src = src.replace('[[WATCH_SECONDS]]', JSON.stringify(watchSeconds));
   src = src.replace('[[PAGE_REV]]', JSON.stringify(pageRev));
   src = src.replace('[[REV_FILE]]', JSON.stringify(revFile));
-  for (const marker of ['[[NS_DATA]]', '[[BLOCKING_EDGES]]', '[[WATCH_SECONDS]]', '[[PAGE_REV]]', '[[REV_FILE]]']) {
+  for (const marker of ['[[NS_DATA]]', '[[BLOCKING_EDGES]]', '[[SECTION_LOADS]]', '[[WATCH_SECONDS]]', '[[PAGE_REV]]', '[[REV_FILE]]']) {
     if (src.includes(marker)) throw new Error(`unresolved ${marker} left in script — fixture keys out of sync?`);
   }
   return src;
@@ -229,6 +230,13 @@ test('learnings tab (zone distribution, filterLearningZone) renders without thro
     () => sandbox.window.filterLearningZone('ltable-example-ns-one', 'example-ns-one', 'golden'),
     'filterLearningZone() toggle-off threw'
   );
+  // The Surfaced column and sortable headers are written straight into the tab's innerHTML.
+  const tabHtml = sandbox.document.getElementById('detail').innerHTML;
+  assert.match(tabHtml, /sortLearnings\('ltable-example-ns-one','example-ns-one','times'\)/);
+  assert.match(tabHtml, /5\u00d7/);
+  assert.match(tabHtml, /never/);
+  // sortLearnings must be reachable from the inline onclick (IIFE export) and not throw.
+  assert.doesNotThrow(() => sandbox.window.sortLearnings('ltable-example-ns-one', 'example-ns-one', 'w'), 'sortLearnings() threw');
 });
 
 test('decisions tab renders without throwing', () => {
@@ -269,6 +277,32 @@ test('heatmap quality panel labels a capped window, and says nothing when the se
   };
   assert.match(panelHtml(30), /last 3 of 30 sessions/);
   assert.doesNotMatch(panelHtml(3), /last 3 of/);
+});
+
+test('Priorities scores the latest code review by severity, and says nothing for a clean one', () => {
+  const prioritiesHtml = (mutate) => {
+    const saved = JSON.stringify(fixture.NS.map(n => n.codeReviews));
+    fixture.NS.forEach(n => mutate(n.codeReviews.reviews[n.codeReviews.reviews.length - 1]));
+    try {
+      const sandbox = runScriptInSandbox();
+      sandbox.window.switchView('priorities');
+      return sandbox.document.getElementById('view-priorities').innerHTML;
+    } finally {
+      JSON.parse(saved).forEach((cr, i) => { fixture.NS[i].codeReviews = cr; });
+    }
+  };
+  assert.match(prioritiesHtml(() => {}), /Latest code review \(2026-08-01\) found 1 HIGH/);
+  assert.match(prioritiesHtml(r => { r.critical = 2; }), /found 2 CRITICAL, 1 HIGH/);
+  assert.doesNotMatch(prioritiesHtml(r => { r.high = 0; r.critical = 0; }), /Latest code review/);
+});
+
+test('heatmap Prompt sections panel lists the baked section loads', () => {
+  const sandbox = runScriptInSandbox();
+  sandbox.window.switchView('heatmap');
+  sandbox.window.switchHeatmap('prompts');
+  const out = sandbox.document.getElementById('hpanel-prompts').innerHTML;
+  assert.match(out, /Example section A/);
+  assert.match(out, /5 loads, 2026-07-01 to 2026-08-01/);
 });
 
 test('radarToggleAxis() starting from defaults adds a new axis to the persisted set', () => {

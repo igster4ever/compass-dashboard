@@ -58,8 +58,8 @@ function extractConst(name) {
   return html.slice(start, i + 1);
 }
 
-const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'globalVisibleNames', 'visibleNS', 'renderCompare', 'deriveTasks', 'renderDecisions', 'detailTabs', 'decisionsTabLabel', 'ladderLevel', 'renderStateSection_GoalStatuses', 'goalStatusHeadline', '_complexityProbeErrors', 'renderStateSection_DataProblems', 'renderStateSection_BacklogMatch', 'backlogMatchHeadline', '_cadenceLastRun', '_cooldownOverrides', 'windowLabel', 'renderStateSection_CycleSparkline', 'codeReviewHeadline', 'renderStateSection_CodeReviews'];
-const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES', 'NS_PALETTE', 'COMPARE_AXIS_DEFS', 'GLOBAL_NS_KEY', 'ZONE_SHIP_DATE', 'LADDER', 'CADENCE_LAST_RUN_LABELS', 'CODE_REVIEW_SEVERITIES'];
+const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'globalVisibleNames', 'visibleNS', 'renderCompare', 'deriveTasks', 'renderDecisions', 'detailTabs', 'decisionsTabLabel', 'renderStateSection_GoalStatuses', 'goalStatusHeadline', '_complexityProbeErrors', 'renderStateSection_DataProblems', 'renderStateSection_BacklogMatch', 'backlogMatchHeadline', '_cadenceLastRun', '_cooldownOverrides', 'windowLabel', 'renderStateSection_CycleSparkline', 'codeReviewHeadline', 'renderStateSection_CodeReviews', 'learningSurfaced', 'compareLearningRows'];
+const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES', 'NS_PALETTE', 'COMPARE_AXIS_DEFS', 'GLOBAL_NS_KEY', 'CADENCE_LAST_RUN_LABELS', 'CODE_REVIEW_SEVERITIES'];
 // A minimal in-memory localStorage — radarActiveAxes() reads it; no test here
 // relies on cross-call persistence, so a single shared instance is fine.
 const localStorageShim = `
@@ -373,112 +373,6 @@ test('renderDecisions() lists decisions, or the empty state when there are none'
   assert.ok(helpers.renderDecisions({ decisions: [] }).includes('No decisions logged for this namespace yet.'));
 });
 
-// ── Maturity ladder (docs/backlog/maturity-ladder-scorecard-design-note.md) ──
-
-function matureNs(over = {}) {
-  return {
-    namespace: 'ns-x',
-    intent: '# Intent\nDo the thing',
-    reality: '## What exists and works\n- a\n## Backlog\n- b',
-    realityStructureWarnings: [],
-    sessionCount: 6,
-    hasRepoPath: true,
-    claudeReviewStatus: { claude_md_files: { 'CLAUDE.md': 1200 } },
-    codeContext: '## Last updated: 2026-10-01',
-    learnings: [
-      { tags: ['a'], date: '2026-08-01T00:00:00Z', zone: 'golden' },
-      { tags: ['b'], date: '2026-09-01T00:00:00Z' },
-      { tags: ['c'], date: '2026-05-01T00:00:00Z' },
-    ],
-    goalTypeBySession: [1, 2, 3, 4, 5].map(i => ({ date: `2026-10-0${i}`, typed: true })),
-    decisions: [{}],
-    outcomeRate: 0.5,
-    staleBulletCount: 0,
-    ...over,
-  };
-}
-
-const failing = r => r.checks.filter(c => c.status === 'fail').map(c => c.id);
-
-test('ladderLevel(): a namespace passing every check is L4 at 100%', () => {
-  const r = helpers.ladderLevel(matureNs());
-  assert.equal(r.level, 4);
-  assert.equal(r.completeness, 100);
-  assert.deepEqual(r.next, []);
-});
-
-test('ladderLevel(): an empty namespace is L0, and no data fails with a reason, never N/A', () => {
-  const r = helpers.ladderLevel({ namespace: 'empty' });
-  assert.equal(r.level, 0);
-  assert.equal(r.checks.filter(c => c.status === 'na').length, 0);
-  const zone = r.checks.find(c => c.id === 'zone');
-  assert.equal(zone.status, 'fail');
-  assert.match(zone.reason, /no learnings since 2026-07-05/);
-  assert.equal(r.checks.find(c => c.id === 'outcome').status, 'fail');
-});
-
-test('ladderLevel(): level is the highest tier with every lower tier passing; completeness counts all tiers', () => {
-  const r = helpers.ladderLevel(matureNs({ codeContext: '' }));
-  assert.equal(r.level, 1);
-  assert.deepEqual(failing(r), ['code_context']);
-  assert.equal(r.completeness, Math.round((r.applicable - 1) / r.applicable * 100));
-  assert.deepEqual(r.next.map(c => c.id), ['code_context']);
-});
-
-test('ladderLevel(): next lists only the failing checks one tier up', () => {
-  const r = helpers.ladderLevel(matureNs({ decisions: [] }));
-  assert.equal(r.level, 2);
-  assert.deepEqual(r.next.map(c => c.id), ['decision']);
-});
-
-test('ladderLevel(): global has the session-count check N/A, and its repo checks still apply', () => {
-  const r = helpers.ladderLevel(matureNs({ namespace: 'global', sessionCount: 1, hasRepoPath: false }));
-  assert.equal(r.checks.find(c => c.id === 'sessions').status, 'na');
-  assert.equal(r.checks.find(c => c.id === 'repo_path').status, 'fail');
-  assert.equal(r.applicable, r.checks.length - 1);
-});
-
-test('ladderLevel(): zone counts only learnings dated on or after the ship date', () => {
-  // 1 of 2 post-ship learnings is zoned = 50%: passes. The pre-ship one is ignored.
-  assert.equal(helpers.ladderLevel(matureNs()).checks.find(c => c.id === 'zone').status, 'pass');
-  const r = helpers.ladderLevel(matureNs({ learnings: [
-    { tags: ['a'], date: '2026-08-01T00:00:00Z' },
-    { tags: ['b'], date: '2026-09-01T00:00:00Z' },
-    { tags: ['c'], date: '2026-05-01T00:00:00Z', zone: 'golden' },
-  ] }));
-  const zone = r.checks.find(c => c.id === 'zone');
-  assert.equal(zone.status, 'fail');
-  assert.match(zone.reason, /0 of 2/);
-});
-
-test('ladderLevel(): untagged learnings fail at L3 and reality structure warnings at L2, with reasons', () => {
-  const r = helpers.ladderLevel(matureNs({
-    learnings: [{ tags: [], date: '2026-08-01', zone: 'golden' }, { tags: ['x'], date: '2026-08-01', zone: 'golden' }],
-    realityStructureWarnings: ['Missing section: ## Backlog'],
-  }));
-  assert.match(r.checks.find(c => c.id === 'tagged').reason, /1 of 2 untagged/);
-  assert.equal(r.checks.find(c => c.id === 'reality').status, 'pass');
-  assert.match(r.checks.find(c => c.id === 'reality_sections').reason, /Missing section: ## Backlog/);
-  assert.equal(r.level, 1);
-});
-
-test('ladderLevel(): goal types need 3 of the last 5 sessions typed', () => {
-  const gt = flags => flags.map((typed, i) => ({ date: `2026-10-0${i + 1}`, typed }));
-  const status = flags => helpers.ladderLevel(matureNs({ goalTypeBySession: gt(flags) }))
-    .checks.find(c => c.id === 'goal_types').status;
-  assert.equal(status([true, true, true, false, false, false, false, false]), 'fail');
-  assert.equal(status([false, false, true, true, true]), 'pass');
-  assert.equal(status([true, true]), 'fail');
-  assert.match(helpers.ladderLevel(matureNs({ goalTypeBySession: [] })).checks.find(c => c.id === 'goal_types').reason, /no goal records/);
-});
-
-test('ladderLevel(): outcome rate and stale bullets gate L4', () => {
-  assert.match(helpers.ladderLevel(matureNs({ outcomeRate: null })).checks.find(c => c.id === 'outcome').reason,
-    /no goal-outcome links/);
-  assert.equal(helpers.ladderLevel(matureNs({ outcomeRate: 0.29 })).level, 3);
-  assert.equal(helpers.ladderLevel(matureNs({ staleBulletCount: 2 })).level, 3);
-});
-
 // ── Goal status breakdown (data-model audit Rank 6a) ──
 
 const gsb = {
@@ -640,4 +534,27 @@ test('renderStateSection_CodeReviews(): labels a capped window; says so when the
     latest: { date: '2026-09-01', total: 0, findings: [] } } });
   assert.match(none, /Latest review parsed no findings/);
   assert.equal(helpers.renderStateSection_CodeReviews({}), '');
+});
+
+// ── Learnings: surfaced column and sort keys ─────────────────────────────────
+
+test('learningSurfaced(): never-surfaced is spelled out, surfaced shows count and age', () => {
+  const now = Date.parse('2026-11-19T12:00:00Z');
+  assert.equal(helpers.learningSurfaced({}, now).label, 'never');
+  assert.equal(helpers.learningSurfaced({ times_surfaced: 0 }, now).lastMs, 0);
+  const s = helpers.learningSurfaced({ times_surfaced: 5, last_surfaced_at: '2026-11-16T09:00:00Z' }, now);
+  assert.equal(s.label, '5\u00d7 \u00b7 3d ago');
+  assert.equal(s.times, 5);
+  assert.equal(helpers.learningSurfaced({ times_surfaced: 1, last_surfaced_at: '2026-11-19T01:00:00Z' }, now).label, '1\u00d7 \u00b7 today');
+  assert.equal(helpers.learningSurfaced({ times_surfaced: 2 }, now).label, '2\u00d7', 'count without a timestamp shows no age');
+});
+
+test('compareLearningRows(): sorts by weight, surfaced count and date; ties keep row order', () => {
+  const row = (idx, w, times, date) => ({ dataset: { idx: String(idx), w: String(w), times: String(times), date } });
+  const rows = [row(0, 2, 0, '2026-07-01'), row(1, 5, 3, '2026-06-01'), row(2, 5, 1, '2026-08-01'), row(3, 1, 3, '2026-08-01')];
+  const order = (key, dir) => [...rows].sort((a, b) => helpers.compareLearningRows(a, b, key, dir)).map(r => r.dataset.idx).join('');
+  assert.equal(order('w', -1), '1203');      // weight high first; the 5/5 tie keeps original order
+  assert.equal(order('times', -1), '1320');  // surfaced most first; 3/3 tie keeps original order
+  assert.equal(order('times', 1), '0213');   // never-surfaced first when ascending: the retrieval gaps
+  assert.equal(order('date', -1), '2301');   // newest first as ISO text; the 08-01 tie keeps row order
 });

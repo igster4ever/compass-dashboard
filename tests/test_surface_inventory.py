@@ -63,7 +63,6 @@ IGNORED = {
     },
     "learnings": {
         "goal_origin": f"{_UNREAD_AUDIT} Rank 5",
-        "last_surfaced_at": f"{_UNREAD_AUDIT} Rank 5",
         "priority": "core's retrieval ranking input; weight is the displayed strength",
         "seed_origin": "P67 cold-start provenance; seeded learnings are rare",
         "test_window": "hypothesis validation window; core prompts on expiry at open",
@@ -74,7 +73,6 @@ IGNORED = {
     },
     "files": {
         "learning_applications.jsonl": f"{_UNREAD_AUDIT} Rank 5 (P64)",
-        "section_loads.jsonl": f"{_UNREAD_AUDIT} Rank 7 (loop root, not per namespace)",
         "skill_edit_rejections.jsonl": "SkillOpt-internal rejection log",
         "claude.md": _NOT_LOOP_FILE,
         "SKILL.md": _NOT_LOOP_FILE,

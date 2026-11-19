@@ -131,6 +131,7 @@ def make_ns(name, **overrides):
     # actual output — same lesson as the confidence-calibration test math error this
     # session (hand-derived expected values are a bug risk of their own).
     base["failure_dimension_distribution"] = mod._failure_dimension_distribution(base["skill_feedback"])
+    base["maturity_ladder"] = mod._maturity_ladder(base)
     return base
 
 
@@ -162,7 +163,10 @@ def build():
     ns_js = json.loads(mod._js_data(ns_list))
     blocking_js = mod._extract_blocking_edges(ns_list) if hasattr(mod, "_extract_blocking_edges") else []
 
-    return {"NS": ns_js, "BLOCKING_EDGES": blocking_js}
+    section_loads = {"total": 5, "firstAt": "2026-07-01", "lastAt": "2026-08-01", "distinct": 2,
+                     "sections": [{"file": "example-prompt.md", "section": "Example section A", "count": 3, "lastAt": "2026-08-01"},
+                                  {"file": "example-prompt.md", "section": "Example section B", "count": 2, "lastAt": "2026-07-15"}]}
+    return {"NS": ns_js, "BLOCKING_EDGES": blocking_js, "SECTION_LOADS": section_loads}
 
 
 if __name__ == "__main__":

@@ -1093,6 +1093,121 @@ class TestLadderDataFields(unittest.TestCase):
         self.assertNotIn("/somewhere", json.dumps(js.get("hasRepoPath")))
 
 
+class TestMaturityLadder(unittest.TestCase):
+    """`_maturity_ladder`: the L1-L4 checks, computed once in Python and baked as
+    `maturityLadder` (the card chip and Scorecard only render it)."""
+
+    @staticmethod
+    def _mature(**over):
+        ns = {
+            "namespace": "ns-x", "intent": "# Intent\nDo the thing",
+            "reality": "## What exists and works\n- a\n## Backlog\n- b",
+            "reality_structure_warnings": [], "session_count": 6, "has_repo_path": True,
+            "claude_review_status": {"claude_md_files": {"CLAUDE.md": 1200}},
+            "code_context": "## Last updated: 2026-10-01",
+            "learnings": [
+                {"tags": ["a"], "date": "2026-08-01T00:00:00Z", "zone": "golden"},
+                {"tags": ["b"], "date": "2026-09-01T00:00:00Z"},
+                {"tags": ["c"], "date": "2026-05-01T00:00:00Z"},
+            ],
+            "goal_type_by_session": [{"date": f"2026-10-0{i}", "typed": True} for i in range(1, 6)],
+            "decisions": [{}], "outcome_rate": 0.5, "stale_bullet_count": 0,
+        }
+        ns = dict(ns)
+        ns.update(over)
+        return ns
+
+    @staticmethod
+    def _failing(r):
+        return [c["id"] for c in r["checks"] if c["status"] == "fail"]
+
+    @staticmethod
+    def _check(r, cid):
+        return next(c for c in r["checks"] if c["id"] == cid)
+
+    def test_passing_every_check_is_l4_at_100(self):
+        r = _mod._maturity_ladder(self._mature())
+        self.assertEqual((r["level"], r["completeness"], r["next"]), (4, 100, []))
+        self.assertEqual((r["chipClass"], r["title"]), ("high", "Maturity ladder: 14 of 14 checks pass"))
+
+    def test_empty_namespace_is_l0_and_no_data_fails_with_a_reason_never_na(self):
+        r = _mod._maturity_ladder({"namespace": "empty"})
+        self.assertEqual(r["level"], 0)
+        self.assertEqual(sum(1 for c in r["checks"] if c["status"] == "na"), 0)
+        self.assertIn("no learnings since 2026-07-05", self._check(r, "zone")["reason"])
+        self.assertEqual(self._check(r, "outcome")["status"], "fail")
+        self.assertEqual(r["chipClass"], "low")
+
+    def test_level_is_highest_clean_tier_and_completeness_counts_all_tiers(self):
+        r = _mod._maturity_ladder(self._mature(code_context=""))
+        self.assertEqual((r["level"], self._failing(r)), (1, ["code_context"]))
+        self.assertEqual(r["completeness"], round((r["applicable"] - 1) / r["applicable"] * 100))
+        self.assertEqual([c["id"] for c in r["next"]], ["code_context"])
+
+    def test_next_lists_only_failing_checks_one_tier_up(self):
+        r = _mod._maturity_ladder(self._mature(decisions=[]))
+        self.assertEqual(r["level"], 2)
+        self.assertEqual([c["id"] for c in r["next"]], ["decision"])
+        self.assertIn("Next step to L3: At least 1 decision logged", r["title"])
+
+    def test_global_has_the_session_check_na_but_repo_checks_apply(self):
+        r = _mod._maturity_ladder(self._mature(namespace="global", session_count=1, has_repo_path=False))
+        self.assertEqual(self._check(r, "sessions")["status"], "na")
+        self.assertEqual(self._check(r, "repo_path")["status"], "fail")
+        self.assertEqual(r["applicable"], len(r["checks"]) - 1)
+
+    def test_zone_counts_only_learnings_dated_on_or_after_the_ship_date(self):
+        self.assertEqual(self._check(_mod._maturity_ladder(self._mature()), "zone")["status"], "pass")
+        r = _mod._maturity_ladder(self._mature(learnings=[
+            {"tags": ["a"], "date": "2026-08-01T00:00:00Z"},
+            {"tags": ["b"], "date": "2026-09-01T00:00:00Z"},
+            {"tags": ["c"], "date": "2026-05-01T00:00:00Z", "zone": "golden"},
+        ]))
+        self.assertEqual(self._check(r, "zone")["status"], "fail")
+        self.assertIn("0 of 2", self._check(r, "zone")["reason"])
+
+    def test_untagged_learnings_and_reality_warnings_fail_with_reasons(self):
+        r = _mod._maturity_ladder(self._mature(
+            learnings=[{"tags": [], "date": "2026-08-01", "zone": "golden"},
+                       {"tags": ["x"], "date": "2026-08-01", "zone": "golden"}],
+            reality_structure_warnings=["Missing section: ## Backlog"]))
+        self.assertIn("1 of 2 untagged", self._check(r, "tagged")["reason"])
+        self.assertEqual(self._check(r, "reality")["status"], "pass")
+        self.assertIn("Missing section: ## Backlog", self._check(r, "reality_sections")["reason"])
+        self.assertEqual(r["level"], 1)
+
+    def test_goal_types_need_3_of_the_last_5_sessions_typed(self):
+        def status(flags):
+            rows = [{"date": f"2026-10-0{i + 1}", "typed": t} for i, t in enumerate(flags)]
+            return self._check(_mod._maturity_ladder(self._mature(goal_type_by_session=rows)), "goal_typing")["status"]
+        self.assertEqual(status([True, True, True, False, False, False, False, False]), "fail")
+        self.assertEqual(status([False, False, True, True, True]), "pass")
+        self.assertEqual(status([True, True]), "fail")
+        empty = _mod._maturity_ladder(self._mature(goal_type_by_session=[]))
+        self.assertEqual(self._check(empty, "goal_typing")["reason"], "no goal records")
+
+    def test_outcome_rate_and_stale_bullets_gate_l4(self):
+        self.assertEqual(self._check(_mod._maturity_ladder(self._mature(outcome_rate=None)), "outcome")["reason"],
+                         "no goal-outcome links yet")
+        self.assertEqual(_mod._maturity_ladder(self._mature(outcome_rate=0.29))["level"], 3)
+        self.assertIn("outcome rate 29%", self._check(_mod._maturity_ladder(self._mature(outcome_rate=0.29)), "outcome")["reason"])
+        self.assertEqual(_mod._maturity_ladder(self._mature(stale_bullet_count=2))["level"], 3)
+        self.assertEqual(self._check(_mod._maturity_ladder(self._mature(stale_bullet_count=None)), "stale")["reason"],
+                         "stale bullets not computed")
+
+    def test_load_namespace_bakes_the_ladder_into_js_data_and_the_card(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ns_dir = Path(tmp) / "demo"
+            ns_dir.mkdir()
+            (ns_dir / "state.json").write_text(json.dumps({"repo_path": "/somewhere"}))
+            (ns_dir / "reality.md").write_text("## What exists and works\n- a\n")
+            n = _mod.load_namespace(ns_dir)
+            js = json.loads(_mod._js_data([n]))[0]
+            card = _mod._card_html(n, 0)
+        self.assertEqual(js["maturityLadder"], n["maturity_ladder"])
+        self.assertIn(f'L{n["maturity_ladder"]["level"]} · {n["maturity_ladder"]["completeness"]}%', card)
+
+
 class TestGoalStatusBreakdown(unittest.TestCase):
     """goal_completions[].statuses as a per-status count plus the recent goals that did not
     complete (data-model audit Rank 6a). Counts sum to the total; unknown statuses go to other."""

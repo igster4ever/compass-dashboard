@@ -47,6 +47,7 @@ function becomes undefined (`ReferenceError: switchView is not defined`). Run
 |--------|---------------|
 | `[[NS_DATA]]` | JSON-serialised namespace array |
 | `[[BLOCKING_EDGES]]` | JSON array of cross-namespace blocking edges (E24a) |
+| `[[SECTION_LOADS]]` | global prompt-section fire rates from `<loop>/section_loads.jsonl` (`_read_section_loads()`), or `null`; feeds the Heatmap "Prompt sections" panel and the `--watch` content hash. Only `prompt --section` loads are logged, so absence means unmeasured |
 | `[[CARDS]]` | namespace card HTML |
 | `[[GENERATED_AT]]` | generation timestamp |
 | `[[N_NS]]`, `[[N_OPEN]]`, `[[N_LEARNINGS]]`, `[[N_SESSIONS]]` | header stats |
@@ -91,6 +92,7 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
 | `cadenceLastRun` | state.json `last_*_at` | `{dream, code_review, research, skill_opt, claude_review: {at, ago}}`; `skill_opt` falls back to legacy `last_skillopt_at`; `ago` is `"never"` when unset |
 | `cooldownViolationSummary` | `cooldown_violations.jsonl` | `{count, rate, recent[≤5]}`, rate per recorded session; `null` with no violations |
 | `dataProblems` | read-phase `_read_json`/`_read_jsonl` | `[{file, issue}]`, one per corrupt file; `[]` when clean |
+| `maturityLadder` | assembled NS dict | `{level, passed, applicable, completeness, checks[{tier,id,label,status,reason}], next[], chipClass, title}`, computed once by `_maturity_ladder()` (`_LADDER` table) in the assemble phase. The overview card chip is rendered server-side in `_card_html`; the Scorecard reads `ns.maturityLadder` and never recomputes. A check is a fail with a reason when data is missing, N/A only via `applies` |
 | `hasRepoPath` / `realityStructureWarnings` | state.json `repo_path` / reality.md | maturity-ladder inputs; a boolean, never the path, so local paths stay out of the page |
 | `carryForwardTrend` | all history/*.md files | `[{date, carryForward, goalsCompleted}]`; carry-forward = `## Incomplete` bullet count |
 | `lastRealityScore` | state.json `last_reality_score` | completeness % written by compass core at close; comparable only because both algorithms are identical |
@@ -166,6 +168,7 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
   (dropped), add one `{file, issue}` entry to `dataProblems`, shown as a card chip and a State-tab
   section. A missing file is not a problem. Reads outside `_read_namespace_files()` omit it, so
   nothing is counted twice.
+- **Code-review severity feeds Priorities.** `computePriorities()` scores the *latest* review: +6 per CRITICAL, +2 per HIGH, capped at 20, with a reason line naming the counts. MEDIUM and LOW add nothing.
 - **Backlog docs are hypotheses, not specs.** Verify filenames/shapes against compass source
   before implementing (e.g. `dream_defer_count` is a `state.json` scalar, not a jsonl count).
 - **Check whether data is already wired** (grep `_js_data()` and `template.html -a`) before

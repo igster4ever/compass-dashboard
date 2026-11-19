@@ -797,7 +797,6 @@
     .scard-tier-name { font-size: .62rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--subtle); }
     .scard-tier ul { list-style: none; margin: .15rem 0 0; padding: 0; }
     .scard-reason  { color: var(--subtle); }
-    .ladder-chip:empty { display: none; }
     .gs-bar    { display: flex; height: 8px; border-radius: 4px; overflow: hidden; gap: 1px; margin: .3rem 0 .4rem; }
     .gs-legend { display: flex; flex-wrap: wrap; gap: .3rem .9rem; font-size: .72rem; color: var(--muted); }
     .gs-dot    { display: inline-block; width: .55rem; height: .55rem; border-radius: 50%; margin-right: .3rem; }
@@ -867,6 +866,10 @@
     .live-meta { color: var(--muted); }
     .live-due { color: var(--amber); }
     .live-foot { display: flex; justify-content: space-between; gap: 14px; color: var(--muted); padding-top: 4px; }
+    .l-sortable { cursor: pointer; user-select: none; }
+    .l-sortable:hover { color: var(--text); }
+    .l-sortable.sorted-desc::after { content: ' \2193'; }
+    .l-sortable.sorted-asc::after  { content: ' \2191'; }
   </style>
 </head>
 <body>
@@ -965,6 +968,7 @@
 (function() {
 const NS = [[NS_DATA]];
 const BLOCKING_EDGES = [[BLOCKING_EDGES]];
+const SECTION_LOADS = [[SECTION_LOADS]];   // global prompt-section fire rates, or null
 const WATCH_SECONDS = [[WATCH_SECONDS]]; // null unless generated with --watch
 const PAGE_REV = [[PAGE_REV]];           // content hash baked at generation (--watch only)
 const REV_FILE = [[REV_FILE]];           // sidecar the page polls for the current rev (--watch only)
@@ -1915,13 +1919,15 @@ function renderLearnings(ns) {
       const icon  = c.decision === 'link' ? '\u2194' : c.decision === 'merge' ? '\u21d2' : '\u2260';
       linkHtml += `<div class="link-ref">${icon} ${esc(c.decision)} \u2014 <code>${esc(other)}</code></div>`;
     }
+    const surf = learningSurfaced(l);
     return `
-      <tr data-idx="${lIdx}" data-ltype="${type}" data-stale="${l.retrievalStale ? 'true' : 'false'}" data-zone="${l.zone && zoneLabels[l.zone] ? l.zone : 'unclassified'}"${lidTitle}>
+      <tr data-idx="${lIdx}" data-ltype="${type}" data-stale="${l.retrievalStale ? 'true' : 'false'}" data-zone="${l.zone && zoneLabels[l.zone] ? l.zone : 'unclassified'}" data-w="${w}" data-times="${surf.times}" data-last="${surf.lastMs}" data-date="${esc(date)}"${lidTitle}>
         <td><span class="weight-dot"><span class="wdot ${wCls}"></span><span class="wnum">${w}</span></span></td>
         <td class="learning-text">${esc(l.text || '')}${linkHtml}</td>
         <td><div class="tags-cell">${tags}</div></td>
         <td><span class="type-badge type-${type}">${type}</span>${conf}${staleHtml}</td>
         <td>${zoneHtml}</td>
+        <td style="color:var(--subtle);white-space:nowrap;font-size:.75rem" title="${esc(surf.title)}">${esc(surf.label)}</td>
         <td style="color:var(--subtle);white-space:nowrap;font-size:.75rem">${date}</td>
       </tr>`;
   }).join('');
@@ -1949,7 +1955,8 @@ function renderLearnings(ns) {
   const tableHtml = filterBar + `
     <table class="learnings-table" id="${tableId}">
       <thead>
-        <tr><th>Wt</th><th>Learning</th><th>Tags</th><th>Type</th><th>Zone</th><th>Date</th></tr>
+        <tr>${[['w', 'Wt'], ['', 'Learning'], ['', 'Tags'], ['', 'Type'], ['', 'Zone'], ['times', 'Surfaced'], ['date', 'Date']].map(([k, label]) =>
+          k ? `<th class="l-sortable" id="lsort-${k}-${nsId}" onclick="sortLearnings('${tableId}','${nsId}','${k}')" title="Sort by ${esc(label.toLowerCase())}">${label}</th>` : `<th>${label}</th>`).join('')}</tr>
       </thead>
       <tbody>${rows}</tbody>
     </table>`;
@@ -1961,6 +1968,46 @@ function renderLearnings(ns) {
   const learningsGroup = stateGroup('Learnings', learningsHeadline, tableHtml, {open: ns.learnings.length <= 12});
 
   return zoneDistHtml + corpusHealthHtml + supersededNote + learningsGroup;
+}
+
+// "Surfaced" cell for one learning: how often the loop showed it and when it last did. A
+// learning with weight and no surfacing is a retrieval gap, so never-surfaced is spelled out.
+function learningSurfaced(l, nowMs = Date.now()) {
+  const times  = Number(l.times_surfaced) || 0;
+  const lastMs = l.last_surfaced_at ? Date.parse(l.last_surfaced_at) : NaN;
+  if (!times && isNaN(lastMs)) return { times: 0, lastMs: 0, label: 'never', title: 'Never surfaced by the loop' };
+  const ago = isNaN(lastMs) ? '' : (() => {
+    const d = Math.max(0, Math.floor((nowMs - lastMs) / 86400000));
+    return d === 0 ? 'today' : `${d}d ago`;
+  })();
+  return {
+    times, lastMs: isNaN(lastMs) ? 0 : lastMs,
+    label: `${times}\u00d7${ago ? ' \u00b7 ' + ago : ''}`,
+    title: `Surfaced ${times} time${times === 1 ? '' : 's'}${ago ? `, last ${ago}` : ''}`,
+  };
+}
+
+// Row comparator for the Learnings sort keys. Dataset values arrive as strings; dates compare
+// as ISO text. Ties fall back to the original row order, so toggling a key is stable.
+function compareLearningRows(a, b, key, dir) {
+  const av = key === 'date' ? (a.dataset.date || '') : Number(a.dataset[key === 'times' ? 'times' : 'w']) || 0;
+  const bv = key === 'date' ? (b.dataset.date || '') : Number(b.dataset[key === 'times' ? 'times' : 'w']) || 0;
+  const primary = av < bv ? -1 : av > bv ? 1 : 0;
+  return (primary * dir) || ((Number(a.dataset.idx) || 0) - (Number(b.dataset.idx) || 0));
+}
+
+function sortLearnings(tableId, nsId, key) {
+  const table = document.getElementById(tableId);
+  if (!table) return;
+  const dir = table.dataset.sortKey === key && table.dataset.sortDir === 'desc' ? 1 : -1; // first click: high/new first
+  table.dataset.sortKey = key;
+  table.dataset.sortDir = dir === 1 ? 'asc' : 'desc';
+  const body = table.querySelector('tbody');
+  Array.from(body.querySelectorAll('tr')).sort((a, b) => compareLearningRows(a, b, key, dir))
+    .forEach(row => body.appendChild(row));
+  table.querySelectorAll('th.l-sortable').forEach(th => th.classList.remove('sorted-asc', 'sorted-desc'));
+  const th = document.getElementById(`lsort-${key}-${nsId}`);
+  if (th) th.classList.add(dir === 1 ? 'sorted-asc' : 'sorted-desc');
 }
 
 function applyLearningFilters(table, nsId) {
@@ -2473,6 +2520,14 @@ function computePriorities() {
     if ((ns.codeReviewDeferCount || 0) >= 2) {
       score += 10;
       reasons.push({ icon: '🔬', text: `Code review deferred ${ns.codeReviewDeferCount}x — overdue` });
+    }
+    const crLast = ns.codeReviews && ns.codeReviews.reviews && ns.codeReviews.reviews.length
+      ? ns.codeReviews.reviews[ns.codeReviews.reviews.length - 1] : null;
+    if (crLast && ((crLast.critical || 0) + (crLast.high || 0)) > 0) {
+      score += Math.min((crLast.critical || 0) * 6 + (crLast.high || 0) * 2, 20);
+      const sev = [['critical', crLast.critical], ['high', crLast.high]]
+        .filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k.toUpperCase()}`).join(', ');
+      reasons.push({ icon: '🛡', text: `Latest code review (${crLast.date}) found ${sev}` });
     }
     if ((ns.researchDeferCount || 0) >= 2) {
       score += 8;
@@ -3373,6 +3428,7 @@ function renderHeatmap() {
     <button class="dag-btn"        id="hbtn-planning"   onclick="switchHeatmap('planning')">Planning</button>
     <button class="dag-btn"        id="hbtn-swimlane"   onclick="switchHeatmap('swimlane')">Session Timeline</button>
     <button class="dag-btn"        id="hbtn-quality"    onclick="switchHeatmap('quality')">Quality (P51)</button>
+    <button class="dag-btn"        id="hbtn-prompts"    onclick="switchHeatmap('prompts')">Prompt sections</button>
   </div>
   <div id="hpanel-sessions"></div>
   <div id="hpanel-goals"      style="display:none"></div>
@@ -3380,12 +3436,13 @@ function renderHeatmap() {
   <div id="hpanel-goaltypes"  style="display:none"></div>
   <div id="hpanel-planning"   style="display:none"></div>
   <div id="hpanel-swimlane"   style="display:none"></div>
-  <div id="hpanel-quality"    style="display:none"></div>`;
+  <div id="hpanel-quality"    style="display:none"></div>
+  <div id="hpanel-prompts"    style="display:none"></div>`;
   renderSessionHeatmapPanel();
 }
 
 function switchHeatmap(name) {
-  ['sessions', 'goals', 'velocity', 'goaltypes', 'planning', 'swimlane', 'quality'].forEach(id => {
+  ['sessions', 'goals', 'velocity', 'goaltypes', 'planning', 'swimlane', 'quality', 'prompts'].forEach(id => {
     document.getElementById('hpanel-' + id).style.display = id === name ? '' : 'none';
     document.getElementById('hbtn-' + id).classList.toggle('active', id === name);
   });
@@ -3395,6 +3452,7 @@ function switchHeatmap(name) {
   if (name === 'planning')  renderPlanningPanel();
   if (name === 'swimlane')  renderSwimlane();
   if (name === 'quality')   renderQualityTrendPanel();
+  if (name === 'prompts')   renderPromptSectionsPanel();
 }
 
 function renderHeatmapGrid(periods, nsSorted, cellFn, legendHtml) {
@@ -3878,106 +3936,10 @@ function renderCompare() {
 }
 
 // ── Maturity ladder ───────────────────────────────────────────────────────────
-// Levels L1–L4, each a list of named checks over the baked NS data
-// (docs/backlog/maturity-ladder-scorecard-design-note.md). A check's test returns true to pass
-// or a reason string to fail: no data is a fail with its own reason. A check is N/A only when
-// its applies(ns) is false. Level = highest tier with every check up to it passing;
-// completeness = passed / applicable over all tiers, so partial progress still shows.
-
-const ZONE_SHIP_DATE = '2026-07-05';
+// Computed in Python (`_maturity_ladder`) and baked as ns.maturityLadder; the card chip is
+// rendered server-side. This side only draws the Scorecard row and its drawer.
 
 const LADDER_TIERS = { 1: 'Registered', 2: 'Wired', 3: 'Instrumented', 4: 'Calibrated' };
-
-const LADDER = [
-  { tier: 1, id: 'intent', label: 'intent.md written',
-    test: ns => (ns.intent || '').trim() ? true : 'intent.md is empty' },
-  { tier: 1, id: 'reality', label: 'reality.md written',
-    test: ns => (ns.reality || '').trim() ? true : 'reality.md is empty' },
-  { tier: 1, id: 'closed', label: 'At least 1 closed session',
-    test: ns => (ns.sessionCount || 0) >= 1 ? true : 'no closed sessions' },
-  { tier: 2, id: 'repo_path', label: 'repo_path set',
-    test: ns => ns.hasRepoPath ? true : 'no repo_path in state.json' },
-  { tier: 2, id: 'claude_md', label: 'CLAUDE.md exists',
-    test: ns => ((ns.claudeReviewStatus || {}).claude_md_files || {})['CLAUDE.md'] != null ? true : 'no CLAUDE.md' },
-  { tier: 2, id: 'code_context', label: 'code_context.md written',
-    test: ns => (ns.codeContext || '').trim() ? true : 'no code_context.md' },
-  { tier: 2, id: 'reality_sections', label: 'reality.md has the standard sections',
-    test: ns => !(ns.reality || '').trim() ? 'reality.md is empty'
-      : (ns.realityStructureWarnings || []).length ? ns.realityStructureWarnings.join('; ') : true },
-  { tier: 2, id: 'sessions', label: 'At least 3 sessions',
-    applies: ns => ns.namespace !== 'global',
-    test: ns => (ns.sessionCount || 0) >= 3 ? true : `${ns.sessionCount || 0} of 3 sessions` },
-  { tier: 3, id: 'tagged', label: 'Every active learning tagged',
-    test: ns => {
-      const ls = ns.learnings || [];
-      if (!ls.length) return 'no active learnings';
-      const n = ls.filter(l => !(l.tags || []).length).length;
-      return n ? `${n} of ${ls.length} untagged` : true;
-    } },
-  { tier: 3, id: 'zone', label: `At least half of learnings since ${ZONE_SHIP_DATE} zoned`,
-    test: ns => {
-      const ls = (ns.learnings || []).filter(l => (l.date || '').slice(0, 10) >= ZONE_SHIP_DATE);
-      if (!ls.length) return `no learnings since ${ZONE_SHIP_DATE}`;
-      const z = ls.filter(l => l.zone).length;
-      return z * 2 >= ls.length ? true : `${z} of ${ls.length} zoned`;
-    } },
-  { tier: 3, id: 'goal_types', label: 'Goal types in 3 of the last 5 sessions',
-    test: ns => {
-      const last = (ns.goalTypeBySession || []).slice(-5);
-      const n = last.filter(s => s.typed).length;
-      if (!last.length) return 'no goal records';
-      return n >= 3 ? true : `${n} of the last ${last.length} session${last.length === 1 ? '' : 's'} typed`;
-    } },
-  { tier: 3, id: 'decision', label: 'At least 1 decision logged',
-    test: ns => (ns.decisions || []).length ? true : 'no decisions logged' },
-  { tier: 4, id: 'outcome', label: 'Outcome rate at least 30%',
-    test: ns => ns.outcomeRate == null ? 'no goal-outcome links yet'
-      : ns.outcomeRate >= 0.3 ? true : `outcome rate ${Math.round(ns.outcomeRate * 100)}%` },
-  { tier: 4, id: 'stale', label: 'No stale reality bullets',
-    test: ns => ns.staleBulletCount == null ? 'stale bullets not computed'
-      : ns.staleBulletCount === 0 ? true : `${ns.staleBulletCount} stale reality bullets` },
-];
-
-function ladderLevel(ns) {
-  const checks = LADDER.map(c => {
-    if (c.applies && !c.applies(ns)) return { tier: c.tier, id: c.id, label: c.label, status: 'na', reason: '' };
-    const r = c.test(ns);
-    return { tier: c.tier, id: c.id, label: c.label,
-             status: r === true ? 'pass' : 'fail', reason: r === true ? '' : String(r) };
-  });
-  let level = 0;
-  for (const t of [...new Set(LADDER.map(c => c.tier))].sort((a, b) => a - b)) {
-    if (checks.some(c => c.tier === t && c.status === 'fail')) break;
-    level = t;
-  }
-  const applicable = checks.filter(c => c.status !== 'na').length;
-  const passed     = checks.filter(c => c.status === 'pass').length;
-  return {
-    level, passed, applicable, checks,
-    completeness: applicable ? Math.round(passed / applicable * 100) : 0,
-    next: checks.filter(c => c.tier === level + 1 && c.status === 'fail'),
-  };
-}
-
-function ladderChipClass(level) { return level >= 3 ? 'high' : level === 2 ? 'mid' : 'low'; }
-
-function ladderChipTitle(r) {
-  return r.next.length
-    ? `Maturity ladder: ${r.passed} of ${r.applicable} checks pass. Next step to L${r.level + 1}: ${r.next.map(c => c.label).join('; ')}`
-    : `Maturity ladder: ${r.passed} of ${r.applicable} checks pass`;
-}
-
-// Overview cards are static HTML from generate(); fill each card's empty ladder chip here.
-function renderLadderChips() {
-  document.querySelectorAll('.ladder-chip[data-ladder-idx]').forEach(el => {
-    const ns = NS[+el.dataset.ladderIdx];
-    if (!ns) return;
-    const r = ladderLevel(ns);
-    el.classList.add(ladderChipClass(r.level));
-    el.textContent = `L${r.level} · ${r.completeness}%`;
-    el.title = ladderChipTitle(r);
-  });
-}
 
 function ladderDrawerHtml(r) {
   const icon = { pass: '<span style="color:var(--green)">✓</span>',
@@ -4015,7 +3977,7 @@ function renderScorecard() {
     const days       = _daysSince(ns.open ? ns.lastOpen : ns.lastClose);
     const recency    = Math.max(0, Math.min(100, 100 - days * (100 / 30)));
     const discipline = (ns.goalRate !== null && ns.goalRate !== undefined) ? ns.goalRate : 50;
-    const ladder     = ladderLevel(ns);
+    const ladder     = ns.maturityLadder || { level: 0, completeness: 0, passed: 0, applicable: 0, checks: [], next: [], chipClass: 'low', title: '' };
     const completeness = ladder.completeness;
     const learning   = ns.sessionCount > 0 ? (ns.learnings || []).length / ns.sessionCount : 0;
     const focus      = 1 / (1 + (ns.deferred || []).length);
@@ -4106,7 +4068,7 @@ function renderScorecard() {
       <span class="scard-rank">${ri + 1}</span>
       <span class="scard-ns" style="color:${col}">${esc(r.ns.namespace)}</span>
       <span class="scard-score" style="color:${col}">${Math.round(r.health)}%</span>
-      <span class="scard-ladder"><span class="rate-pill ${ladderChipClass(lad.level)}" title="${esc(ladderChipTitle(lad))}">L${lad.level} · ${lad.completeness}%</span></span>
+      <span class="scard-ladder"><span class="rate-pill ${esc(lad.chipClass)}" title="${esc(lad.title)}">L${lad.level} · ${lad.completeness}%</span></span>
       <div class="scard-bars">${bars}</div>
     </summary>${ladderDrawerHtml(lad)}</details>`;
   }).join('');
@@ -4433,6 +4395,31 @@ function _renderQualityScoreSparklines() {
     <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.5rem">
       P51 composite quality score · goal completion · outcome rate · learning density · reality freshness</div>
     ${rows}
+  </div>`;
+}
+
+// Global, not per namespace: how often each compass prompt section was loaded via
+// `prompt --section`. Inline sub-skill steps are not logged, so absence means unmeasured.
+function renderPromptSectionsPanel() {
+  const container = document.getElementById('hpanel-prompts');
+  if (container.dataset.rendered) return;
+  container.dataset.rendered = '1';
+  const d = SECTION_LOADS;
+  if (!d || !d.sections || !d.sections.length) {
+    container.innerHTML = '<div class="empty-state" style="padding:2rem;text-align:center">No prompt-section loads logged yet.</div>';
+    return;
+  }
+  const max = Math.max(...d.sections.map(x => x.count), 1);
+  const rows = d.sections.map(x => `<tr>
+      <td style="padding:.25rem .6rem .25rem 0;max-width:26rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(x.file + ' > ' + x.section)}">${esc(x.section)}<div class="gs-date">${esc(x.file)}</div></td>
+      <td style="width:9rem"><div style="height:8px;border-radius:2px;background:var(--blue);width:${Math.max(2, Math.round(x.count / max * 100))}%"></div></td>
+      <td style="padding:0 .6rem;text-align:right">${x.count}</td>
+      <td class="gs-date" style="white-space:nowrap">${esc(x.lastAt)}</td></tr>`).join('');
+  const shown = d.sections.length < d.distinct ? `top ${d.sections.length} of ${d.distinct} sections` : `${d.distinct} sections`;
+  container.innerHTML = `<div style="padding:.8rem 1rem .6rem">
+    <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.5rem">
+      ${d.total} loads, ${esc(d.firstAt)} to ${esc(d.lastAt)} · ${esc(shown)} · only <code>prompt --section</code> loads are logged, so inline steps are unmeasured</div>
+    <table style="border-collapse:collapse;font-size:.78rem"><tbody>${rows}</tbody></table>
   </div>`;
 }
 
@@ -5461,10 +5448,6 @@ function resetDAGLayout() {
   _dag.tick = 0; _dag.raf = requestAnimationFrame(dagSimStep);
 }
 
-// Ladder chips read LADDER, declared far below the other start-up calls; run them here,
-// after every declaration, to stay out of the temporal dead zone.
-renderLadderChips();
-
 // Auto-open first card when only one namespace is shown
 if (NS.length === 1) selectCard(0);
 
@@ -5475,7 +5458,7 @@ if (NS.length === 1) selectCard(0);
 // definition site inside renderDecisionsView() (closures over local render state).
 Object.assign(window, {
   renderLiveStrip,
-  switchView, switchTab, switchHeatmap, selectCard, setFilter,
+  switchView, switchTab, switchHeatmap, selectCard, setFilter, sortLearnings,
   toggleSession, filterLearningType, filterLearningZone,
   openSearch, closeSearch, closeSearchIfBackdrop, handleSearch, handleSearchKey, handleResultClick,
   toggleDAGSystem, resetDAGLayout, clearDAGFocus,

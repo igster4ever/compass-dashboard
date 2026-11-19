@@ -161,7 +161,7 @@ class TestRenderHtml(unittest.TestCase):
     def test_placeholder_markers_all_replaced(self):
         for placeholder in ("[[GENERATED_AT]]", "[[N_NS]]", "[[N_OPEN]]",
                             "[[N_LEARNINGS]]", "[[N_SESSIONS]]", "[[CARDS]]",
-                            "[[NS_DATA]]", "[[BLOCKING_EDGES]]", "[[WATCH_SECONDS]]", "[[PAGE_REV]]", "[[REV_FILE]]"):
+                            "[[NS_DATA]]", "[[BLOCKING_EDGES]]", "[[SECTION_LOADS]]", "[[WATCH_SECONDS]]", "[[PAGE_REV]]", "[[REV_FILE]]"):
             self.assertNotIn(placeholder, self.html,
                              msg=f"Unreplaced placeholder found: {placeholder}")
 
@@ -229,7 +229,7 @@ class TestTemplateFile(unittest.TestCase):
         content = self._template.read_text(encoding="utf-8")
         for marker in ("[[GENERATED_AT]]", "[[N_NS]]", "[[N_OPEN]]",
                        "[[N_LEARNINGS]]", "[[N_SESSIONS]]", "[[CARDS]]",
-                       "[[NS_DATA]]", "[[BLOCKING_EDGES]]", "[[WATCH_SECONDS]]", "[[PAGE_REV]]", "[[REV_FILE]]"):
+                       "[[NS_DATA]]", "[[BLOCKING_EDGES]]", "[[SECTION_LOADS]]", "[[WATCH_SECONDS]]", "[[PAGE_REV]]", "[[REV_FILE]]"):
             self.assertIn(marker, content, msg=f"Missing placeholder in template.html: {marker}")
 
 
@@ -426,7 +426,8 @@ class TestZoneAndRetrievalStale(unittest.TestCase):
 
     def test_zone_column_header_present_in_template(self):
         template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
-        self.assertIn("<th>Zone</th>", template)
+        self.assertIn("['', 'Zone']", template)       # header cells come from a [sortKey, label] list
+        self.assertIn("['times', 'Surfaced']", template)
 
     def test_retrieval_stale_filter_button_present_in_template(self):
         template = (Path(__file__).parent.parent / "scripts" / "template.html").read_text()
@@ -598,7 +599,8 @@ class TestWatchMode(unittest.TestCase):
 
     def _once(self, ns, prev_rev=None, watch=5):
         from unittest.mock import patch
-        with patch.object(_mod, "discover_namespaces", return_value=[ns]):
+        with patch.object(_mod, "discover_namespaces", return_value=[ns]), \
+                patch.object(_mod, "_read_section_loads", return_value=None):
             return _mod._generate_once(None, self.out, watch, prev_rev)
 
     def test_rev_ignores_clock_only_fields(self):
@@ -703,6 +705,51 @@ class TestWatchMode(unittest.TestCase):
              patch.object(_mod.sys, "stderr", err):
             _mod._watch(None, self.out, 5)
         self.assertIn("RuntimeError: boom", err.getvalue())
+
+class TestSectionLoads(unittest.TestCase):
+    """`_read_section_loads`: the loop-root prompt-section log, baked as SECTION_LOADS."""
+
+    def _loop(self, lines):
+        import tempfile
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(d, ignore_errors=True))
+        if lines is not None:
+            (d / "section_loads.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return d
+
+    @staticmethod
+    def _row(at, file, section):
+        return json.dumps({"at": at, "file": file, "section": section, "namespace": None})
+
+    def test_absent_or_empty_file_is_none(self):
+        self.assertIsNone(_mod._read_section_loads(self._loop(None)))
+        self.assertIsNone(_mod._read_section_loads(self._loop(["not json", '{"at": "x"}'])))
+
+    def test_counts_rank_most_loaded_first_with_last_load(self):
+        loop = self._loop([
+            self._row("2026-10-20T08:00:00Z", "a.md", "Step 1"),
+            self._row("2026-10-21T08:00:00Z", "b.md", "Step 2"),
+            self._row("2026-10-22T08:00:00Z", "b.md", "Step 2"),
+        ])
+        out = _mod._read_section_loads(loop)
+        self.assertEqual((out["total"], out["distinct"], out["firstAt"], out["lastAt"]),
+                         (3, 2, "2026-10-20", "2026-10-22"))
+        self.assertEqual(out["sections"][0], {"file": "b.md", "section": "Step 2", "count": 2, "lastAt": "2026-10-22"})
+        self.assertEqual(out["sections"][1]["count"], 1)
+
+    def test_sections_are_capped_but_distinct_counts_all(self):
+        n = _mod._SECTION_LOADS_SHOWN + 3
+        loop = self._loop([self._row("2026-10-20T08:00:00Z", "a.md", f"S{i}") for i in range(n)])
+        out = _mod._read_section_loads(loop)
+        self.assertEqual((len(out["sections"]), out["distinct"]), (_mod._SECTION_LOADS_SHOWN, n))
+
+    def test_generate_bakes_the_constant_and_the_rev_tracks_it(self):
+        loads = {"total": 1, "firstAt": "2026-10-20", "lastAt": "2026-10-20", "distinct": 1,
+                 "sections": [{"file": "a.md", "section": "S", "count": 1, "lastAt": "2026-10-20"}]}
+        self.assertIn("const SECTION_LOADS = null;", _mod.generate([_minimal_ns()]))
+        self.assertIn('const SECTION_LOADS = {"total": 1', _mod.generate([_minimal_ns()], section_loads=loads))
+        self.assertNotEqual(_mod._content_rev([_minimal_ns()]), _mod._content_rev([_minimal_ns()], loads))
+
 
 
 if __name__ == "__main__":
