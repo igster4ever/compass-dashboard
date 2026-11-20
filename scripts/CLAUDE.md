@@ -100,6 +100,8 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
 | `confidenceCalibration` | learnings.jsonl (**unfiltered**) | P59; `null` below 8 resolved hypotheses |
 | `failureDimensionDistribution` | `skill_feedback.jsonl` | P69; dashboard-only aggregation |
 | `codeReviews` | `code_reviews/*.md` | `{count, reviews[≤12: {date, critical, high, medium, low, total}], latest: {date, total, findings[≤10: {severity, title, category}]}}`; `null` with none. Parsed by `_parse_code_review` in the read phase (`raw["code_reviews"]`); the format is a prompt convention with three live shapes, so `TestCodeReviews` pins each and a live-data guard fails on a file that parses to nothing |
+| `appliedSessions` / `fromGoal` (per learning) | `learning_applications.jsonl`, `goal_origin` + history files | derived in assemble by `_application_counts()` / `_goal_origin_text()`; `fromGoal` joins by the history file whose Opened..Closed window holds the learning's `date`, and is `null` when none does (logged after close): never guess |
+| `impulseCapture` | state.json `cycle_history[].raw_impulse` | `{captured, total, needed}` count only, `null` when no entry carries the key. **Never put impulse text in the page** (observer effect on P74 Phase 2) |
 
 `history` is capped at 5 for rendering. `sessionDates` is the full set.
 

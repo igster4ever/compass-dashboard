@@ -1966,5 +1966,49 @@ class TestDiscoverNamespacesConcurrent(unittest.TestCase):
         self.assertEqual(strip(got), strip(serial))
 
 
+class TestRank5Helpers(unittest.TestCase):
+    """Rank 5 (design note 2026-10-30): applied-in-N-sessions, from-goal join, impulse capture rate."""
+
+    def test_application_counts_are_distinct_sessions_per_learning(self):
+        rows = [
+            {"learning_id": "a", "session_id": "s1", "quality_score": 0.9},
+            {"learning_id": "a", "session_id": "s1", "quality_score": 0.9},  # same session twice
+            {"learning_id": "a", "session_id": "s2", "quality_score": 0.8},
+            {"learning_id": "b", "session_id": "s1", "quality_score": 0.9},
+            {"learning_id": "", "session_id": "s1"}, {"session_id": "s9"},   # no id: ignored
+        ]
+        self.assertEqual(_mod._application_counts(rows), {"a": 2, "b": 1})
+        self.assertEqual(_mod._application_counts([]), {})
+
+    def _hist(self):
+        return [
+            {"opened": "2026-06-22T12:00:00Z", "closed": "2026-06-22T13:00:00Z", "planned": ["goal zero", "goal one"]},
+            {"opened": "2026-06-23T09:00:00Z", "closed": "2026-06-23T10:00:00Z", "planned": ["next day"]},
+        ]
+
+    def test_goal_origin_resolves_by_window_and_index(self):
+        f = _mod._goal_origin_text
+        self.assertEqual(f({"goal_origin": [1], "date": "2026-06-22T12:52:50Z"}, self._hist()), "goal one")
+        self.assertEqual(f({"goal_origin": [0, 1], "date": "2026-06-22T12:52:50Z"}, self._hist()), "goal zero; goal one")
+        self.assertEqual(f({"goal_origin": ["1"], "date": "2026-06-22T12:52:50Z"}, self._hist()), "goal one",
+                         "a string index is coerced (seen in live data)")
+
+    def test_goal_origin_never_guesses(self):
+        f = _mod._goal_origin_text
+        self.assertIsNone(f({"goal_origin": [1], "date": "2026-06-22T15:00:00Z"}, self._hist()), "logged after close")
+        self.assertIsNone(f({"goal_origin": [5], "date": "2026-06-22T12:52:50Z"}, self._hist()), "index out of range")
+        self.assertIsNone(f({"goal_origin": ["x"], "date": "2026-06-22T12:52:50Z"}, self._hist()))
+        self.assertIsNone(f({"goal_origin": [], "date": "2026-06-22T12:52:50Z"}, self._hist()))
+        self.assertIsNone(f({"goal_origin": [0]}, self._hist()), "no date")
+
+    def test_impulse_capture_counts_only_and_never_carries_text(self):
+        cap = _mod._impulse_capture([{"raw_impulse": "secret words"}, {"raw_impulse": ""},
+                                     {"raw_impulse": "  "}, {"minutes": 5}])
+        self.assertEqual(cap, {"captured": 1, "total": 3, "needed": 8})
+        self.assertNotIn("secret", json.dumps(cap))
+        self.assertIsNone(_mod._impulse_capture([{"minutes": 5}]), "no entry carries the key")
+        self.assertIsNone(_mod._impulse_capture([]))
+
+
 if __name__ == "__main__":
     unittest.main()

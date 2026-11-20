@@ -1606,6 +1606,14 @@ function renderStateSection_DataProblems(ns) {
   </div>`;
 }
 
+// Impulse capture as a count only, never the text: showing past impulses would let the user write
+// them for the dashboard and bias the P74 Phase 2 measurement it is gating.
+function renderStateSection_ImpulseCapture(ns) {
+  const ic = ns.impulseCapture;
+  if (!ic || !ic.total) return '';
+  return `<div style="font-size:.75rem;color:var(--muted);margin:.4rem 0">Impulse captured in ${ic.captured} of ${ic.total} recent opens; P74 Phase 2 needs ${ic.needed}\u201310.</div>`;
+}
+
 const CADENCE_LAST_RUN_LABELS = [
   ['dream', 'dream'], ['code_review', 'code review'], ['research', 'research'],
   ['skill_opt', 'SkillOpt'], ['claude_review', 'CLAUDE.md review'],
@@ -1777,6 +1785,7 @@ function renderState(ns) {
 
   const healthStrip = [
     renderStateSection_DataProblems(ns),
+    renderStateSection_ImpulseCapture(ns),
     renderStateSection_CycleSparkline(ns),
     renderStateSection_CadenceStatus(ns),
     renderStateSection_DreamStatus(ns),
@@ -1921,13 +1930,14 @@ function renderLearnings(ns) {
     }
     const surf = learningSurfaced(l);
     return `
-      <tr data-idx="${lIdx}" data-ltype="${type}" data-stale="${l.retrievalStale ? 'true' : 'false'}" data-zone="${l.zone && zoneLabels[l.zone] ? l.zone : 'unclassified'}" data-w="${w}" data-times="${surf.times}" data-last="${surf.lastMs}" data-date="${esc(date)}"${lidTitle}>
+      <tr data-idx="${lIdx}" data-ltype="${type}" data-stale="${l.retrievalStale ? 'true' : 'false'}" data-zone="${l.zone && zoneLabels[l.zone] ? l.zone : 'unclassified'}" data-w="${w}" data-times="${surf.times}" data-last="${surf.lastMs}" data-applied="${Number(l.appliedSessions) || 0}" data-date="${esc(date)}"${lidTitle}>
         <td><span class="weight-dot"><span class="wdot ${wCls}"></span><span class="wnum">${w}</span></span></td>
-        <td class="learning-text">${esc(l.text || '')}${linkHtml}</td>
+        <td class="learning-text">${esc(l.text || '')}${linkHtml}${l.fromGoal ? `<div class="link-ref" title="Planned goal of the session that logged this learning">\u21b3 from goal: ${esc(l.fromGoal)}</div>` : ''}</td>
         <td><div class="tags-cell">${tags}</div></td>
         <td><span class="type-badge type-${type}">${type}</span>${conf}${staleHtml}</td>
         <td>${zoneHtml}</td>
         <td style="color:var(--subtle);white-space:nowrap;font-size:.75rem" title="${esc(surf.title)}">${esc(surf.label)}</td>
+        <td style="color:var(--subtle);white-space:nowrap;font-size:.75rem" title="${esc(learningApplied(l).title)}">${esc(learningApplied(l).label)}</td>
         <td style="color:var(--subtle);white-space:nowrap;font-size:.75rem">${date}</td>
       </tr>`;
   }).join('');
@@ -1955,7 +1965,7 @@ function renderLearnings(ns) {
   const tableHtml = filterBar + `
     <table class="learnings-table" id="${tableId}">
       <thead>
-        <tr>${[['w', 'Wt'], ['', 'Learning'], ['', 'Tags'], ['', 'Type'], ['', 'Zone'], ['times', 'Surfaced'], ['date', 'Date']].map(([k, label]) =>
+        <tr>${[['w', 'Wt'], ['', 'Learning'], ['', 'Tags'], ['', 'Type'], ['', 'Zone'], ['times', 'Surfaced'], ['applied', 'Applied'], ['date', 'Date']].map(([k, label]) =>
           k ? `<th class="l-sortable" id="lsort-${k}-${nsId}" onclick="sortLearnings('${tableId}','${nsId}','${k}')" title="Sort by ${esc(label.toLowerCase())}">${label}</th>` : `<th>${label}</th>`).join('')}</tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -1987,11 +1997,20 @@ function learningSurfaced(l, nowMs = Date.now()) {
   };
 }
 
+// "Applied" cell: in how many distinct sessions the learning was confirmed as applied. A plain
+// count; the session quality_score is not shown per learning because it belongs to the session.
+function learningApplied(l) {
+  const n = Number(l.appliedSessions) || 0;
+  return { n, label: n ? `${n} session${n === 1 ? '' : 's'}` : '\u2014',
+           title: n ? `Applied in ${n} distinct session${n === 1 ? '' : 's'}` : 'No recorded applications' };
+}
+
 // Row comparator for the Learnings sort keys. Dataset values arrive as strings; dates compare
 // as ISO text. Ties fall back to the original row order, so toggling a key is stable.
 function compareLearningRows(a, b, key, dir) {
-  const av = key === 'date' ? (a.dataset.date || '') : Number(a.dataset[key === 'times' ? 'times' : 'w']) || 0;
-  const bv = key === 'date' ? (b.dataset.date || '') : Number(b.dataset[key === 'times' ? 'times' : 'w']) || 0;
+  const field = { times: 'times', applied: 'applied' }[key] || 'w';
+  const av = key === 'date' ? (a.dataset.date || '') : Number(a.dataset[field]) || 0;
+  const bv = key === 'date' ? (b.dataset.date || '') : Number(b.dataset[field]) || 0;
   const primary = av < bv ? -1 : av > bv ? 1 : 0;
   return (primary * dir) || ((Number(a.dataset.idx) || 0) - (Number(b.dataset.idx) || 0));
 }

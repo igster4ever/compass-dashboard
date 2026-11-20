@@ -81,4 +81,4 @@ so the row shows only the part after the dash, and nothing when the goal already
 **Learnings sub-tab** — type and zone filters compose through `applyLearningFilters(table,
 nsId)` over `data-ltype`/`data-zone`; never set `row.style.display` from a second independent
 filter. `filterLearningZone` (click-to-toggle) and `sortLearnings` (header click: first click high/new first, second reverses) are exported; `applyLearningFilters` is not.
-Sort keys are `data-w`, `data-times` (`times_surfaced`) and `data-date`. The Surfaced cell comes from `learningSurfaced()` and reads `never` for a learning the loop has not surfaced, the retrieval-gap signal.
+Sort keys are `data-w`, `data-times` (`times_surfaced`), `data-applied` and `data-date`. The Applied cell (`learningApplied()`) is the count of distinct sessions in `learning_applications.jsonl`, never the session `quality_score`. A learning row shows `↳ from goal: …` when `fromGoal` resolved (see `_goal_origin_text`). The Surfaced cell comes from `learningSurfaced()` and reads `never` for a learning the loop has not surfaced, the retrieval-gap signal.

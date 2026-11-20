@@ -50,7 +50,6 @@ IGNORED = {
         "_warnings": "core's own write-time warnings, not namespace data",
     },
     "cycle_history": {
-        "raw_impulse": f"{_UNREAD_AUDIT} Rank 5 (P74)",
         "prompt_count_sources": "prompt-count instrumentation for core's own overhead metric",
         "open_prompt_count": "prompt-count instrumentation for core's own overhead metric",
         "close_prompt_count": "prompt-count instrumentation for core's own overhead metric",
@@ -62,7 +61,6 @@ IGNORED = {
         "closed_at": "session_id identifies the entry",
     },
     "learnings": {
-        "goal_origin": f"{_UNREAD_AUDIT} Rank 5",
         "priority": "core's retrieval ranking input; weight is the displayed strength",
         "seed_origin": "P67 cold-start provenance; seeded learnings are rare",
         "test_window": "hypothesis validation window; core prompts on expiry at open",
@@ -72,7 +70,6 @@ IGNORED = {
         "superseded_reason": "superseded rows are filtered out by the active filter",
     },
     "files": {
-        "learning_applications.jsonl": f"{_UNREAD_AUDIT} Rank 5 (P64)",
         "skill_edit_rejections.jsonl": "SkillOpt-internal rejection log",
         "claude.md": _NOT_LOOP_FILE,
         "SKILL.md": _NOT_LOOP_FILE,

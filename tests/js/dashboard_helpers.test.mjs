@@ -58,7 +58,7 @@ function extractConst(name) {
   return html.slice(start, i + 1);
 }
 
-const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'globalVisibleNames', 'visibleNS', 'renderCompare', 'deriveTasks', 'renderDecisions', 'detailTabs', 'decisionsTabLabel', 'renderStateSection_GoalStatuses', 'goalStatusHeadline', '_complexityProbeErrors', 'renderStateSection_DataProblems', 'renderStateSection_BacklogMatch', 'backlogMatchHeadline', '_cadenceLastRun', '_cooldownOverrides', 'windowLabel', 'renderStateSection_CycleSparkline', 'codeReviewHeadline', 'renderStateSection_CodeReviews', 'learningSurfaced', 'compareLearningRows'];
+const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'globalVisibleNames', 'visibleNS', 'renderCompare', 'deriveTasks', 'renderDecisions', 'detailTabs', 'decisionsTabLabel', 'renderStateSection_GoalStatuses', 'goalStatusHeadline', '_complexityProbeErrors', 'renderStateSection_DataProblems', 'renderStateSection_BacklogMatch', 'backlogMatchHeadline', '_cadenceLastRun', '_cooldownOverrides', 'windowLabel', 'renderStateSection_CycleSparkline', 'codeReviewHeadline', 'renderStateSection_CodeReviews', 'learningSurfaced', 'learningApplied', 'renderStateSection_ImpulseCapture', 'compareLearningRows'];
 const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES', 'NS_PALETTE', 'COMPARE_AXIS_DEFS', 'GLOBAL_NS_KEY', 'CADENCE_LAST_RUN_LABELS', 'CODE_REVIEW_SEVERITIES'];
 // A minimal in-memory localStorage — radarActiveAxes() reads it; no test here
 // relies on cross-call persistence, so a single shared instance is fine.
@@ -557,4 +557,24 @@ test('compareLearningRows(): sorts by weight, surfaced count and date; ties keep
   assert.equal(order('times', -1), '1320');  // surfaced most first; 3/3 tie keeps original order
   assert.equal(order('times', 1), '0213');   // never-surfaced first when ascending: the retrieval gaps
   assert.equal(order('date', -1), '2301');   // newest first as ISO text; the 08-01 tie keeps row order
+});
+
+test('learningApplied(): a plain session count, a dash when none', () => {
+  assert.equal(helpers.learningApplied({}).label, '\u2014');
+  assert.equal(helpers.learningApplied({ appliedSessions: 1 }).label, '1 session');
+  assert.equal(helpers.learningApplied({ appliedSessions: 3 }).label, '3 sessions');
+});
+
+test('compareLearningRows(): sorts by applied count', () => {
+  const row = (idx, applied) => ({ dataset: { idx: String(idx), applied: String(applied) } });
+  const rows = [row(0, 0), row(1, 2), row(2, 1)];
+  assert.equal([...rows].sort((a, b) => helpers.compareLearningRows(a, b, 'applied', -1)).map(r => r.dataset.idx).join(''), '120');
+});
+
+test('renderStateSection_ImpulseCapture(): shows the count line and never any impulse text', () => {
+  assert.equal(helpers.renderStateSection_ImpulseCapture({}), '');
+  assert.equal(helpers.renderStateSection_ImpulseCapture({ impulseCapture: null }), '');
+  const html = helpers.renderStateSection_ImpulseCapture({ impulseCapture: { captured: 3, total: 10, needed: 8, raw_impulse: 'leak' } });
+  assert.match(html, /Impulse captured in 3 of 10 recent opens; P74 Phase 2 needs 8/);
+  assert.doesNotMatch(html, /leak/);
 });

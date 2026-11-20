@@ -395,6 +395,58 @@ def _retrieval_stale_texts(active_learnings, surfaced_threshold=_RETRIEVAL_STALE
     return texts
 
 
+_IMPULSE_PHASE2_NEEDED = 8  # P74 Phase 2 needs 8-10 captured impulses; 8 is the low end
+
+
+def _application_counts(rows):
+    """{learning_id: number of distinct sessions that applied it} from learning_applications.jsonl.
+
+    A plain count: the row's quality_score belongs to the session, not the learning, so it is
+    never shown per learning (docs/backlog/raw-impulse-learning-applications-design-note.md)."""
+    sessions = {}
+    for r in rows:
+        lid, sid = r.get("learning_id"), r.get("session_id")
+        if lid and sid:
+            sessions.setdefault(lid, set()).add(sid)
+    return {lid: len(sids) for lid, sids in sessions.items()}
+
+
+def _goal_origin_text(learning, history_parsed):
+    """Planned-goal text a learning came from, or None.
+
+    `goal_origin` is a list of indexes into the Planned goals of the session that logged the
+    learning, with no session reference, so the session is found by date: the history file whose
+    Opened..Closed window holds `date`. A learning logged after close (dream pass, manual
+    log-learning) is outside every window and yields None; never guess."""
+    origin, date = learning.get("goal_origin"), str(learning.get("date") or "")
+    if not origin or not date:
+        return None
+    try:
+        idxs = [int(i) for i in origin]
+    except (TypeError, ValueError):
+        return None
+    for h in history_parsed:
+        if h.get("opened") and h.get("closed") and h["opened"] <= date <= h["closed"]:
+            planned = h.get("planned") or []
+            if idxs and all(0 <= i < len(planned) for i in idxs):
+                return "; ".join(planned[i] for i in idxs)
+            return None
+    return None
+
+
+def _impulse_capture(cycle_history):
+    """How many recorded opens captured a raw impulse, as a count; never the impulse text.
+
+    Showing the text would let the user write impulses for the dashboard and bias P74 Phase 2.
+    Only entries that carry the key count; `None` when none do. cycle_history is core's
+    last-10 window, so the figure covers recent sessions only."""
+    keyed = [c for c in cycle_history if isinstance(c, dict) and "raw_impulse" in c]
+    if not keyed:
+        return None
+    captured = sum(1 for c in keyed if str(c.get("raw_impulse") or "").strip())
+    return {"captured": captured, "total": len(keyed), "needed": _IMPULSE_PHASE2_NEEDED}
+
+
 def _normalize_confidence(value):
     """Bucket a raw numeric confidence (0.0-1.0) to compass's canonical high/medium/low
     label. Learnings normally carry confidence as one of these three strings — compass
@@ -1717,6 +1769,7 @@ def _read_namespace_files(ns_dir):
         if "confidence" in _l:
             _l["confidence"] = _normalize_confidence(_l["confidence"])
     decisions    = _read_jsonl(ns_dir / "decisions.jsonl", problems)
+    learning_applications = _read_jsonl(ns_dir / "learning_applications.jsonl", problems)
     code_context = _read_file(ns_dir / "code_context.md")
     config       = _read_json(ns_dir / "config.json", problems)
 
@@ -1780,6 +1833,7 @@ def _read_namespace_files(ns_dir):
         "intent":                  intent,
         "reality":                 reality,
         "learnings":               learnings,
+        "learning_applications":   learning_applications,
         "decisions":               decisions,
         "code_context":            code_context,
         "config":                  config,
@@ -1839,6 +1893,10 @@ def _assemble_namespace_dict(ns_dir, raw):
     for l in active_learnings:
         l["retrievalStale"] = l.get("text", "") in retrieval_stale_texts
     retrieval_stale_count = len(retrieval_stale_texts)
+    applied_counts = _application_counts(raw["learning_applications"])
+    for l in active_learnings:
+        l["appliedSessions"] = applied_counts.get(l.get("learning_id"), 0)
+        l["fromGoal"] = _goal_origin_text(l, raw["history_parsed"])
 
     cycle_history      = state.get("cycle_history", [])
     last_cycle_minutes = state.get("last_cycle_minutes")
@@ -2017,6 +2075,7 @@ def _assemble_namespace_dict(ns_dir, raw):
         "zone_distribution":         zone_distribution,
         "confidence_calibration":    confidence_calibration,
         "retrieval_stale_count":     retrieval_stale_count,
+        "impulse_capture":           _impulse_capture(cycle_history),
         "external_signals":          external_signals,
         "exploration_ratio":         exploration_ratio,
         "last_reality_score":        last_reality_score,
@@ -2562,6 +2621,7 @@ _JS_DATA_RENAME_FIELDS = [
     ("zoneDistribution",           "zone_distribution",          {"golden": 0, "warning": 0, "preference": 0, "unclassified": 0}),
     ("confidenceCalibration",      "confidence_calibration",     {"sufficient_sample": False, "resolved_count": 0, "min_required": 8, "buckets": {}, "miscalibrated": None}),
     ("retrievalStaleCount",        "retrieval_stale_count",     _MISSING),
+    ("impulseCapture",             "impulse_capture",           None),
     ("externalSignals",            "external_signals",          _MISSING),
     ("explorationRatio",           "exploration_ratio",         _MISSING),
     ("lastRealityScore",           "last_reality_score",        _MISSING),
