@@ -101,7 +101,6 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
 | `failureDimensionDistribution` | `skill_feedback.jsonl` | P69; dashboard-only aggregation |
 | `codeReviews` | `code_reviews/*.md` | `{count, reviews[≤12: {date, critical, high, medium, low, total}], latest: {date, total, findings[≤10: {severity, title, category}]}}`; `null` with none. Parsed by `_parse_code_review` in the read phase (`raw["code_reviews"]`); the format is a prompt convention with three live shapes, so `TestCodeReviews` pins each and a live-data guard fails on a file that parses to nothing |
 | `appliedSessions` / `fromGoal` (per learning) | `learning_applications.jsonl`, `goal_origin` + history files | derived in assemble by `_application_counts()` / `_goal_origin_text()`; `fromGoal` joins by the history file whose Opened..Closed window holds the learning's `date`, and is `null` when none does (logged after close): never guess |
-| `impulseCapture` | state.json `cycle_history[].raw_impulse` | `{captured, total, needed}` count only, `null` when no entry carries the key. **Never put impulse text in the page** (observer effect on P74 Phase 2) |
 
 `history` is capped at 5 for rendering. `sessionDates` is the full set.
 
@@ -170,7 +169,7 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
   (dropped), add one `{file, issue}` entry to `dataProblems`, shown as a card chip and a State-tab
   section. A missing file is not a problem. Reads outside `_read_namespace_files()` omit it, so
   nothing is counted twice.
-- **Code-review severity feeds Priorities.** `computePriorities()` scores the *latest* review: +6 per CRITICAL, +2 per HIGH, capped at 20, with a reason line naming the counts. MEDIUM and LOW add nothing.
+- **Priorities scoring is `scoreNamespace(ns)`** (pure; `computePriorities()` only filters, maps and slices). Each signal goes through `add(points, icon, text)` and reasons are returned biggest-first (`rankReasons`), so the card's 5-reason cut drops the smallest. Latest code-review severity: +6 per CRITICAL, +2 per HIGH, cap 20. Stale reality bullets: +1 per 5, cap 15. Maintenance due: `MAINTENANCE_DUE_WEIGHTS`. Caps are pinned in `dashboard_helpers.test.mjs`; re-check the live top 4 before changing a weight.
 - **Backlog docs are hypotheses, not specs.** Verify filenames/shapes against compass source
   before implementing (e.g. `dream_defer_count` is a `state.json` scalar, not a jsonl count).
 - **Check whether data is already wired** (grep `_js_data()` and `template.html -a`) before

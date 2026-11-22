@@ -58,8 +58,8 @@ function extractConst(name) {
   return html.slice(start, i + 1);
 }
 
-const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'globalVisibleNames', 'visibleNS', 'renderCompare', 'deriveTasks', 'renderDecisions', 'detailTabs', 'decisionsTabLabel', 'renderStateSection_GoalStatuses', 'goalStatusHeadline', '_complexityProbeErrors', 'renderStateSection_DataProblems', 'renderStateSection_BacklogMatch', 'backlogMatchHeadline', '_cadenceLastRun', '_cooldownOverrides', 'windowLabel', 'renderStateSection_CycleSparkline', 'codeReviewHeadline', 'renderStateSection_CodeReviews', 'learningSurfaced', 'learningApplied', 'renderStateSection_ImpulseCapture', 'compareLearningRows'];
-const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES', 'NS_PALETTE', 'COMPARE_AXIS_DEFS', 'GLOBAL_NS_KEY', 'CADENCE_LAST_RUN_LABELS', 'CODE_REVIEW_SEVERITIES'];
+const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'globalVisibleNames', 'visibleNS', 'renderCompare', 'deriveTasks', 'renderDecisions', 'detailTabs', 'decisionsTabLabel', 'renderStateSection_GoalStatuses', 'goalStatusHeadline', '_complexityProbeErrors', 'renderStateSection_DataProblems', 'renderStateSection_BacklogMatch', 'backlogMatchHeadline', '_cadenceLastRun', '_cooldownOverrides', 'windowLabel', 'renderStateSection_CycleSparkline', 'codeReviewHeadline', 'renderStateSection_CodeReviews', 'learningSurfaced', 'learningApplied', 'compareLearningRows', 'rankReasons', 'scoreNamespace'];
+const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES', 'NS_PALETTE', 'COMPARE_AXIS_DEFS', 'GLOBAL_NS_KEY', 'CADENCE_LAST_RUN_LABELS', 'CODE_REVIEW_SEVERITIES', 'STALE_BULLETS_PER_POINT', 'STALE_BULLETS_CAP', 'MAINTENANCE_DUE_WEIGHTS'];
 // A minimal in-memory localStorage — radarActiveAxes() reads it; no test here
 // relies on cross-call persistence, so a single shared instance is fine.
 const localStorageShim = `
@@ -86,7 +86,7 @@ const source = localStorageShim + nsFixtureShim + CONSTS.map(extractConst).join(
 // `source` is read only from this repo's own scripts/template.html (never from
 // user input, network, or CLI args) — there is no untrusted-string injection
 // surface here, just an in-repo test harness for embedded functions.
-const helpers = new Function(`${source}\nreturn { ${PURE_HELPERS.join(', ')}, localStorage };`)();
+const helpers = new Function(`${source}\nreturn { ${PURE_HELPERS.join(', ')}, STALE_BULLETS_PER_POINT, STALE_BULLETS_CAP, MAINTENANCE_DUE_WEIGHTS, localStorage };`)();
 
 test('esc() escapes HTML-significant characters', () => {
   assert.equal(helpers.esc('<script>&"'), '&lt;script&gt;&amp;&quot;');
@@ -571,10 +571,48 @@ test('compareLearningRows(): sorts by applied count', () => {
   assert.equal([...rows].sort((a, b) => helpers.compareLearningRows(a, b, 'applied', -1)).map(r => r.dataset.idx).join(''), '120');
 });
 
-test('renderStateSection_ImpulseCapture(): shows the count line and never any impulse text', () => {
-  assert.equal(helpers.renderStateSection_ImpulseCapture({}), '');
-  assert.equal(helpers.renderStateSection_ImpulseCapture({ impulseCapture: null }), '');
-  const html = helpers.renderStateSection_ImpulseCapture({ impulseCapture: { captured: 3, total: 10, needed: 8, raw_impulse: 'leak' } });
-  assert.match(html, /Impulse captured in 3 of 10 recent opens; P74 Phase 2 needs 8/);
-  assert.doesNotMatch(html, /leak/);
+test('rankReasons(): biggest contributor first, ties keep insertion order, input untouched', () => {
+  const input = [{ points: 4, text: 'a' }, { points: 20, text: 'b' }, { points: 4, text: 'c' }, { points: 30, text: 'd' }];
+  assert.deepEqual(helpers.rankReasons(input).map(r => r.text), ['d', 'b', 'a', 'c']);
+  assert.deepEqual(input.map(r => r.text), ['a', 'b', 'c', 'd']);
+});
+
+test('scoreNamespace(): the 5-reason cut keeps the largest, not the first-added', () => {
+  const ns = {
+    open: true, lastOpen: '1d ago', goalRate: 40, deferred: [1, 2], plannedActions: ['x'],
+    learnings: [{ weight: 5 }], sessionCount: 4, staleBulletCount: 30,
+    codeReviewDue: true, researchDue: true,
+  };
+  const { score, reasons } = helpers.scoreNamespace(ns);
+  assert.equal(score, reasons.reduce((t, r) => t + r.points, 0));
+  assert.ok(reasons.length > 5, 'fixture must exceed the card cut');
+  const shown = reasons.slice(0, 5).map(r => r.points);
+  const dropped = reasons.slice(5).map(r => r.points);
+  assert.ok(Math.min(...shown) >= Math.max(...dropped));
+  assert.equal(reasons[0].text, 'Session currently in progress');
+});
+
+test('scoreNamespace(): stale reality bullets score 1 per 5, capped', () => {
+  const pts = n => (helpers.scoreNamespace({ staleBulletCount: n, sessionCount: 3, lastClose: '1d ago' })
+    .reasons.find(r => /stale reality/.test(r.text)) || { points: 0 }).points;
+  assert.equal(helpers.STALE_BULLETS_PER_POINT, 5);
+  assert.equal(helpers.STALE_BULLETS_CAP, 15);
+  assert.equal(pts(0), 0);
+  assert.equal(pts(4), 0);
+  assert.equal(pts(5), 1);
+  assert.equal(pts(29), 5);
+  assert.equal(pts(87), 15);
+  assert.equal(pts(500), 15);
+});
+
+test('scoreNamespace(): maintenance-due flags score their pinned weights, and only when due', () => {
+  const total = flags => helpers.scoreNamespace({ sessionCount: 3, lastClose: '1d ago', ...flags }).score;
+  assert.equal(total({}), 0);
+  assert.equal(total({ codeReviewDue: true }), 6);
+  assert.equal(total({ researchDue: true }), 4);
+  assert.equal(total({ skillOptDue: true }), 3);
+  assert.equal(total({ dreamDue: true }), 2);
+  assert.equal(total({ claudeReviewDue: true }), 2);
+  assert.equal(total({ codeReviewDue: true, researchDue: true, skillOptDue: true, dreamDue: true, claudeReviewDue: true }), 17);
+  assert.equal(helpers.MAINTENANCE_DUE_WEIGHTS.reduce((t, w) => t + w[1], 0), 17);
 });

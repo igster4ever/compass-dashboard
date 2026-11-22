@@ -395,9 +395,6 @@ def _retrieval_stale_texts(active_learnings, surfaced_threshold=_RETRIEVAL_STALE
     return texts
 
 
-_IMPULSE_PHASE2_NEEDED = 8  # P74 Phase 2 needs 8-10 captured impulses; 8 is the low end
-
-
 def _application_counts(rows):
     """{learning_id: number of distinct sessions that applied it} from learning_applications.jsonl.
 
@@ -432,19 +429,6 @@ def _goal_origin_text(learning, history_parsed):
                 return "; ".join(planned[i] for i in idxs)
             return None
     return None
-
-
-def _impulse_capture(cycle_history):
-    """How many recorded opens captured a raw impulse, as a count; never the impulse text.
-
-    Showing the text would let the user write impulses for the dashboard and bias P74 Phase 2.
-    Only entries that carry the key count; `None` when none do. cycle_history is core's
-    last-10 window, so the figure covers recent sessions only."""
-    keyed = [c for c in cycle_history if isinstance(c, dict) and "raw_impulse" in c]
-    if not keyed:
-        return None
-    captured = sum(1 for c in keyed if str(c.get("raw_impulse") or "").strip())
-    return {"captured": captured, "total": len(keyed), "needed": _IMPULSE_PHASE2_NEEDED}
 
 
 def _normalize_confidence(value):
@@ -2075,7 +2059,6 @@ def _assemble_namespace_dict(ns_dir, raw):
         "zone_distribution":         zone_distribution,
         "confidence_calibration":    confidence_calibration,
         "retrieval_stale_count":     retrieval_stale_count,
-        "impulse_capture":           _impulse_capture(cycle_history),
         "external_signals":          external_signals,
         "exploration_ratio":         exploration_ratio,
         "last_reality_score":        last_reality_score,
@@ -2621,7 +2604,6 @@ _JS_DATA_RENAME_FIELDS = [
     ("zoneDistribution",           "zone_distribution",          {"golden": 0, "warning": 0, "preference": 0, "unclassified": 0}),
     ("confidenceCalibration",      "confidence_calibration",     {"sufficient_sample": False, "resolved_count": 0, "min_required": 8, "buckets": {}, "miscalibrated": None}),
     ("retrievalStaleCount",        "retrieval_stale_count",     _MISSING),
-    ("impulseCapture",             "impulse_capture",           None),
     ("externalSignals",            "external_signals",          _MISSING),
     ("explorationRatio",           "exploration_ratio",         _MISSING),
     ("lastRealityScore",           "last_reality_score",        _MISSING),

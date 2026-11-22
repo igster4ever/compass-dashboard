@@ -56,6 +56,7 @@ IGNORED = {
         "close_command_count": "loop-overhead counter",
         "close_duration_seconds": "loop-overhead timer",
         "closed_at": "the session's close time; opened_at dates the entry",
+        "raw_impulse": "P74 capture; core removed P74 on 2026-10-30, and the dashboard never shows impulse text",
     },
     "quality_history": {
         "closed_at": "session_id identifies the entry",

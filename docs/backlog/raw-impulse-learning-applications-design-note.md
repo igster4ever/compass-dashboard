@@ -105,3 +105,34 @@ gives the reasons below.
 After each step, remove the matching entry from `IGNORED` in
 `tests/test_surface_inventory.py`: `last_surfaced_at`, `learning_applications.jsonl`,
 `impulses.jsonl` and `raw_impulse` (step 3, as a count only), and `goal_origin`.
+
+## Update 2026-11-22 — decision: NO-GO on further impulse and gain work
+
+Written in Simplified Technical English. Status: superseded in part by core's slim.
+
+Core's 2026-10-30 slim (commit `ca3f659`, `docs/roadmap-status.md` in the compass skill)
+removed P64 learning gain, P65 and P74. Checked on 2026-11-22:
+
+- `_compute_learning_gain` no longer exists in core. There is nothing to mirror, so the
+  "gain only when `sufficient_sample`" part of reason 3 and its parity case are void.
+  Keep the plain "applied in N sessions" count: `learning_applications.jsonl` is still
+  written at close.
+- P74 impulse capture is gone. The 3 newest `cycle_history` entries (2026-11-18 to 11-20) have
+  no `raw_impulse` key. The line "P74 Phase 2 needs 8-10" now names a gate that does not exist.
+- Built from this note, and still correct: Surfaced and Applied columns, the "from goal" link
+  (join hit rate 98.3%), the impulse capture count.
+
+| Item | Decision | Confidence |
+|------|----------|------------|
+| `raw_impulse` text | Still never shown | 9/10 |
+| Impulse capture line | Retire it: no new entries arrive, and its text cites a removed gate | 7/10 |
+| Learning gain mirror | Do not build: core removed the formula | 9/10 |
+| Applied count, Surfaced, from-goal | Keep as built | 8/10 |
+
+**First micro-step (about 30 minutes):** remove `_impulse_capture()`, `_IMPULSE_PHASE2_NEEDED`,
+the `impulse_capture` NS field, `renderStateSection_ImpulseCapture` and their tests, then
+re-add `raw_impulse` to the `IGNORED` list in `tests/test_surface_inventory.py`. Follow the
+same pattern as the earlier "Mirror core slim" commits. Until then the line self-heals: when
+all 10 `cycle_history` entries lack the key, `_impulse_capture()` returns None and it hides.
+
+**Done 2026-11-22:** the impulse capture line, `_impulse_capture()` and their tests are removed; `raw_impulse` is in `IGNORED['cycle_history']`.

@@ -1967,7 +1967,7 @@ class TestDiscoverNamespacesConcurrent(unittest.TestCase):
 
 
 class TestRank5Helpers(unittest.TestCase):
-    """Rank 5 (design note 2026-10-30): applied-in-N-sessions, from-goal join, impulse capture rate."""
+    """Rank 5 (design note 2026-10-30): applied-in-N-sessions, from-goal join."""
 
     def test_application_counts_are_distinct_sessions_per_learning(self):
         rows = [
@@ -2000,14 +2000,6 @@ class TestRank5Helpers(unittest.TestCase):
         self.assertIsNone(f({"goal_origin": ["x"], "date": "2026-06-22T12:52:50Z"}, self._hist()))
         self.assertIsNone(f({"goal_origin": [], "date": "2026-06-22T12:52:50Z"}, self._hist()))
         self.assertIsNone(f({"goal_origin": [0]}, self._hist()), "no date")
-
-    def test_impulse_capture_counts_only_and_never_carries_text(self):
-        cap = _mod._impulse_capture([{"raw_impulse": "secret words"}, {"raw_impulse": ""},
-                                     {"raw_impulse": "  "}, {"minutes": 5}])
-        self.assertEqual(cap, {"captured": 1, "total": 3, "needed": 8})
-        self.assertNotIn("secret", json.dumps(cap))
-        self.assertIsNone(_mod._impulse_capture([{"minutes": 5}]), "no entry carries the key")
-        self.assertIsNone(_mod._impulse_capture([]))
 
 
 if __name__ == "__main__":

@@ -1606,14 +1606,6 @@ function renderStateSection_DataProblems(ns) {
   </div>`;
 }
 
-// Impulse capture as a count only, never the text: showing past impulses would let the user write
-// them for the dashboard and bias the P74 Phase 2 measurement it is gating.
-function renderStateSection_ImpulseCapture(ns) {
-  const ic = ns.impulseCapture;
-  if (!ic || !ic.total) return '';
-  return `<div style="font-size:.75rem;color:var(--muted);margin:.4rem 0">Impulse captured in ${ic.captured} of ${ic.total} recent opens; P74 Phase 2 needs ${ic.needed}\u201310.</div>`;
-}
-
 const CADENCE_LAST_RUN_LABELS = [
   ['dream', 'dream'], ['code_review', 'code review'], ['research', 'research'],
   ['skill_opt', 'SkillOpt'], ['claude_review', 'CLAUDE.md review'],
@@ -1785,7 +1777,6 @@ function renderState(ns) {
 
   const healthStrip = [
     renderStateSection_DataProblems(ns),
-    renderStateSection_ImpulseCapture(ns),
     renderStateSection_CycleSparkline(ns),
     renderStateSection_CadenceStatus(ns),
     renderStateSection_DreamStatus(ns),
@@ -2476,84 +2467,97 @@ function _daysSince(timeAgoStr) {
   return 0;
 }
 
+// Reasons for a Priorities card, biggest contributor first, so the card's 5-reason cut drops
+// the smallest. Array.sort is stable: equal points keep the order the signals were added in.
+function rankReasons(reasons) {
+  return reasons.slice().sort((a, b) => (b.points || 0) - (a.points || 0));
+}
+
+// Stale reality bullets and maintenance-due flags: the data layer already carried them
+// (docs/backlog/attention-signals-shortlist.md ranks 1 and 2). Caps are pinned by tests.
+const STALE_BULLETS_PER_POINT = 5;
+const STALE_BULLETS_CAP = 15;
+const MAINTENANCE_DUE_WEIGHTS = [
+  ['codeReviewDue',   6, '🔬', 'Code review due'],
+  ['researchDue',     4, '🔍', 'External research due'],
+  ['skillOptDue',     3, '🛠', 'SkillOpt due'],
+  ['dreamDue',        2, '💤', 'Dream pass due'],
+  ['claudeReviewDue', 2, '📝', 'CLAUDE.md review due'],
+];
+
+// Score one namespace for the Priorities view: {score, reasons[{points, icon, text}]}. Pure.
+function scoreNamespace(ns) {
+  let score = 0;
+  const reasons = [];
+  const add = (points, icon, text) => { score += points; reasons.push({ points, icon, text }); };
+
+  if (ns.open) add(30, '●', 'Session currently in progress');
+
+  const lastActivity = ns.open ? ns.lastOpen : ns.lastClose;
+  const days = _daysSince(lastActivity);
+  if (days > 14) add(25, '⚠', `Stale — ${Math.round(days)}d since last session`);
+  else if (days > 7) add(15, '↩', `${Math.round(days)}d since last session`);
+
+  if (ns.goalRate !== null && ns.goalRate !== undefined) {
+    if (ns.goalRate < 50) add(20, '↓', `Low completion rate (${ns.goalRate}%)`);
+    else if (ns.goalRate < 75) add(10, '~', `Moderate completion rate (${ns.goalRate}%)`);
+  }
+
+  const deferredCount = (ns.deferred || []).length;
+  if (deferredCount > 0) {
+    add(deferredCount * 4, '⏸', `${deferredCount} deferred item${deferredCount !== 1 ? 's' : ''} queued`);
+  }
+
+  if (ns.plannedActions && ns.plannedActions.length > 0) {
+    add(8, '→', `${ns.plannedActions.length} planned action${ns.plannedActions.length !== 1 ? 's' : ''} waiting`);
+  }
+
+  const highWeight = (ns.learnings || []).filter(l => (l.weight || 1) >= 4);
+  if (highWeight.length > 0) {
+    add(Math.min(highWeight.length * 2, 10), '★',
+        `${highWeight.length} high-weight learning${highWeight.length !== 1 ? 's' : ''} — active area`);
+  }
+
+  if (ns.sessionCount === 0) add(10, '+', 'No sessions yet — namespace needs bootstrapping');
+
+  if (ns.corpusHealth && ns.corpusHealth.score < 50) {
+    add(12, '🧪', `Low corpus health (${ns.corpusHealth.score}/100) — validate hypotheses or boost learnings`);
+  }
+
+  const stale = Number(ns.staleBulletCount) || 0;
+  const stalePoints = Math.min(Math.floor(stale / STALE_BULLETS_PER_POINT), STALE_BULLETS_CAP);
+  if (stalePoints > 0) {
+    add(stalePoints, '🕰', `${stale} stale reality bullet${stale !== 1 ? 's' : ''} — verify or retire`);
+  }
+
+  for (const [flag, points, icon, text] of MAINTENANCE_DUE_WEIGHTS) {
+    if (ns[flag]) add(points, icon, text);
+  }
+
+  if ((ns.codeReviewDeferCount || 0) >= 2) {
+    add(10, '🔬', `Code review deferred ${ns.codeReviewDeferCount}x — overdue`);
+  }
+  const crLast = ns.codeReviews && ns.codeReviews.reviews && ns.codeReviews.reviews.length
+    ? ns.codeReviews.reviews[ns.codeReviews.reviews.length - 1] : null;
+  if (crLast && ((crLast.critical || 0) + (crLast.high || 0)) > 0) {
+    const sev = [['critical', crLast.critical], ['high', crLast.high]]
+      .filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k.toUpperCase()}`).join(', ');
+    add(Math.min((crLast.critical || 0) * 6 + (crLast.high || 0) * 2, 20), '🛡',
+        `Latest code review (${crLast.date}) found ${sev}`);
+  }
+  if ((ns.researchDeferCount || 0) >= 2) {
+    add(8, '🔍', `External research deferred ${ns.researchDeferCount}x — overdue`);
+  }
+
+  return { score, reasons: rankReasons(reasons) };
+}
+
 function computePriorities() {
   const visible = globalVisibleNames();
   return NS.map((ns, idx) => ({ ns, idx })).flatMap(({ ns, idx }) => {
     if (SYSTEM_NS.has(ns.namespace.toLowerCase())) return [];
     if (!visible.has(ns.namespace)) return [];
-    let score = 0;
-    const reasons = [];
-
-    if (ns.open) {
-      score += 30;
-      reasons.push({ icon: '●', text: 'Session currently in progress' });
-    }
-
-    const lastActivity = ns.open ? ns.lastOpen : ns.lastClose;
-    const days = _daysSince(lastActivity);
-    if (days > 14) {
-      score += 25;
-      reasons.push({ icon: '⚠', text: `Stale — ${Math.round(days)}d since last session` });
-    } else if (days > 7) {
-      score += 15;
-      reasons.push({ icon: '↩', text: `${Math.round(days)}d since last session` });
-    }
-
-    if (ns.goalRate !== null && ns.goalRate !== undefined) {
-      if (ns.goalRate < 50) {
-        score += 20;
-        reasons.push({ icon: '↓', text: `Low completion rate (${ns.goalRate}%)` });
-      } else if (ns.goalRate < 75) {
-        score += 10;
-        reasons.push({ icon: '~', text: `Moderate completion rate (${ns.goalRate}%)` });
-      }
-    }
-
-    const deferredCount = (ns.deferred || []).length;
-    if (deferredCount > 0) {
-      score += deferredCount * 4;
-      reasons.push({ icon: '⏸', text: `${deferredCount} deferred item${deferredCount !== 1 ? 's' : ''} queued` });
-    }
-
-    if (ns.plannedActions && ns.plannedActions.length > 0) {
-      score += 8;
-      reasons.push({ icon: '→', text: `${ns.plannedActions.length} planned action${ns.plannedActions.length !== 1 ? 's' : ''} waiting` });
-    }
-
-    const highWeight = (ns.learnings || []).filter(l => (l.weight || 1) >= 4);
-    if (highWeight.length > 0) {
-      score += Math.min(highWeight.length * 2, 10);
-      reasons.push({ icon: '★', text: `${highWeight.length} high-weight learning${highWeight.length !== 1 ? 's' : ''} — active area` });
-    }
-
-    if (ns.sessionCount === 0) {
-      score += 10;
-      reasons.push({ icon: '+', text: 'No sessions yet — namespace needs bootstrapping' });
-    }
-
-    if (ns.corpusHealth && ns.corpusHealth.score < 50) {
-      score += 12;
-      reasons.push({ icon: '🧪', text: `Low corpus health (${ns.corpusHealth.score}/100) — validate hypotheses or boost learnings` });
-    }
-
-    if ((ns.codeReviewDeferCount || 0) >= 2) {
-      score += 10;
-      reasons.push({ icon: '🔬', text: `Code review deferred ${ns.codeReviewDeferCount}x — overdue` });
-    }
-    const crLast = ns.codeReviews && ns.codeReviews.reviews && ns.codeReviews.reviews.length
-      ? ns.codeReviews.reviews[ns.codeReviews.reviews.length - 1] : null;
-    if (crLast && ((crLast.critical || 0) + (crLast.high || 0)) > 0) {
-      score += Math.min((crLast.critical || 0) * 6 + (crLast.high || 0) * 2, 20);
-      const sev = [['critical', crLast.critical], ['high', crLast.high]]
-        .filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k.toUpperCase()}`).join(', ');
-      reasons.push({ icon: '🛡', text: `Latest code review (${crLast.date}) found ${sev}` });
-    }
-    if ((ns.researchDeferCount || 0) >= 2) {
-      score += 8;
-      reasons.push({ icon: '🔍', text: `External research deferred ${ns.researchDeferCount}x — overdue` });
-    }
-
-    return { ns, idx, score, reasons };
+    return [{ ns, idx, ...scoreNamespace(ns) }];
   })
   .sort((a, b) => b.score - a.score)
   .slice(0, 4);
