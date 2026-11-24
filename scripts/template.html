@@ -4301,7 +4301,7 @@ function renderSwimlane() {
   const maxDate = new Date(allDates.reduce((a, b) => a > b ? a : b));
 
   const totalDays = Math.max(1, (maxDate - minDate) / 86400000);
-  const ROW_H = 28, ROW_GAP = 6, LABEL_W = 140, PAD = 16, DOT_R = 4;
+  const ROW_H = 28, ROW_GAP = 6, LABEL_W = 190, PAD = 16, DOT_R = 4;
   const svgW = Math.max(600, Math.min(900, window.innerWidth - LABEL_W - PAD * 4));
   const svgH = nsList.length * (ROW_H + ROW_GAP) + PAD * 2;
 

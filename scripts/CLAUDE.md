@@ -81,7 +81,7 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
 |-------|--------|-------|
 | `history[]` | last 5 session files | parsed content (planned/completed/incomplete, `duration_minutes`, `close_mode`, `backlog_match`, `other_sections`) |
 | `backlogMatchSummary` | all history files' `## Backlog match` + reality.md | `{closes, with_candidates, offered, still_open, excluded, by_basis, recent[≤5]}`; `still_open` = candidate's bullet hash still in reality.md; `null` with no match sections |
-| `sessionDates[]` | all session filenames | full history as `YYYY-MM-DD` — use this for time-series viz |
+| `sessionDates[]` | all session filenames | full history as `YYYY-MM-DD` — use this for time-series viz. Only `history/` files whose name starts with a date count (`_session_history_files()`, also behind `sessionCount`): one stray `reality-pre-condense-*.md` once made every timeline x-position `NaN` |
 | `sessionCount` | count of all history files | total, not capped |
 | `learnings[]` | learnings.jsonl | sorted by weight desc; **active only** (see filter below) |
 | `decisions[]` | decisions.jsonl | reverse-chronological |

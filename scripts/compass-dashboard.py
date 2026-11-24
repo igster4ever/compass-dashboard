@@ -1735,6 +1735,18 @@ def _build_pulse(namespace, raw):
     }
 
 
+_SESSION_FILE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
+
+
+def _session_history_files(history_dir):
+    """History files that are sessions: names start with a YYYY-MM-DD date. A stray file such as
+    `reality-pre-condense-<date>.md` is not one, and its name would otherwise bake a non-date into
+    `sessionDates` (every timeline x-position then turns NaN and the dots vanish)."""
+    if not history_dir.exists():
+        return []
+    return [f for f in history_dir.glob("*.md") if _SESSION_FILE_RE.match(f.stem)]
+
+
 def _read_namespace_files(ns_dir):
     """File-reading/parsing phase of load_namespace() — every disk read this
     namespace needs, with only the trivial per-record parsing that belongs with
@@ -1760,19 +1772,17 @@ def _read_namespace_files(ns_dir):
     history_dir   = ns_dir / "history"
     # Every history file parsed once, oldest first; consumers slice or filter this
     # instead of re-reading the directory.
+    session_files = _session_history_files(history_dir)
     history_parsed = []
     if history_dir.exists():
-        for f in sorted(history_dir.glob("*.md")):
+        for f in sorted(session_files):
             parsed = _parse_history_file(f)
             if parsed:
                 history_parsed.append(parsed)
     history_files = list(reversed(history_parsed))[:5]
 
-    session_count = len(list(history_dir.glob("*.md"))) if history_dir.exists() else 0
-    session_dates = sorted(
-        f.stem[:10] for f in history_dir.glob("*.md")
-        if len(f.stem) >= 10
-    ) if history_dir.exists() else []
+    session_count = len(session_files)
+    session_dates = sorted(f.stem[:10] for f in session_files)
 
     # Intent drift timeline
     intent_history = _read_jsonl(ns_dir / "intent_history.jsonl", problems)

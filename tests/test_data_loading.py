@@ -1792,6 +1792,22 @@ class TestHistoryParserSections(unittest.TestCase):
         self.assertEqual(len(n["carry_forward_trend"]), 7)
 
 
+class TestSessionFilesOnly(unittest.TestCase):
+    """A stray non-session file in history/ must not become a session date or a session."""
+
+    def test_non_dated_history_file_is_not_a_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ns = Path(tmp) / "demo"
+            (ns / "history").mkdir(parents=True)
+            (ns / "state.json").write_text("{}")
+            (ns / "history" / "2026-10-10T0900.md").write_text("**Opened:** t\n\n## Planned\n- g\n")
+            (ns / "history" / "reality-pre-condense-2026-11-19.md").write_text("## What exists and works\n- x\n")
+            n = _mod.load_namespace(ns)
+        self.assertEqual(n["session_dates"], ["2026-10-10"])
+        self.assertEqual(n["session_count"], 1)
+        self.assertEqual(len(n["carry_forward_trend"]), 1)
+
+
 class TestCadenceLastRunAndCooldown(unittest.TestCase):
     """Rank 6: cadence last-run timestamps and cooldown-violation overrides."""
 
