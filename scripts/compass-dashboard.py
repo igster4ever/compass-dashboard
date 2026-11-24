@@ -2740,19 +2740,24 @@ def generate(namespaces, watch_seconds=None, rev_file=None, section_loads=None):
     cards = "".join(_card_html(n, i) for i, n in enumerate(namespaces))
 
     html = (Path(__file__).parent / "template.html").read_text(encoding="utf-8")
-    html = html.replace("[[GENERATED_AT]]",   now)
-    html = html.replace("[[N_NS]]",           str(len(namespaces)))
-    html = html.replace("[[N_OPEN]]",         str(n_open))
-    html = html.replace("[[N_LEARNINGS]]",    str(n_learnings))
-    html = html.replace("[[N_SESSIONS]]",     str(n_sessions))
-    html = html.replace("[[CARDS]]",          cards)
-    html = html.replace("[[NS_DATA]]",           _js_data(namespaces))
-    html = html.replace("[[BLOCKING_EDGES]]",    _js_blocking_edges(namespaces))
-    html = html.replace("[[SECTION_LOADS]]",     json.dumps(section_loads))
-    html = html.replace("[[WATCH_SECONDS]]",     json.dumps(watch_seconds))
     # Only a --watch page polls the sidecar, so the rev and its file name are baked only then.
-    html = html.replace("[[PAGE_REV]]",          json.dumps(_content_rev(namespaces, section_loads) if rev_file else None))
-    html = html.replace("[[REV_FILE]]",          json.dumps(rev_file))
+    values = {
+        "GENERATED_AT":   now,
+        "N_NS":           str(len(namespaces)),
+        "N_OPEN":         str(n_open),
+        "N_LEARNINGS":    str(n_learnings),
+        "N_SESSIONS":     str(n_sessions),
+        "CARDS":          cards,
+        "NS_DATA":        _js_data(namespaces),
+        "BLOCKING_EDGES": _js_blocking_edges(namespaces),
+        "SECTION_LOADS":  json.dumps(section_loads),
+        "WATCH_SECONDS":  json.dumps(watch_seconds),
+        "PAGE_REV":       json.dumps(_content_rev(namespaces, section_loads) if rev_file else None),
+        "REV_FILE":       json.dumps(rev_file),
+    }
+    # One pass: text a substitution inserts is never rescanned, so a learning or review title that
+    # quotes a marker (e.g. "[[PAGE_REV]]") reaches the page verbatim instead of being expanded.
+    html = re.sub(r"\[\[([A-Z_]+)\]\]", lambda m: values.get(m.group(1), m.group(0)), html)
 
     return html
 

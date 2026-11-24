@@ -53,6 +53,8 @@ function becomes undefined (`ReferenceError: switchView is not defined`). Run
 | `[[N_NS]]`, `[[N_OPEN]]`, `[[N_LEARNINGS]]`, `[[N_SESSIONS]]` | header stats |
 | `[[WATCH_SECONDS]]`, `[[PAGE_REV]]`, `[[REV_FILE]]` | `--watch` only (else `null`): interval, content hash baked at generation, sidecar file name |
 
+`generate()` substitutes all markers in **one `re.sub` pass** over the template, so data that quotes a marker (a learning saying `[[PAGE_REV]]`) is never expanded. Add a new marker to the `values` dict, never as a separate `html.replace`.
+
 ---
 
 ## Tab system (two tiers — don't confuse them)
@@ -169,9 +171,9 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
   (dropped), add one `{file, issue}` entry to `dataProblems`, shown as a card chip and a State-tab
   section. A missing file is not a problem. Reads outside `_read_namespace_files()` omit it, so
   nothing is counted twice.
-- **Priorities scoring is `scoreNamespace(ns)`** (pure; `computePriorities()` only filters, maps and slices). Each signal goes through `add(points, icon, text)` and reasons are returned biggest-first (`rankReasons`), so the card's 5-reason cut drops the smallest. Latest code-review severity: +6 per CRITICAL, +2 per HIGH, cap 20. Stale reality bullets: +1 per 5, cap 15. Maintenance due: `MAINTENANCE_DUE_WEIGHTS`. Caps are pinned in `dashboard_helpers.test.mjs`; re-check the live top 4 before changing a weight.
+- **Priorities scoring is `scoreNamespace(ns)`** (pure; `computePriorities()` only filters, maps and slices). Each signal goes through `add(points, icon, text)` and reasons are returned biggest-first (`rankReasons`), so the card's 5-reason cut drops the smallest. Latest code-review severity: +6 per CRITICAL, +2 per HIGH, cap 20, and only while `codeReviewDue` is false (a due review makes the old counts stale; the due flag scores instead). Structure warnings: +2 each, cap 4. Carry-forward (latest `carryForwardTrend` entry): +2 each, cap 8. Stale reality bullets: +1 per 5, cap 15. Maintenance due: `MAINTENANCE_DUE_WEIGHTS`. Caps are pinned in `dashboard_helpers.test.mjs`; re-check the live top 4 before changing a weight.
 - **Backlog docs are hypotheses, not specs.** Verify filenames/shapes against compass source
-  before implementing (e.g. `dream_defer_count` is a `state.json` scalar, not a jsonl count).
+  before implementing (e.g. `dream_defer_count` is a `state.json` scalar, not a jsonl count). A "mirror core's `X()`" item can be void: grep core for the symbol first (`_compute_learning_gain` was removed in ca3f659).
 - **Check whether data is already wired** (grep `_js_data()` and `template.html -a`) before
   scoping "data layer + UI" work — e.g. `quality_history[].components` already flowed through.
 

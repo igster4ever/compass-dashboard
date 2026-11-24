@@ -48,3 +48,7 @@ makes every new signal safe to add.
 1. Sort `reasons` by points added, then slice. Test with a fixture that has more than 5 reasons.
 2. Rank 1 and Rank 2 together, with tests that pin the caps. About 1 hour.
 3. Ranks 4 and 6 if the first two read well on live data.
+
+## Status update 2026-11-24
+
+Ranks 1, 2, 4 and 6 are built (`scoreNamespace()`). Ranks 3 and 5 stay unbuilt. The review-severity signal now stops scoring while `codeReviewDue` is true.

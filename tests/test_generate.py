@@ -11,6 +11,7 @@ No filesystem access — uses an in-memory minimal namespace fixture.
 """
 import importlib.util
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -705,6 +706,31 @@ class TestWatchMode(unittest.TestCase):
              patch.object(_mod.sys, "stderr", err):
             _mod._watch(None, self.out, 5)
         self.assertIn("RuntimeError: boom", err.getvalue())
+
+class TestMarkerSubstitution(unittest.TestCase):
+    """User data that quotes a template marker must reach the page verbatim."""
+
+    MARKERS = ["[[NS_DATA]]", "[[CARDS]]", "[[PAGE_REV]]", "[[REV_FILE]]", "[[WATCH_SECONDS]]",
+               "[[SECTION_LOADS]]", "[[BLOCKING_EDGES]]", "[[GENERATED_AT]]", "[[N_NS]]"]
+
+    def test_markers_inside_data_are_not_expanded(self):
+        text = "quotes " + " and ".join(self.MARKERS)
+        ns = _minimal_ns({"intent_summary": text, "learnings": [{
+            "text": text, "weight": 1, "tags": [], "date": "2026-01-01T00:00:00Z",
+            "status": "active", "learning_type": "fact"}]})
+        html = _mod.generate([ns], watch_seconds=5, rev_file="x.rev.js")
+        line = next(l for l in html.splitlines() if l.startswith("const NS = "))
+        data = json.loads(line[len("const NS = "):].rstrip(";"))
+        self.assertIn(text, [l["text"] for l in data[0]["learnings"]])
+        self.assertTrue(text.startswith(data[0]["intentSummary"]))  # the summary is truncated upstream
+        self.assertIn("[[PAGE_REV]]", data[0]["intentSummary"])
+
+    def test_every_marker_in_the_template_is_still_substituted(self):
+        html = _mod.generate([_minimal_ns()], watch_seconds=5, rev_file="x.rev.js")
+        template = (Path(_mod.__file__).parent / "template.html").read_text(encoding="utf-8")
+        for marker in set(re.findall(r"\[\[[A-Z_]+\]\]", template)):
+            self.assertNotIn(marker, html)
+
 
 class TestSectionLoads(unittest.TestCase):
     """`_read_section_loads`: the loop-root prompt-section log, baked as SECTION_LOADS."""

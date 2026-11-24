@@ -280,17 +280,20 @@ test('heatmap quality panel labels a capped window, and says nothing when the se
 });
 
 test('Priorities scores the latest code review by severity, and says nothing for a clean one', () => {
-  const prioritiesHtml = (mutate) => {
+  const prioritiesHtml = (mutate, due = false) => {
     const saved = JSON.stringify(fixture.NS.map(n => n.codeReviews));
-    fixture.NS.forEach(n => mutate(n.codeReviews.reviews[n.codeReviews.reviews.length - 1]));
+    const savedDue = fixture.NS.map(n => [n.codeReviewDue, n.realityStructureWarnings, n.carryForwardTrend]);
+    // Structure warnings and carry-forward tie the severity reason at 2 points and would crowd it out of the card's 5-reason cut.
+    fixture.NS.forEach(n => { n.codeReviewDue = due; n.realityStructureWarnings = []; n.carryForwardTrend = []; mutate(n.codeReviews.reviews[n.codeReviews.reviews.length - 1]); });
     try {
       const sandbox = runScriptInSandbox();
       sandbox.window.switchView('priorities');
       return sandbox.document.getElementById('view-priorities').innerHTML;
     } finally {
-      JSON.parse(saved).forEach((cr, i) => { fixture.NS[i].codeReviews = cr; });
+      JSON.parse(saved).forEach((cr, i) => { fixture.NS[i].codeReviews = cr; [fixture.NS[i].codeReviewDue, fixture.NS[i].realityStructureWarnings, fixture.NS[i].carryForwardTrend] = savedDue[i]; });
     }
   };
+  assert.doesNotMatch(prioritiesHtml(() => {}, true), /Latest code review/);
   assert.match(prioritiesHtml(() => {}), /Latest code review \(2026-08-01\) found 1 HIGH/);
   assert.match(prioritiesHtml(r => { r.critical = 2; }), /found 2 CRITICAL, 1 HIGH/);
   assert.doesNotMatch(prioritiesHtml(r => { r.high = 0; r.critical = 0; }), /Latest code review/);

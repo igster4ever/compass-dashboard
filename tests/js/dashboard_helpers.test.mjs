@@ -59,7 +59,7 @@ function extractConst(name) {
 }
 
 const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'globalVisibleNames', 'visibleNS', 'renderCompare', 'deriveTasks', 'renderDecisions', 'detailTabs', 'decisionsTabLabel', 'renderStateSection_GoalStatuses', 'goalStatusHeadline', '_complexityProbeErrors', 'renderStateSection_DataProblems', 'renderStateSection_BacklogMatch', 'backlogMatchHeadline', '_cadenceLastRun', '_cooldownOverrides', 'windowLabel', 'renderStateSection_CycleSparkline', 'codeReviewHeadline', 'renderStateSection_CodeReviews', 'learningSurfaced', 'learningApplied', 'compareLearningRows', 'rankReasons', 'scoreNamespace'];
-const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES', 'NS_PALETTE', 'COMPARE_AXIS_DEFS', 'GLOBAL_NS_KEY', 'CADENCE_LAST_RUN_LABELS', 'CODE_REVIEW_SEVERITIES', 'STALE_BULLETS_PER_POINT', 'STALE_BULLETS_CAP', 'MAINTENANCE_DUE_WEIGHTS'];
+const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES', 'NS_PALETTE', 'COMPARE_AXIS_DEFS', 'GLOBAL_NS_KEY', 'CADENCE_LAST_RUN_LABELS', 'CODE_REVIEW_SEVERITIES', 'STALE_BULLETS_PER_POINT', 'STALE_BULLETS_CAP', 'MAINTENANCE_DUE_WEIGHTS', 'STRUCTURE_WARNING_POINTS', 'STRUCTURE_WARNING_CAP', 'CARRY_FORWARD_POINTS', 'CARRY_FORWARD_CAP'];
 // A minimal in-memory localStorage — radarActiveAxes() reads it; no test here
 // relies on cross-call persistence, so a single shared instance is fine.
 const localStorageShim = `
@@ -86,7 +86,7 @@ const source = localStorageShim + nsFixtureShim + CONSTS.map(extractConst).join(
 // `source` is read only from this repo's own scripts/template.html (never from
 // user input, network, or CLI args) — there is no untrusted-string injection
 // surface here, just an in-repo test harness for embedded functions.
-const helpers = new Function(`${source}\nreturn { ${PURE_HELPERS.join(', ')}, STALE_BULLETS_PER_POINT, STALE_BULLETS_CAP, MAINTENANCE_DUE_WEIGHTS, localStorage };`)();
+const helpers = new Function(`${source}\nreturn { ${PURE_HELPERS.join(', ')}, STALE_BULLETS_PER_POINT, STALE_BULLETS_CAP, MAINTENANCE_DUE_WEIGHTS, STRUCTURE_WARNING_CAP, CARRY_FORWARD_CAP, localStorage };`)();
 
 test('esc() escapes HTML-significant characters', () => {
   assert.equal(helpers.esc('<script>&"'), '&lt;script&gt;&amp;&quot;');
@@ -615,4 +615,27 @@ test('scoreNamespace(): maintenance-due flags score their pinned weights, and on
   assert.equal(total({ claudeReviewDue: true }), 2);
   assert.equal(total({ codeReviewDue: true, researchDue: true, skillOptDue: true, dreamDue: true, claudeReviewDue: true }), 17);
   assert.equal(helpers.MAINTENANCE_DUE_WEIGHTS.reduce((t, w) => t + w[1], 0), 17);
+});
+
+test('scoreNamespace(): latest review severity scores only while no newer review is due', () => {
+  const cr = { reviews: [{ date: '2026-10-30', critical: 1, high: 2, medium: 0, low: 0 }] };
+  const base = { sessionCount: 3, lastClose: '1d ago', codeReviews: cr };
+  const sev = ns => helpers.scoreNamespace(ns).reasons.find(r => /Latest code review/.test(r.text));
+  assert.equal(sev({ ...base, codeReviewDue: false }).points, 10);
+  assert.equal(sev({ ...base, codeReviewDue: true }), undefined);
+  assert.equal(helpers.scoreNamespace({ ...base, codeReviewDue: true }).score, 6);
+});
+
+test('scoreNamespace(): structure warnings and carry-forward score 2 each, capped', () => {
+  const base = { sessionCount: 3, lastClose: '1d ago' };
+  const find = (ns, re) => (helpers.scoreNamespace({ ...base, ...ns }).reasons.find(r => re.test(r.text)) || { points: 0 }).points;
+  const warn = n => find({ realityStructureWarnings: Array(n).fill('w') }, /structure warning/);
+  assert.deepEqual([0, 1, 2, 5].map(warn), [0, 2, 4, 4]);
+  assert.equal(helpers.STRUCTURE_WARNING_CAP, 4);
+  const cfTrend = n => ({ carryForwardTrend: [{ date: 'd0', carryForward: 9 }, { date: 'd1', carryForward: n }] });
+  const cf = n => find(cfTrend(n), /carried forward/);
+  assert.deepEqual([0, 1, 3, 9].map(cf), [0, 2, 6, 8]);
+  assert.equal(helpers.CARRY_FORWARD_CAP, 8);
+  assert.equal(find({ carryForwardTrend: [] }, /carried forward/), 0);
+  assert.equal(find({}, /carried forward/), 0);
 });

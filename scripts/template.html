@@ -2477,6 +2477,11 @@ function rankReasons(reasons) {
 // (docs/backlog/attention-signals-shortlist.md ranks 1 and 2). Caps are pinned by tests.
 const STALE_BULLETS_PER_POINT = 5;
 const STALE_BULLETS_CAP = 15;
+// Attention-shortlist ranks 4 and 6: +2 per structure warning (cap 4), +2 per carried-forward item (cap 8).
+const STRUCTURE_WARNING_POINTS = 2;
+const STRUCTURE_WARNING_CAP = 4;
+const CARRY_FORWARD_POINTS = 2;
+const CARRY_FORWARD_CAP = 8;
 const MAINTENANCE_DUE_WEIGHTS = [
   ['codeReviewDue',   6, '🔬', 'Code review due'],
   ['researchDue',     4, '🔍', 'External research due'],
@@ -2530,6 +2535,18 @@ function scoreNamespace(ns) {
     add(stalePoints, '🕰', `${stale} stale reality bullet${stale !== 1 ? 's' : ''} — verify or retire`);
   }
 
+  const warnN = (ns.realityStructureWarnings || []).length;
+  if (warnN > 0) {
+    add(Math.min(warnN * STRUCTURE_WARNING_POINTS, STRUCTURE_WARNING_CAP), '🧱',
+        `${warnN} reality structure warning${warnN !== 1 ? 's' : ''}`);
+  }
+  const cfTrend = ns.carryForwardTrend || [];
+  const cf = cfTrend.length ? (Number(cfTrend[cfTrend.length - 1].carryForward) || 0) : 0;
+  if (cf > 0) {
+    add(Math.min(cf * CARRY_FORWARD_POINTS, CARRY_FORWARD_CAP), '⏭',
+        `${cf} item${cf !== 1 ? 's' : ''} carried forward from last session`);
+  }
+
   for (const [flag, points, icon, text] of MAINTENANCE_DUE_WEIGHTS) {
     if (ns[flag]) add(points, icon, text);
   }
@@ -2539,7 +2556,9 @@ function scoreNamespace(ns) {
   }
   const crLast = ns.codeReviews && ns.codeReviews.reviews && ns.codeReviews.reviews.length
     ? ns.codeReviews.reviews[ns.codeReviews.reviews.length - 1] : null;
-  if (crLast && ((crLast.critical || 0) + (crLast.high || 0)) > 0) {
+  // A review that is already due again describes code that has since changed; the "Code review due"
+  // flag above carries that signal, so its old severity counts stop scoring.
+  if (crLast && !ns.codeReviewDue && ((crLast.critical || 0) + (crLast.high || 0)) > 0) {
     const sev = [['critical', crLast.critical], ['high', crLast.high]]
       .filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k.toUpperCase()}`).join(', ');
     add(Math.min((crLast.critical || 0) * 6 + (crLast.high || 0) * 2, 20), '🛡',

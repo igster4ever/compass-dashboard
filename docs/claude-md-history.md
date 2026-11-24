@@ -666,3 +666,16 @@ parsed by `render(data)` would remove the JS-literal escaping surface; `const NS
 - **`_goal_sessions(state)` normaliser (code-review MEDIUM f6b20bc1).** Eight readers of `goal_completions` each handled the entry shapes their own way; `_compute_exploration_ratio` called `v.get("types")` and would have crashed on a legacy bare status list. `_parse_goal_entry` is gone: `_goal_session()` builds one record per entry and `_suggested_goal_count`, `_goal_stats`, `_goal_by_month`, `_goal_status_breakdown`, `_compute_exploration_ratio`, `_goal_type_by_session` and the `completions_by_date` lookup read it. Checked against the pre-change code on all 15 live namespaces: no output differences.
 - **Capped series labelled (data-model audit Rank 4, 99257677).** Readers of the two 10-entry arrays: the State-tab cycle sparkline (`renderStateSection_CycleSparkline`), the Heatmap quality panel (`_renderQualityScoreSparklines`), and in Python the Live strip pulse (`typical_minutes`, quality) and the SkillOpt holdout map. The backlog offered two fixes; deriving all durations from history files fails because only 205 of 334 files carry one (gps-adr-dashboard 1 of 38) and `quality_history` is core-computed, so the charts now carry `windowLabel()` ("last 10 of 83 sessions") instead.
 - **Code reviews surfaced (data-model audit Rank 7, half; spike).** `code_reviews/*.md` was in the surface inventory's `IGNORED` map as unread. `_parse_code_review()` now reads severity counts and findings from all 48 live files across 9 namespaces; the State tab gets a `Code reviews` drawer (severity-stacked trend, latest findings). Format drift was real: besides `- **[SEV] title** — loc`, two files used plain `- [SEV] title` bullets and `### [HIGH]` headings over untagged bullets, and a first parser read 0 findings from both. Not done: Priorities scoring from review severity, and `section_loads.jsonl` (at the loop root, outside `discover_namespaces`).
+
+## 2026-11-24 archival pass
+
+Priorities scoring: the latest code-review severity signal kept scoring after a newer review was
+due, so the old counts outranked the fresh "Code review due" flag. It now skips while `codeReviewDue`
+is true. Ranks 4 (structure warnings) and 6 (carry-forward) of attention-signals-shortlist.md were
+added with pinned caps. The carry-forward item "mirror `_compute_learning_gain`" was void: core
+removed the function in ca3f659, and nothing in the dashboard referenced it.
+
+Code review of cc1be72..HEAD (2026-11-24) found that `generate()` ran one `str.replace` per marker, so
+a learning, decision or review title quoting `[[PAGE_REV]]` was rewritten inside the baked JSON and
+the page script died with a syntax error. The repo's own history and review files contain such
+tokens. Fixed with a single `re.sub` pass plus `TestMarkerSubstitution`.
