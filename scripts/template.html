@@ -653,7 +653,7 @@
     .feed-list { display: flex; flex-direction: column; gap: .6rem; }
     .feed-entry { background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
       padding: .6rem .9rem; font-size: .78rem; }
-    .feed-entry-meta { font-size: .65rem; color: var(--text-muted); margin-bottom: .3rem; display: flex; gap: .6rem; flex-wrap: wrap; }
+    .feed-entry-meta { font-size: .65rem; color: var(--muted); margin-bottom: .3rem; display: flex; gap: .6rem; flex-wrap: wrap; }
     .feed-entry-text { color: var(--text); line-height: 1.5; }
     .feed-tag { font-size: .62rem; padding: .1em .4em; border-radius: 3px;
       background: var(--blue-bg); color: var(--blue); }
@@ -663,7 +663,7 @@
     .mm-toolbar { padding: .5rem 1rem; border-bottom: 1px solid var(--border); flex-shrink: 0; }
     .mm-ns-picker { display: flex; flex-wrap: wrap; gap: .4rem; }
     .mm-ns-btn { font-size: .7rem; padding: .2em .6em; border-radius: 4px; border: 1px solid var(--border);
-                 background: transparent; color: var(--text-muted); cursor: pointer; }
+                 background: transparent; color: var(--muted); cursor: pointer; }
     .mm-ns-btn:hover { color: var(--text); border-color: var(--blue); }
     .mm-ns-btn.active { color: var(--blue); border-color: var(--blue); background: var(--blue-bg); font-weight: 600; }
     /* mm-canvas-wrap hosts the SVG at a fixed size (flex:1 of the column) and floats
@@ -675,7 +675,7 @@
        Overlaying it keeps the SVG's box constant regardless of detail-panel content. */
     .mm-canvas-wrap { position: relative; flex: 1; min-height: 0; }
     .mm-detail { position: absolute; top: 0; left: 0; right: 0; z-index: 2;
-                 font-size: .75rem; color: var(--text-muted); padding: .4rem 1rem;
+                 font-size: .75rem; color: var(--muted); padding: .4rem 1rem;
                  min-height: 1.8rem; border-bottom: 1px solid var(--border);
                  background: var(--surface); box-shadow: 0 2px 6px rgba(0,0,0,.25);
                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -684,7 +684,7 @@
     .mm-detail.mm-detail-list ul { margin: .2rem 0 0; padding-left: 1.1rem; }
     .mm-detail.mm-detail-list li { line-height: 1.5; }
     .mm-list-title { font-weight: 600; color: var(--text); }
-    .mm-list-more { color: var(--text-muted); font-style: italic; list-style: none; margin-left: -1.1rem; }
+    .mm-list-more { color: var(--muted); font-style: italic; list-style: none; margin-left: -1.1rem; }
     .mm-list-bridge { color: var(--blue); font-size: .72rem; margin-top: .2rem; }
     .mm-svg { display: block; width: 100%; height: 100%; cursor: grab; }
     .mm-link { fill: none; stroke-width: 1.2px; }
@@ -1418,7 +1418,9 @@ function renderStateSection_GoalStatuses(ns) {
 function backlogMatchHeadline(ns) {
   const b = ns.backlogMatchSummary;
   if (!b || !b.offered) return '';
-  return `${b.offered} backlog match${b.offered !== 1 ? 'es' : ''} offered, ${b.offered - b.still_open} gone since`;
+  const unknown = b.unknown || 0;  // no-hash candidates can't be checked, so they are not "gone"
+  return `${b.offered} backlog match${b.offered !== 1 ? 'es' : ''} offered, ${b.offered - b.still_open - unknown} gone since`
+    + (unknown ? `, ${unknown} unverifiable` : '');
 }
 
 function renderStateSection_BacklogMatch(ns) {
@@ -1426,7 +1428,7 @@ function renderStateSection_BacklogMatch(ns) {
   if (!b) return '';
   const basis = Object.entries(b.by_basis).filter(([, n]) => n).map(([k, n]) => `${n} ${esc(k)}`).join(', ');
   const summary = `${b.closes} close${b.closes !== 1 ? 's' : ''} ran a match; ${b.with_candidates} offered candidates`
-    + (b.offered ? ` (${b.offered}: ${basis}; ${b.still_open} still in reality)` : '')
+    + (b.offered ? ` (${b.offered}: ${basis}; ${b.still_open} still in reality${b.unknown ? `; ${b.unknown} no hash` : ''})` : '')
     + (b.excluded ? `; ${b.excluded} excluded as appended that session` : '');
   const sessions = (b.recent || []).map(s => {
     const items = s.candidates.map(c => {
@@ -2482,6 +2484,9 @@ const STRUCTURE_WARNING_POINTS = 2;
 const STRUCTURE_WARNING_CAP = 4;
 const CARRY_FORWARD_POINTS = 2;
 const CARRY_FORWARD_CAP = 8;
+// Attention-shortlist rank 5: +1 per 5 retrieval-stale learnings (surfaced often, never applied), cap 6.
+const RETRIEVAL_STALE_PER_POINT = 5;
+const RETRIEVAL_STALE_CAP = 6;
 const MAINTENANCE_DUE_WEIGHTS = [
   ['codeReviewDue',   6, '🔬', 'Code review due'],
   ['researchDue',     4, '🔍', 'External research due'],
@@ -2545,6 +2550,12 @@ function scoreNamespace(ns) {
   if (cf > 0) {
     add(Math.min(cf * CARRY_FORWARD_POINTS, CARRY_FORWARD_CAP), '⏭',
         `${cf} item${cf !== 1 ? 's' : ''} carried forward from last session`);
+  }
+
+  const retrStale = Number(ns.retrievalStaleCount) || 0;
+  const retrPoints = Math.min(Math.floor(retrStale / RETRIEVAL_STALE_PER_POINT), RETRIEVAL_STALE_CAP);
+  if (retrPoints > 0) {
+    add(retrPoints, '📉', `${retrStale} learning${retrStale !== 1 ? 's' : ''} surfaced often but never applied`);
   }
 
   for (const [flag, points, icon, text] of MAINTENANCE_DUE_WEIGHTS) {
@@ -3979,22 +3990,21 @@ function renderCompare() {
 
 // ── Maturity ladder ───────────────────────────────────────────────────────────
 // Computed in Python (`_maturity_ladder`) and baked as ns.maturityLadder; the card chip is
-// rendered server-side. This side only draws the Scorecard row and its drawer.
-
-const LADDER_TIERS = { 1: 'Registered', 2: 'Wired', 3: 'Instrumented', 4: 'Calibrated' };
+// rendered server-side, and the tier names come with it (`tiers`). This side only draws the
+// Scorecard row and its drawer.
 
 function ladderDrawerHtml(r) {
   const icon = { pass: '<span style="color:var(--green)">✓</span>',
                  fail: '<span style="color:var(--red)">✗</span>',
                  na:   '<span style="color:var(--subtle)">–</span>' };
   const next = r.next.length
-    ? `<div class="scard-next">Next step to L${r.level + 1} ${esc(LADDER_TIERS[r.level + 1])}: ${r.next.map(c => `<b>${esc(c.label)}</b> (${esc(c.reason)})`).join(' · ')}</div>`
+    ? `<div class="scard-next">Next step to L${r.level + 1} ${esc(r.tiers[r.level + 1])}: ${r.next.map(c => `<b>${esc(c.label)}</b> (${esc(c.reason)})`).join(' · ')}</div>`
     : `<div class="scard-next">Every check passes.</div>`;
-  const tiers = Object.keys(LADDER_TIERS).map(Number).map(t => {
+  const tiers = Object.keys(r.tiers).map(Number).map(t => {
     const items = r.checks.filter(c => c.tier === t).map(c =>
       `<li>${icon[c.status]} ${esc(c.label)}${c.status === 'fail' ? ` <span class="scard-reason">${esc(c.reason)}</span>` : c.status === 'na' ? ' <span class="scard-reason">N/A</span>' : ''}</li>`
     ).join('');
-    return `<div class="scard-tier"><div class="scard-tier-name">L${t} ${esc(LADDER_TIERS[t])}</div><ul>${items}</ul></div>`;
+    return `<div class="scard-tier"><div class="scard-tier-name">L${t} ${esc(r.tiers[t])}</div><ul>${items}</ul></div>`;
   }).join('');
   return `<div class="scard-drawer">${next}<div class="scard-tiers">${tiers}</div></div>`;
 }
@@ -4019,7 +4029,7 @@ function renderScorecard() {
     const days       = _daysSince(ns.open ? ns.lastOpen : ns.lastClose);
     const recency    = Math.max(0, Math.min(100, 100 - days * (100 / 30)));
     const discipline = (ns.goalRate !== null && ns.goalRate !== undefined) ? ns.goalRate : 50;
-    const ladder     = ns.maturityLadder || { level: 0, completeness: 0, passed: 0, applicable: 0, checks: [], next: [], chipClass: 'low', title: '' };
+    const ladder     = ns.maturityLadder || { level: 0, completeness: 0, passed: 0, applicable: 0, checks: [], next: [], chipClass: 'low', title: '', tiers: {} };
     const completeness = ladder.completeness;
     const learning   = ns.sessionCount > 0 ? (ns.learnings || []).length / ns.sessionCount : 0;
     const focus      = 1 / (1 + (ns.deferred || []).length);
@@ -4434,7 +4444,7 @@ function _renderQualityScoreSparklines() {
   }).join('');
 
   return `<div style="padding:.8rem 1rem .6rem">
-    <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.5rem">
+    <div style="font-size:.72rem;color:var(--muted);margin-bottom:.5rem">
       P51 composite quality score · goal completion · outcome rate · learning density · reality freshness</div>
     ${rows}
   </div>`;
@@ -4459,7 +4469,7 @@ function renderPromptSectionsPanel() {
       <td class="gs-date" style="white-space:nowrap">${esc(x.lastAt)}</td></tr>`).join('');
   const shown = d.sections.length < d.distinct ? `top ${d.sections.length} of ${d.distinct} sections` : `${d.distinct} sections`;
   container.innerHTML = `<div style="padding:.8rem 1rem .6rem">
-    <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.5rem">
+    <div style="font-size:.72rem;color:var(--muted);margin-bottom:.5rem">
       ${d.total} loads, ${esc(d.firstAt)} to ${esc(d.lastAt)} · ${esc(shown)} · only <code>prompt --section</code> loads are logged, so inline steps are unmeasured</div>
     <table style="border-collapse:collapse;font-size:.78rem"><tbody>${rows}</tbody></table>
   </div>`;
@@ -4493,7 +4503,7 @@ function renderQualityTrendPanel() {
 
   let bars = '', xLabels = '', legendItems = '';
   rows.forEach((ns, ni) => {
-    legendItems += `<span style="display:inline-flex;align-items:center;gap:.3rem;margin-right:.8rem;font-size:.68rem;color:var(--text-muted)">
+    legendItems += `<span style="display:inline-flex;align-items:center;gap:.3rem;margin-right:.8rem;font-size:.68rem;color:var(--muted)">
       <span style="width:10px;height:10px;border-radius:2px;background:${COLORS[ni % COLORS.length]};display:inline-block"></span>${esc(ns.namespace)}</span>`;
   });
 
@@ -4512,7 +4522,7 @@ function renderQualityTrendPanel() {
     });
     // x-axis label (month)
     xLabels += `<text x="${gx + (nsCount * (BAR_W + BAR_GAP)) / 2}" y="${BAR_H + 24}" text-anchor="middle"
-      font-size="9" fill="var(--text-muted)" transform="rotate(-40 ${gx + (nsCount * (BAR_W + BAR_GAP)) / 2} ${BAR_H + 24})">${fmtYM(m)}</text>`;
+      font-size="9" fill="var(--muted)" transform="rotate(-40 ${gx + (nsCount * (BAR_W + BAR_GAP)) / 2} ${BAR_H + 24})">${fmtYM(m)}</text>`;
   });
 
   // y-axis ticks
@@ -4520,12 +4530,12 @@ function renderQualityTrendPanel() {
   [0, 25, 50, 75, 100].forEach(pct => {
     const y = BAR_H - Math.round((pct / 100) * BAR_H) + 10;
     yAxis += `<line x1="36" x2="${W}" y1="${y}" y2="${y}" stroke="var(--border)" stroke-width="0.5"/>
-      <text x="34" y="${y + 3}" text-anchor="end" font-size="9" fill="var(--text-muted)">${pct}%</text>`;
+      <text x="34" y="${y + 3}" text-anchor="end" font-size="9" fill="var(--muted)">${pct}%</text>`;
   });
 
   container.innerHTML = _renderQualityScoreSparklines() + `
     <div style="padding:.8rem 1rem .4rem;border-top:1px solid var(--border)">
-      <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.5rem">
+      <div style="font-size:.72rem;color:var(--muted);margin-bottom:.5rem">
         Goal hit-rate by month · each bar = one namespace</div>
       <div style="overflow-x:auto">
         <svg width="${W}" height="${H}" style="display:block">

@@ -52,3 +52,7 @@ makes every new signal safe to add.
 ## Status update 2026-11-24
 
 Ranks 1, 2, 4 and 6 are built (`scoreNamespace()`). Ranks 3 and 5 stay unbuilt. The review-severity signal now stops scoring while `codeReviewDue` is true.
+
+## Status update 2026-11-26
+
+Rank 5 is built (`RETRIEVAL_STALE_PER_POINT` 5, `RETRIEVAL_STALE_CAP` 6, pinned in `dashboard_helpers.test.mjs`). Live check: `global` (31 retrieval-stale, +6) moves from outside the top 4 to rank 4 (45 points), displacing `compass` (41). `agentic-memorykit` gains +1. Weights are not tuned; watch two sessions of real use. Rank 3 (dirty tree) stays unbuilt: it needs a repo-dedupe (squad-gps-radar and gps-adr-dashboard both show 41 files, so they share a repo) and `global` shows 1485.

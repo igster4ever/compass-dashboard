@@ -726,14 +726,14 @@ _MATCH_BASES = ("ratio", "identifier", "rare")
 def _backlog_match_summary(history_parsed, reality_md, recent=5):
     """`## Backlog match` across every close: backlog bullets offered as done at close, and
     whether each is still in reality.md (by core's sha256(text)[:8] bullet hash) or gone
-    since, i.e. acted on. None when no close recorded a match. `recent` holds the newest
+    since, i.e. acted on. `unknown` counts candidates with no hash, which can't be checked. None when no close recorded a match. `recent` holds the newest
     closes that offered candidates."""
     matched = [h for h in history_parsed if h.get("backlog_match")]
     if not matched:
         return None
     live = {hashlib.sha256(t.encode()).hexdigest()[:8] for t, _ in _iter_reality_bullets(reality_md)}
     by_basis = {b: 0 for b in _MATCH_BASES} | {"other": 0}
-    offered = still_open = excluded = 0
+    offered = still_open = unknown = excluded = 0
     sessions = []
     for h in matched:
         bm = h["backlog_match"]
@@ -744,6 +744,7 @@ def _backlog_match_summary(history_parsed, reality_md, recent=5):
             by_basis[c["match_basis"] if c["match_basis"] in _MATCH_BASES else "other"] += 1
             open_ = c["bullet_hash"] in live if c["bullet_hash"] else None
             still_open += bool(open_)
+            unknown += open_ is None
             cands.append({**c, "still_open": open_})
         if cands:
             sessions.append({"date": h["filename"][:10], "context": bm["context"], "candidates": cands})
@@ -752,6 +753,7 @@ def _backlog_match_summary(history_parsed, reality_md, recent=5):
         "with_candidates": len(sessions),
         "offered":         offered,
         "still_open":      still_open,
+        "unknown":         unknown,
         "excluded":        excluded,
         "by_basis":        by_basis,
         "recent":          sessions[::-1][:recent],
@@ -779,6 +781,12 @@ def _cadence_last_run(state):
     return out
 
 
+def _text_or_empty(value):
+    """A jsonl field the page will `.slice`/escape as text: str as-is, None as "", anything
+    else stringified, so a malformed row can't throw in the renderer."""
+    return value if isinstance(value, str) else "" if value is None else str(value)
+
+
 def _cooldown_violation_summary(violations, session_count, recent=5):
     """Session-hygiene overrides: opens acknowledged inside the cooldown window
     (core's acknowledge-cooldown-violation). `rate` is per recorded session; None
@@ -788,7 +796,8 @@ def _cooldown_violation_summary(violations, session_count, recent=5):
     return {
         "count":  len(violations),
         "rate":   round(len(violations) / session_count, 3) if session_count else None,
-        "recent": [{"timestamp": v.get("timestamp"), "reason": v.get("reason", "")}
+        "recent": [{"timestamp": v.get("timestamp") if isinstance(v.get("timestamp"), str) else None,
+                    "reason": _text_or_empty(v.get("reason"))}
                    for v in reversed(violations[-recent:])],
     }
 
@@ -1182,7 +1191,9 @@ def _parse_code_review(path):
         tag = _CODE_REVIEW_TAG_RE.match(body)
         if tag:
             severity, rest = tag.group(1).lower(), tag.group(2)
-        elif heading_sev:
+        elif heading_sev and not line[:1].isspace():
+            # Untagged bullets count only at top level: an indented sub-bullet elaborates the
+            # finding above it.
             severity, rest = heading_sev, body
         else:
             continue
@@ -1419,7 +1430,8 @@ _LADDER = [
 
 def _maturity_ladder(n):
     """NS `maturityLadder`: {level, passed, applicable, completeness, checks[{tier, id, label,
-    status pass|fail|na, reason}], next[failing checks one tier above level], chipClass, title}.
+    status pass|fail|na, reason}], next[failing checks one tier above level], chipClass, title,
+    tiers{tier: name}}.
     The card chip and the Scorecard both render this; neither recomputes it."""
     checks = []
     for tier, cid, label, applies, test in _LADDER:
@@ -1445,6 +1457,7 @@ def _maturity_ladder(n):
         "completeness": _round_half_up(passed / applicable * 100) if applicable else 0,
         "chipClass": "high" if level >= 3 else "mid" if level == 2 else "low",
         "title": title,
+        "tiers": {str(t): name for t, name in _LADDER_TIERS.items()},  # string keys: the JSON round-trip
     }
 
 
@@ -2780,6 +2793,8 @@ def generate(namespaces, watch_seconds=None, rev_file=None, section_loads=None):
 # strip's tick origin would make every --watch pass look "changed", so the rev ignores them.
 _REV_VOLATILE_KEYS = ("lastClose", "lastOpen")
 _REV_VOLATILE_PULSE_KEYS = ("elapsed_seconds", "generated_at")
+# `cadenceLastRun[name].ago` is a `_time_ago` label; `.at` is data and stays in the rev.
+_REV_VOLATILE_CADENCE_KEYS = ("ago",)
 
 
 def _content_rev(namespaces, section_loads=None):
@@ -2793,6 +2808,12 @@ def _content_rev(namespaces, section_loads=None):
         if isinstance(pulse, dict):
             for key in _REV_VOLATILE_PULSE_KEYS:
                 pulse.pop(key, None)
+        cadences = entry.get("cadenceLastRun")
+        if isinstance(cadences, dict):
+            for cadence in cadences.values():
+                if isinstance(cadence, dict):
+                    for key in _REV_VOLATILE_CADENCE_KEYS:
+                        cadence.pop(key, None)
     blob = json.dumps([data, json.loads(_js_blocking_edges(namespaces)), section_loads],
                       sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(blob.encode()).hexdigest()[:12]

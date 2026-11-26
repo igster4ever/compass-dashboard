@@ -1129,6 +1129,7 @@ class TestMaturityLadder(unittest.TestCase):
         r = _mod._maturity_ladder(self._mature())
         self.assertEqual((r["level"], r["completeness"], r["next"]), (4, 100, []))
         self.assertEqual((r["chipClass"], r["title"]), ("high", "Maturity ladder: 14 of 14 checks pass"))
+        self.assertEqual(r["tiers"], {"1": "Registered", "2": "Wired", "3": "Instrumented", "4": "Calibrated"})
 
     def test_empty_namespace_is_l0_and_no_data_fails_with_a_reason_never_na(self):
         r = _mod._maturity_ladder({"namespace": "empty"})
@@ -1475,6 +1476,13 @@ class TestCodeReviews(unittest.TestCase):
         self.assertEqual(r["findings"][0]["title"], "Rollback is not atomic")
         self.assertEqual(r["findings"][2]["title"], "Duplication: key lists repeat across files")
 
+    def test_indented_sub_bullets_under_a_severity_heading_are_not_findings(self):
+        r = self._review("d.md", ("### [HIGH]\n- **Rollback is not atomic** — `x.py:1`\n"
+                                  "  - detail: the second write can fail\n    * deeper detail\n"
+                                  "- **No failure test**\n"))
+        self.assertEqual([f["title"] for f in r["findings"]], ["Rollback is not atomic", "No failure test"])
+        self.assertEqual(r["counts"]["high"], 2)
+
     def test_severity_does_not_leak_past_its_heading(self):
         r = self._review("d.md", "### [HIGH]\n- one\n### Notes\n- not a finding\n#### Cat\n- also not\n")
         self.assertEqual(r["total"], 1)
@@ -1773,6 +1781,9 @@ class TestHistoryParserSections(unittest.TestCase):
         self.assertEqual([c["still_open"] for c in b["recent"][0]["candidates"]], [True, None])
         gone = _mod._backlog_match_summary(parsed, "")
         self.assertEqual(gone["still_open"], 0)
+        # one candidate has no hash: it is unknown, neither still open nor gone
+        self.assertEqual((b["unknown"], gone["unknown"]), (1, 1))
+        self.assertEqual(gone["offered"] - gone["still_open"] - gone["unknown"], 1)
 
     def test_summary_none_without_match_sections(self):
         self.assertIsNone(_mod._backlog_match_summary([{"backlog_match": None}], ""))
@@ -1833,6 +1844,12 @@ class TestCadenceLastRunAndCooldown(unittest.TestCase):
         self.assertEqual((cv["count"], cv["rate"]), (7, 0.25))
         self.assertEqual([r["reason"] for r in cv["recent"]], ["r7", "r6", "r5", "r4", "r3"])
         self.assertIsNone(_mod._cooldown_violation_summary(rows, 0)["rate"])
+
+    def test_cooldown_summary_coerces_non_string_fields(self):
+        rows = [{"timestamp": 1760000000, "reason": 42}, {"timestamp": None}, {"timestamp": "2026-10-01T00:00:00Z", "reason": None}]
+        recent = _mod._cooldown_violation_summary(rows, 3)["recent"]
+        self.assertEqual([(r["timestamp"], r["reason"]) for r in recent],
+                         [("2026-10-01T00:00:00Z", ""), (None, ""), (None, "42")])
 
     def test_load_namespace_wires_both(self):
         with tempfile.TemporaryDirectory() as tmp:

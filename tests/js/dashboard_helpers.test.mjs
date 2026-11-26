@@ -59,7 +59,7 @@ function extractConst(name) {
 }
 
 const PURE_HELPERS = ['esc', 'fmtYM', '_daysSince', 'urgencyScore', 'scoreItem', 'scaleLinear', 'renderYAxisGridlines', 'healthColor', 'radarAxisValue', 'radarActiveAxes', 'renderRadar', 'nsColor', 'compareAxisValue', '_compareCentralityByNsIndex', 'globalVisibleNames', 'visibleNS', 'renderCompare', 'deriveTasks', 'renderDecisions', 'detailTabs', 'decisionsTabLabel', 'renderStateSection_GoalStatuses', 'goalStatusHeadline', '_complexityProbeErrors', 'renderStateSection_DataProblems', 'renderStateSection_BacklogMatch', 'backlogMatchHeadline', '_cadenceLastRun', '_cooldownOverrides', 'windowLabel', 'renderStateSection_CycleSparkline', 'codeReviewHeadline', 'renderStateSection_CodeReviews', 'learningSurfaced', 'learningApplied', 'compareLearningRows', 'rankReasons', 'scoreNamespace'];
-const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES', 'NS_PALETTE', 'COMPARE_AXIS_DEFS', 'GLOBAL_NS_KEY', 'CADENCE_LAST_RUN_LABELS', 'CODE_REVIEW_SEVERITIES', 'STALE_BULLETS_PER_POINT', 'STALE_BULLETS_CAP', 'MAINTENANCE_DUE_WEIGHTS', 'STRUCTURE_WARNING_POINTS', 'STRUCTURE_WARNING_CAP', 'CARRY_FORWARD_POINTS', 'CARRY_FORWARD_CAP'];
+const CONSTS = ['RADAR_AXIS_DEFS', 'RADAR_DEFAULT_AXES', 'NS_PALETTE', 'COMPARE_AXIS_DEFS', 'GLOBAL_NS_KEY', 'CADENCE_LAST_RUN_LABELS', 'CODE_REVIEW_SEVERITIES', 'STALE_BULLETS_PER_POINT', 'STALE_BULLETS_CAP', 'MAINTENANCE_DUE_WEIGHTS', 'STRUCTURE_WARNING_POINTS', 'STRUCTURE_WARNING_CAP', 'CARRY_FORWARD_POINTS', 'CARRY_FORWARD_CAP', 'RETRIEVAL_STALE_PER_POINT', 'RETRIEVAL_STALE_CAP'];
 // A minimal in-memory localStorage — radarActiveAxes() reads it; no test here
 // relies on cross-call persistence, so a single shared instance is fine.
 const localStorageShim = `
@@ -86,7 +86,7 @@ const source = localStorageShim + nsFixtureShim + CONSTS.map(extractConst).join(
 // `source` is read only from this repo's own scripts/template.html (never from
 // user input, network, or CLI args) — there is no untrusted-string injection
 // surface here, just an in-repo test harness for embedded functions.
-const helpers = new Function(`${source}\nreturn { ${PURE_HELPERS.join(', ')}, STALE_BULLETS_PER_POINT, STALE_BULLETS_CAP, MAINTENANCE_DUE_WEIGHTS, STRUCTURE_WARNING_CAP, CARRY_FORWARD_CAP, localStorage };`)();
+const helpers = new Function(`${source}\nreturn { ${PURE_HELPERS.join(', ')}, STALE_BULLETS_PER_POINT, STALE_BULLETS_CAP, MAINTENANCE_DUE_WEIGHTS, STRUCTURE_WARNING_CAP, CARRY_FORWARD_CAP, RETRIEVAL_STALE_PER_POINT, RETRIEVAL_STALE_CAP, localStorage };`)();
 
 test('esc() escapes HTML-significant characters', () => {
   assert.equal(helpers.esc('<script>&"'), '&lt;script&gt;&amp;&quot;');
@@ -452,6 +452,9 @@ test('renderStateSection_BacklogMatch(): summary, per-candidate state, escaped; 
 
 test('backlogMatchHeadline(): offered and gone counts; empty when nothing offered', () => {
   assert.equal(helpers.backlogMatchHeadline({ backlogMatchSummary: bms }), '2 backlog matches offered, 1 gone since');
+  // no-hash candidates are not "gone": subtract them and say so
+  assert.equal(helpers.backlogMatchHeadline({ backlogMatchSummary: { ...bms, offered: 3, unknown: 1 } }),
+    '3 backlog matches offered, 1 gone since, 1 unverifiable');
   assert.equal(helpers.backlogMatchHeadline({ backlogMatchSummary: { ...bms, offered: 0 } }), '');
   assert.equal(helpers.backlogMatchHeadline({}), '');
 });
@@ -638,4 +641,13 @@ test('scoreNamespace(): structure warnings and carry-forward score 2 each, cappe
   assert.equal(helpers.CARRY_FORWARD_CAP, 8);
   assert.equal(find({ carryForwardTrend: [] }, /carried forward/), 0);
   assert.equal(find({}, /carried forward/), 0);
+});
+
+test('scoreNamespace(): retrieval-stale learnings score 1 per 5, capped at 6', () => {
+  const base = { sessionCount: 3, lastClose: '1d ago' };
+  const pts = n => (helpers.scoreNamespace({ ...base, retrievalStaleCount: n }).reasons.find(r => /surfaced often/.test(r.text)) || { points: 0 }).points;
+  assert.deepEqual([0, 4, 5, 6, 31, 500].map(pts), [0, 0, 1, 1, 6, 6]);
+  assert.equal(helpers.RETRIEVAL_STALE_PER_POINT, 5);
+  assert.equal(helpers.RETRIEVAL_STALE_CAP, 6);
+  assert.equal(pts(undefined), 0);
 });

@@ -80,7 +80,7 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
 | Field | Source | Notes |
 |-------|--------|-------|
 | `history[]` | last 5 session files | parsed content (planned/completed/incomplete, `duration_minutes`, `close_mode`, `backlog_match`, `other_sections`) |
-| `backlogMatchSummary` | all history files' `## Backlog match` + reality.md | `{closes, with_candidates, offered, still_open, excluded, by_basis, recent[≤5]}`; `still_open` = candidate's bullet hash still in reality.md; `null` with no match sections |
+| `backlogMatchSummary` | all history files' `## Backlog match` + reality.md | `{closes, with_candidates, offered, still_open, unknown, excluded, by_basis, recent[≤5]}`; `still_open` = candidate's bullet hash still in reality.md; `unknown` = no-hash candidates (neither open nor gone; gone = offered − still_open − unknown); `null` with no match sections |
 | `sessionDates[]` | all session filenames | full history as `YYYY-MM-DD` — use this for time-series viz. Only `history/` files whose name starts with a date count (`_session_history_files()`, also behind `sessionCount`): one stray `reality-pre-condense-*.md` once made every timeline x-position `NaN` |
 | `sessionCount` | count of all history files | total, not capped |
 | `learnings[]` | learnings.jsonl | sorted by weight desc; **active only** (see filter below) |
@@ -94,14 +94,14 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
 | `cadenceLastRun` | state.json `last_*_at` | `{dream, code_review, research, skill_opt, claude_review: {at, ago}}`; `skill_opt` falls back to legacy `last_skillopt_at`; `ago` is `"never"` when unset |
 | `cooldownViolationSummary` | `cooldown_violations.jsonl` | `{count, rate, recent[≤5]}`, rate per recorded session; `null` with no violations |
 | `dataProblems` | read-phase `_read_json`/`_read_jsonl` | `[{file, issue}]`, one per corrupt file; `[]` when clean |
-| `maturityLadder` | assembled NS dict | `{level, passed, applicable, completeness, checks[{tier,id,label,status,reason}], next[], chipClass, title}`, computed once by `_maturity_ladder()` (`_LADDER` table) in the assemble phase. The overview card chip is rendered server-side in `_card_html`; the Scorecard reads `ns.maturityLadder` and never recomputes. A check is a fail with a reason when data is missing, N/A only via `applies` |
+| `maturityLadder` | assembled NS dict | `{level, passed, applicable, completeness, checks[{tier,id,label,status,reason}], next[], chipClass, title, tiers{"1": name…}}`, computed once by `_maturity_ladder()` (`_LADDER` table) in the assemble phase. The overview card chip is rendered server-side in `_card_html`; the Scorecard reads `ns.maturityLadder` and never recomputes. A check is a fail with a reason when data is missing, N/A only via `applies` |
 | `hasRepoPath` / `realityStructureWarnings` | state.json `repo_path` / reality.md | maturity-ladder inputs; a boolean, never the path, so local paths stay out of the page |
 | `carryForwardTrend` | all history/*.md files | `[{date, carryForward, goalsCompleted}]`; carry-forward = `## Incomplete` bullet count |
 | `lastRealityScore` | state.json `last_reality_score` | completeness % written by compass core at close; comparable only because both algorithms are identical |
 | `zoneDistribution` | active `learnings[]` | P56 `{golden, warning, preference, unclassified}`; top-level, not under `corpusHealth` |
 | `confidenceCalibration` | learnings.jsonl (**unfiltered**) | P59; `null` below 8 resolved hypotheses |
 | `failureDimensionDistribution` | `skill_feedback.jsonl` | P69; dashboard-only aggregation |
-| `codeReviews` | `code_reviews/*.md` | `{count, reviews[≤12: {date, critical, high, medium, low, total}], latest: {date, total, findings[≤10: {severity, title, category}]}}`; `null` with none. Parsed by `_parse_code_review` in the read phase (`raw["code_reviews"]`); the format is a prompt convention with three live shapes, so `TestCodeReviews` pins each and a live-data guard fails on a file that parses to nothing |
+| `codeReviews` | `code_reviews/*.md` | `{count, reviews[≤12: {date, critical, high, medium, low, total}], latest: {date, total, findings[≤10: {severity, title, category}]}}`; `null` with none. Parsed by `_parse_code_review` in the read phase (`raw["code_reviews"]`); the format is a prompt convention with three live shapes, so `TestCodeReviews` pins each and a live-data guard fails on a file that parses to nothing; under a severity heading only top-level (unindented) bullets count, so a sub-bullet is not a finding |
 | `appliedSessions` / `fromGoal` (per learning) | `learning_applications.jsonl`, `goal_origin` + history files | derived in assemble by `_application_counts()` / `_goal_origin_text()`; `fromGoal` joins by the history file whose Opened..Closed window holds the learning's `date`, and is `null` when none does (logged after close): never guess |
 
 `history` is capped at 5 for rendering. `sessionDates` is the full set.
@@ -159,7 +159,7 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
   `_check_code_review_due(decisions, ...)` and `_check_claude_review_due(files, ...)` take them as
   arguments. Remaining I/O: watched *other* namespaces, and the git probes.
 - **`--watch` rewrites only on a content change.** `_content_rev()` hashes `_js_data()` minus the
-  clock-only keys (`_REV_VOLATILE_KEYS`, pulse `elapsed_seconds`/`generated_at`); add any new
+  clock-only keys (`_REV_VOLATILE_KEYS`, pulse `elapsed_seconds`/`generated_at`, `cadenceLastRun[*].ago`; the `at` timestamps stay in the rev); add any new
   time-derived NS field there or every pass will look changed. Unchanged rev: no page or sidecar
   write. The page polls `<page>.rev.js` (`window.__DASH_REV`, a script tag because `fetch` cannot
   read `file://`) and reloads only when it differs from the baked `PAGE_REV`.
@@ -171,7 +171,7 @@ data-derived headline in the `<summary>`; `stateGroup` renders nothing when its 
   (dropped), add one `{file, issue}` entry to `dataProblems`, shown as a card chip and a State-tab
   section. A missing file is not a problem. Reads outside `_read_namespace_files()` omit it, so
   nothing is counted twice.
-- **Priorities scoring is `scoreNamespace(ns)`** (pure; `computePriorities()` only filters, maps and slices). Each signal goes through `add(points, icon, text)` and reasons are returned biggest-first (`rankReasons`), so the card's 5-reason cut drops the smallest. Latest code-review severity: +6 per CRITICAL, +2 per HIGH, cap 20, and only while `codeReviewDue` is false (a due review makes the old counts stale; the due flag scores instead). Structure warnings: +2 each, cap 4. Carry-forward (latest `carryForwardTrend` entry): +2 each, cap 8. Stale reality bullets: +1 per 5, cap 15. Maintenance due: `MAINTENANCE_DUE_WEIGHTS`. Caps are pinned in `dashboard_helpers.test.mjs`; re-check the live top 4 before changing a weight.
+- **Priorities scoring is `scoreNamespace(ns)`** (pure; `computePriorities()` only filters, maps and slices). Each signal goes through `add(points, icon, text)` and reasons are returned biggest-first (`rankReasons`), so the card's 5-reason cut drops the smallest. Latest code-review severity: +6 per CRITICAL, +2 per HIGH, cap 20, and only while `codeReviewDue` is false (a due review makes the old counts stale; the due flag scores instead). Structure warnings: +2 each, cap 4. Carry-forward (latest `carryForwardTrend` entry): +2 each, cap 8. Retrieval-stale learnings: +1 per 5, cap 6. Stale reality bullets: +1 per 5, cap 15. Maintenance due: `MAINTENANCE_DUE_WEIGHTS`. Caps are pinned in `dashboard_helpers.test.mjs`; re-check the live top 4 before changing a weight.
 - **Backlog docs are hypotheses, not specs.** Verify filenames/shapes against compass source
   before implementing (e.g. `dream_defer_count` is a `state.json` scalar, not a jsonl count). A "mirror core's `X()`" item can be void: grep core for the symbol first (`_compute_learning_gain` was removed in ca3f659).
 - **Check whether data is already wired** (grep `_js_data()` and `template.html -a`) before

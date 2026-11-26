@@ -620,6 +620,22 @@ class TestWatchMode(unittest.TestCase):
         b = dict(_minimal_ns(), intent_summary="a different intent")
         self.assertNotEqual(_mod._content_rev([a]), _mod._content_rev([b]))
 
+    def test_rev_ignores_cadence_ago_but_not_at(self):
+        from datetime import datetime, timedelta, timezone
+        from unittest.mock import patch
+        t0 = datetime(2026, 11, 26, 12, 0, tzinfo=timezone.utc)
+        state = {"last_dream_at": "2026-11-01T00:00:00Z"}
+        with patch.object(_mod, "_now_utc", return_value=t0):
+            a = dict(_minimal_ns(), cadence_last_run=_mod._cadence_last_run(state))
+            rev_now = _mod._content_rev([a])
+        with patch.object(_mod, "_now_utc", return_value=t0 + timedelta(days=3)):
+            b = dict(_minimal_ns(), cadence_last_run=_mod._cadence_last_run(state))
+            self.assertNotEqual(a["cadence_last_run"]["dream"]["ago"],
+                                b["cadence_last_run"]["dream"]["ago"])
+            self.assertEqual(rev_now, _mod._content_rev([b]))
+        c = dict(_minimal_ns(), cadence_last_run=_mod._cadence_last_run({"last_dream_at": "2026-11-20T00:00:00Z"}))
+        self.assertNotEqual(rev_now, _mod._content_rev([c]))
+
     def test_rev_ignores_pulse_clock_fields(self):
         import copy
         from unittest.mock import patch
